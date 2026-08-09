@@ -1,0 +1,65 @@
+app:
+  environment: development
+  log_level: INFO
+  run_mode: api
+  market_data_mode: live_public
+  execution_mode: paper
+database:
+  url: postgresql+asyncpg://funding:funding@localhost:5432/funding
+redis:
+  url: redis://localhost:6379/0
+bybit:
+  base_url: https://api.bybit.com
+  websocket_url: wss://stream.bybit.com/v5/public/linear
+  categories: [linear, spot]
+  request_timeout_seconds: 15
+  rate_limit_requests_per_second: 8
+  rate_limit_burst: 8
+gate:
+  base_url: https://api.gateio.ws/api/v4
+  websocket_url: wss://fx-ws.gateio.ws/v4/ws/usdt
+  settle: usdt
+okx:
+  base_url: https://www.okx.com
+  websocket_url: wss://ws.okx.com:8443/ws/v5/public
+  funding_symbol_limit: 30
+binance:
+  spot_base_url: https://api.binance.com
+  futures_base_url: https://fapi.binance.com
+  websocket_url: wss://fstream.binance.com/ws
+hyperliquid:
+  base_url: https://api.hyperliquid.xyz
+  websocket_url: wss://api.hyperliquid.xyz/ws
+market_data:
+  stale_seconds: 30
+scanner:
+  minimum_net_apr: 0.10
+  minimum_liquidity_score: 70
+  maximum_slippage_percent: 0.15
+  maximum_spread_percent: 0.20
+  minimum_funding_samples: 20
+  minimum_opportunity_duration_seconds: 30
+paper_portfolio:
+  initial_balance_usd: 15000
+  reserve_percent: 20
+  autotrade: false
+  loop_interval_seconds: 10
+  confirmation_seconds: 30
+  max_hold_seconds: 900
+  position_size_usd: 250
+  max_open_positions: 10
+  auto_init_database: false
+  history_refresh_seconds: 3600
+  orderbook_symbol_limit: 10
+telegram:
+  enabled: false
+  api_base_url: https://api.telegram.org
+  timezone: Europe/Kyiv
+  report_hour: 0
+  report_minute: 0
+fees:
+  bybit: {maker_fee: 0.00020, taker_fee: 0.00055}
+  gate: {maker_fee: 0.00015, taker_fee: 0.00050}
+  okx: {maker_fee: 0.00020, taker_fee: 0.00050}
+  binance: {maker_fee: 0.00020, taker_fee: 0.00040}
+  hyperliquid: {maker_fee: 0.00015, taker_fee: 0.00035}

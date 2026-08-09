@@ -1,0 +1,108 @@
+from datetime import UTC
+from decimal import Decimal
+
+import httpx
+import pytest
+
+from funding_arbitrage.exchanges.base.models import InstrumentType
+from funding_arbitrage.exchanges.binance import BinancePublicAdapter
+from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
+from funding_arbitrage.exchanges.okx import OkxPublicAdapter
+
+
+@pytest.mark.asyncio
+async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/public/instruments"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": [{"instId": "ETH-USDT-SWAP"}],
+                },
+            )
+        if request.url.path.endswith("/public/funding-rate"):
+            assert request.url.params["instId"] == "ETH-USDT-SWAP"
+            return httpx.Response(
+                200,
+                json={"code": "0", "data": [{"instId": "ETH-USDT-SWAP", "fundingRate": "0.001"}]},
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    )
+    adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert funding[0].symbol == "ETH-USDT-SWAP"
+    assert funding[0].funding_rate_daily == Decimal("0.003")
+
+
+@pytest.mark.asyncio
+async def test_okx_empty_spot_contract_value_is_normalized() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/public/instruments")
+        if request.url.params["instType"] == "SWAP":
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": [{"instId": "BTC-USDT-SWAP", "ctVal": "0.01", "tickSz": "0.1"}],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "code": "0",
+                "data": [{"instId": "BTC-USDT", "ctVal": "", "tickSz": "0.01"}],
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    )
+    adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
+    instruments = await adapter.get_instruments()
+    await client.aclose()
+
+    spot = next(item for item in instruments if item.instrument_type is InstrumentType.SPOT)
+    assert spot.contract_size == Decimal("1")
+
+
+def test_binance_websocket_ticker_aliases_are_normalized() -> None:
+    adapter = BinancePublicAdapter()
+    ticker = adapter._parse_futures_ticker(
+        {"s": "BTCUSDT", "c": "100", "b": "99", "a": "101", "q": "12", "E": 1735689600000},
+        None,
+    )
+    assert ticker.symbol == "BTCUSDT"
+    assert ticker.last_price == Decimal("100")
+    assert ticker.best_bid == Decimal("99")
+    assert ticker.instrument_type is InstrumentType.PERPETUAL
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_public_info_orderbook_is_normalized() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "levels": [
+                    [{"px": "99", "sz": "2"}],
+                    [{"px": "101", "sz": "3"}],
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    )
+    adapter = HyperliquidPublicAdapter(base_url="https://test.invalid", http_client=client)
+    book = await adapter.get_orderbook("ETH", 10)
+    await client.aclose()
+
+    assert book.timestamp.tzinfo is UTC
+    assert book.bids[0].price == Decimal("99")
+    assert book.asks[0].price == Decimal("101")

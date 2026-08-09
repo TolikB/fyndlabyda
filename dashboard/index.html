@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Funding Arbitrage Research</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #111827; color: #e5e7eb; }
+    main { max-width: 1200px; margin: auto; padding: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .card { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 16px; }
+    .label { color: #9ca3af; font-size: 12px; text-transform: uppercase; }
+    .value { font-size: 24px; margin-top: 6px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { text-align: left; padding: 9px; border-bottom: 1px solid #374151; }
+    th { color: #9ca3af; font-size: 12px; }
+    .status { margin: 12px 0; color: #93c5fd; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Funding Arbitrage Research</h1>
+  <div id="status" class="status">Loading read-only state…</div>
+  <section class="grid">
+    <div class="card"><div class="label">Equity</div><div id="equity" class="value">—</div></div>
+    <div class="card"><div class="label">Cash</div><div id="cash" class="value">—</div></div>
+    <div class="card"><div class="label">Locked capital</div><div id="locked" class="value">—</div></div>
+    <div class="card"><div class="label">Opportunities</div><div id="count" class="value">—</div></div>
+    <div class="card"><div class="label">Paper funding PnL</div><div id="funding-pnl" class="value">—</div></div>
+    <div class="card"><div class="label">Paper fees</div><div id="fees" class="value">—</div></div>
+  </section>
+  <h2>Ranked opportunities</h2>
+  <table>
+    <thead><tr><th>Strategy</th><th>Asset</th><th>Venues</th><th>Net APR</th><th>Score</th><th>Status</th></tr></thead>
+    <tbody id="opportunities"></tbody>
+  </table>
+</main>
+<script>
+  const money = value => Number(value || 0).toLocaleString(undefined, {maximumFractionDigits: 2});
+  async function refresh() {
+    try {
+      const [portfolio, opportunities, paper] = await Promise.all([
+        fetch('/portfolio').then(r => r.json()),
+        fetch('/opportunities').then(r => r.json()),
+        fetch('/analytics/paper').then(r => r.json())
+      ]);
+      document.querySelector('#equity').textContent = money(portfolio.equity);
+      document.querySelector('#cash').textContent = money(portfolio.cash);
+      document.querySelector('#locked').textContent = money(portfolio.locked_capital);
+      document.querySelector('#count').textContent = opportunities.length;
+      document.querySelector('#funding-pnl').textContent = money(paper.funding_pnl);
+      document.querySelector('#fees').textContent = money(paper.fees);
+      document.querySelector('#opportunities').innerHTML = opportunities.map(item => `
+        <tr><td>${item.strategy}</td><td>${item.asset}</td>
+        <td>${item.venue_a}${item.venue_b ? ' ↔ ' + item.venue_b : ''}</td>
+        <td>${(Number(item.net_apr) * 100).toFixed(2)}%</td>
+        <td>${Number(item.opportunity_score).toFixed(1)}</td><td>${item.status}</td></tr>`).join('');
+      document.querySelector('#status').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+      document.querySelector('#status').textContent = `Read-only API unavailable: ${error}`;
+    }
+  }
+  refresh();
+  setInterval(refresh, 5000);
+</script>
+</body>
+</html>
