@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -11,6 +12,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from funding_arbitrage.database.models import Base
 
 config = context.config
+database_url = os.getenv("DATABASE_URL")
+if database_url:
+    # ConfigParser treats percent signs as interpolation tokens. Escape them so
+    # URL-encoded passwords remain valid when supplied through the environment.
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 if config.config_file_name is not None and config.get_section("loggers"):
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata

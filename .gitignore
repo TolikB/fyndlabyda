@@ -6,5 +6,6 @@ __pycache__/
 *.egg-info/
 *.py[cod]
 .env
+.runtime/
 *.log
 coverage.xml

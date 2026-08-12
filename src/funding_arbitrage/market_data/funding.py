@@ -8,7 +8,7 @@ from statistics import median
 
 from pydantic import BaseModel, Field
 
-from funding_arbitrage.exchanges.base.models import FundingHistoryPoint
+from funding_arbitrage.exchanges.base.models import FundingHistoryPoint, FundingSnapshot
 
 
 class FundingStatistics(BaseModel):
@@ -53,13 +53,17 @@ def funding_statistics(
         if point.funding_timestamp >= end - timedelta(days=30)
     ]
     recent = values[-min(20, count) :]
-    persistence = Decimal(sum(value > 0 for value in recent)) / Decimal(len(recent)) * 100
+    positive_recent = sum(value > 0 for value in recent)
+    negative_recent = sum(value < 0 for value in recent)
+    persistence = (
+        Decimal(max(positive_recent, negative_recent)) / Decimal(len(recent)) * 100
+    )
     if current_rate is None:
         unstable = False
     elif variance == 0:
-        unstable = current_rate > mean
+        unstable = current_rate != mean
     else:
-        unstable = current_rate > mean + Decimal("3") * variance.sqrt()
+        unstable = abs(current_rate - mean) > Decimal("3") * variance.sqrt()
     return FundingStatistics(
         sample_count=count,
         mean=mean,
@@ -76,3 +80,49 @@ def funding_statistics(
         persistence_score=persistence,
         unstable_funding=bool(unstable),
     )
+
+
+def robust_funding_rate(
+    history: list[FundingHistoryPoint], current_rate: Decimal
+) -> Decimal:
+    """Blend winsorized history with the current quote without chasing one spike."""
+
+    if not history:
+        return current_rate
+    ordered = sorted(history, key=lambda point: point.funding_timestamp)
+    values = [point.funding_rate for point in ordered]
+    sorted_values = sorted(values)
+    if len(sorted_values) >= 5:
+        lower = sorted_values[len(sorted_values) // 10]
+        upper = sorted_values[(len(sorted_values) * 9) // 10]
+        values = [min(upper, max(lower, value)) for value in values]
+    alpha = Decimal("0.30")
+    ewma = values[0]
+    for value in values[1:]:
+        ewma = alpha * value + (Decimal("1") - alpha) * ewma
+    historical_median = Decimal(str(median(values)))
+    return (
+        historical_median * Decimal("0.50")
+        + ewma * Decimal("0.30")
+        + current_rate * Decimal("0.20")
+    )
+
+
+def funding_event_count(
+    snapshot: FundingSnapshot,
+    now: datetime,
+    horizon_hours: Decimal,
+) -> int:
+    """Count venue-specific settlements in a UTC horizon."""
+
+    horizon = now + timedelta(hours=float(horizon_hours))
+    next_time = snapshot.next_funding_time
+    if next_time is None:
+        next_time = now + timedelta(hours=float(snapshot.funding_interval_hours))
+    count = 0
+    current = next_time
+    step = timedelta(hours=float(snapshot.funding_interval_hours))
+    while now < current <= horizon:
+        count += 1
+        current += step
+    return count

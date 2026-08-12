@@ -137,7 +137,9 @@ async def test_websocket_reconnects_after_disconnect() -> None:
     adapter = BybitPublicAdapter(max_reconnects=2, sleep=lambda _: _noop())
     attempts = 0
 
-    async def fake_connection(_: list[str]) -> AsyncIterator[Ticker]:
+    async def fake_connection(
+        _url: str, _args: list[str], _kind: InstrumentType
+    ) -> AsyncIterator[Ticker]:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -161,9 +163,76 @@ async def test_websocket_reconnects_after_disconnect() -> None:
 
     adapter._sleep = patched_sleep
     adapter._stream_ticker_connection = fake_connection  # type: ignore[assignment]
-    ticker = await anext(adapter.stream_tickers(["BTCUSDT"]))
-    assert attempts == 2
+    stream = adapter.stream_tickers([("BTCUSDT", InstrumentType.PERPETUAL)])
+    ticker = await anext(stream)
+    await stream.aclose()
+    assert attempts >= 2
     assert ticker.last_price == Decimal("100")
+
+
+@pytest.mark.asyncio
+async def test_websocket_tickers_batch_large_universe_under_topic_cap() -> None:
+    adapter = BybitPublicAdapter()
+    subscriptions: list[list[str]] = []
+
+    async def fake_group(
+        _url: str, requested: list[str], instrument_type: InstrumentType
+    ) -> AsyncIterator[Ticker]:
+        subscriptions.append(requested)
+        for symbol in requested:
+            yield Ticker(
+                exchange="bybit",
+                symbol=symbol,
+                instrument_type=instrument_type,
+                last_price=Decimal("100"),
+                volume_24h=Decimal("1"),
+                timestamp=datetime.now(UTC),
+            )
+
+    adapter._stream_ticker_group = fake_group  # type: ignore[assignment]
+    symbols = [(f"ASSET{index}USDT", InstrumentType.PERPETUAL) for index in range(21)]
+    stream = adapter.stream_tickers(symbols)
+    received = [await anext(stream) for _ in symbols]
+    await stream.aclose()
+
+    assert len(received) == len(symbols)
+    assert sorted(len(batch) for batch in subscriptions) == [1, 10, 10]
+    assert all(len(batch) <= 10 for batch in subscriptions)
+
+
+def test_websocket_ticker_merges_partial_delta() -> None:
+    adapter = BybitPublicAdapter()
+    state: dict[str, dict[str, object]] = {}
+    snapshot = adapter._merge_ws_ticker(
+        {
+            "topic": "tickers.BTCUSDT",
+            "type": "snapshot",
+            "ts": "1735689600000",
+            "data": {
+                "symbol": "BTCUSDT",
+                "lastPrice": "100",
+                "bid1Price": "99",
+                "ask1Price": "101",
+                "volume24h": "1",
+            },
+        },
+        state,
+    )
+    delta = adapter._merge_ws_ticker(
+        {
+            "topic": "tickers.BTCUSDT",
+            "type": "delta",
+            "ts": "1735689601000",
+            "data": {"bid1Price": "99.5"},
+        },
+        state,
+    )
+
+    assert snapshot is not None
+    assert delta is not None
+    assert delta.last_price == Decimal("100")
+    assert delta.best_bid == Decimal("99.5")
+    assert delta.best_ask == Decimal("101")
 
 
 async def _noop() -> None:

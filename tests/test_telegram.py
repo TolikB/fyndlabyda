@@ -42,13 +42,26 @@ async def test_telegram_notifier_requires_configuration() -> None:
 
 class ReportSession:
     def __init__(self) -> None:
+        timestamp = datetime(2026, 8, 1, tzinfo=UTC)
         self.values = [
             None,
             type("Snapshot", (), {"equity": Decimal("10000"), "total_pnl": Decimal("12")})(),
-            type("Snapshot", (), {"equity": Decimal("10012"), "total_pnl": Decimal("12")})(),
+            type(
+                "Snapshot",
+                (),
+                {
+                    "equity": Decimal("10012"),
+                    "total_pnl": Decimal("12"),
+                    "funding_pnl": Decimal("8"),
+                    "fees": Decimal("1"),
+                    "timestamp": timestamp,
+                },
+            )(),
+            type("Snapshot", (), {"timestamp": timestamp})(),
             Decimal("8"),
             Decimal("1"),
             Decimal("0.2"),
+            Decimal("0.5"),
             4,
             1,
             1,
@@ -85,6 +98,7 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(
+        paper_initial_balance_usd=10000,
         telegram_enabled=True,
         telegram_bot_token="test-token",
         telegram_chat_id="123",
@@ -106,5 +120,66 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     assert result
     assert len(sent) == 1
     assert "2026-08-09" in sent[0]
-    assert "Funding PnL: $8.00" in sent[0]
+    assert "DAY RESULT" in sent[0]
+    assert "Net PnL: +$12.00" in sent[0]
+    assert "Funding: +$8.00" in sent[0]
+    assert "TOTAL — CURRENT SIMULATOR" in sent[0]
+    assert "Return: +0.1200%" in sent[0]
+    assert "Legacy/pre-fix simulator data is excluded." in sent[0]
     assert len(session.added) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_report_explains_unchanged_equity_when_no_trades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        paper_initial_balance_usd=6250,
+        paper_simulation_version="v16-oos-candidate",
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="UTC",
+    )
+    timestamp = datetime(2026, 8, 1, tzinfo=UTC)
+    unchanged = type(
+        "Snapshot",
+        (),
+        {
+            "equity": Decimal("6250"),
+            "total_pnl": Decimal("0"),
+            "funding_pnl": Decimal("0"),
+            "fees": Decimal("0"),
+            "timestamp": timestamp,
+        },
+    )()
+    session = ReportSession()
+    session.values = [
+        None,
+        unchanged,
+        unchanged,
+        unchanged,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        0,
+        0,
+        0,
+        30,
+    ]
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(session)),
+    )
+    sent: list[str] = []
+
+    async def send(message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(service.notifier, "send_message", send)
+
+    assert await service.check_and_send(datetime(2026, 8, 11, 0, 1, tzinfo=UTC))
+    assert "Net PnL: +$0.00" in sent[0]
+    assert "No eligible paper trades during the day; equity was unchanged." in sent[0]
+    assert "simulator v16-oos-candidate" in sent[0]

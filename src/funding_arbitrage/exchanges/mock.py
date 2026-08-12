@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.base.models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     InstrumentType,
@@ -114,6 +115,7 @@ class MockExchangeAdapter(ExchangeAdapter):
         return OrderBook(
             exchange=self.name,
             symbol=symbol,
+            instrument_type=instrument_type,
             bids=bids,
             asks=asks,
             timestamp=datetime.now(UTC),
@@ -152,12 +154,64 @@ class MockExchangeAdapter(ExchangeAdapter):
             for index in range(1, 31)
         ]
 
-    def stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    async def get_candles(
+        self,
+        symbol: str,
+        instrument_type: InstrumentType,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int = 60,
+    ) -> list[Candle]:
+        candles: list[Candle] = []
+        cursor = start.astimezone(UTC)
+        while cursor + timedelta(minutes=interval_minutes) <= end:
+            price = self._price(instrument_type)
+            candles.append(
+                Candle(
+                    exchange=self.name,
+                    symbol=symbol,
+                    instrument_type=instrument_type,
+                    interval_minutes=interval_minutes,
+                    open_time=cursor,
+                    close_time=cursor + timedelta(minutes=interval_minutes),
+                    open=price,
+                    high=price + Decimal("0.05"),
+                    low=price - Decimal("0.05"),
+                    close=price,
+                    volume=Decimal("1000"),
+                )
+            )
+            cursor += timedelta(minutes=interval_minutes)
+        return candles
+
+    def stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
         return self._stream_tickers(symbols)
 
-    async def _stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    async def _stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
+        requested = set(symbols)
         while True:
             for ticker in await self.get_tickers():
-                if not symbols or ticker.symbol in symbols:
+                if not requested or (ticker.symbol, ticker.instrument_type) in requested:
                     yield ticker
+            await asyncio.sleep(self._sleep)
+
+    def stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int = 20,
+    ) -> AsyncIterator[OrderBook]:
+        return self._stream_orderbooks(symbols, depth)
+
+    async def _stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int,
+    ) -> AsyncIterator[OrderBook]:
+        while True:
+            for symbol, instrument_type in symbols:
+                yield await self.get_orderbook(symbol, depth, instrument_type)
             await asyncio.sleep(self._sleep)

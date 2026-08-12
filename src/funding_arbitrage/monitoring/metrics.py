@@ -15,9 +15,40 @@ websocket_reconnects_total = Counter(
 market_data_age_seconds = Gauge(
     "funding_market_data_age_seconds", "Age of the latest normalized market snapshot", ["exchange"]
 )
+market_tickers_usable = Gauge(
+    "funding_market_tickers_usable", "Usable normalized tickers", ["exchange"]
+)
+orderbook_coverage_ratio = Gauge(
+    "funding_orderbook_coverage_ratio", "Requested typed books successfully loaded", ["exchange"]
+)
+stale_or_missing_orderbooks = Gauge(
+    "funding_stale_or_missing_orderbooks",
+    "Requested order books unavailable or outside the freshness threshold",
+    ["exchange"],
+)
+funding_history_coverage_ratio = Gauge(
+    "funding_history_coverage_ratio",
+    "Requested funding histories successfully loaded",
+    ["exchange"],
+)
+market_data_dropped_total = Counter(
+    "funding_market_data_dropped_total", "Rejected market-data records", ["exchange", "reason"]
+)
 opportunities_total = Gauge("funding_opportunities_total", "Current ranked opportunities")
 confirmed_opportunities_total = Gauge(
     "funding_confirmed_opportunities_total", "Current confirmed opportunities"
+)
+opportunity_candidates = Gauge(
+    "funding_opportunity_candidates", "Current raw scanner candidates", ["strategy"]
+)
+opportunity_filter_rejections = Gauge(
+    "funding_opportunity_filter_rejections",
+    "Current scanner candidates rejected by each filter",
+    ["reason"],
+)
+opportunity_coverage_ratio = Gauge(
+    "funding_opportunity_coverage_ratio",
+    "Eligible opportunities divided by raw scanner candidates",
 )
 paper_positions_open = Gauge("funding_paper_positions_open", "Open paper positions")
 paper_equity = Gauge("funding_paper_equity", "Virtual paper portfolio equity")
@@ -29,6 +60,47 @@ paper_runner_cycles_total = Counter(
 paper_runner_errors_total = Counter(
     "funding_paper_runner_errors_total", "Paper-test runner cycle errors"
 )
+paper_runner_cycle_duration_seconds = Histogram(
+    "funding_paper_runner_cycle_duration_seconds", "Paper runner cycle duration"
+)
+paper_runner_stage_duration_seconds = Histogram(
+    "funding_paper_runner_stage_duration_seconds",
+    "Paper runner stage duration",
+    ["stage"],
+)
+paper_trade_rejections_total = Counter(
+    "funding_paper_trade_rejections_total", "Paper trade rejections", ["reason"]
+)
 paper_runner_last_cycle_timestamp = Gauge(
     "funding_paper_runner_last_cycle_timestamp", "Unix timestamp of the last paper cycle"
+)
+live_runner_cycles_total = Counter(
+    "funding_live_runner_cycles_total", "Completed live runner cycles"
+)
+live_runner_errors_total = Counter(
+    "funding_live_runner_errors_total", "Live runner errors", ["stage"]
+)
+live_runner_last_cycle_timestamp = Gauge(
+    "funding_live_runner_last_cycle_timestamp", "Unix timestamp of the last live cycle"
+)
+live_orders_total = Counter(
+    "funding_live_orders_total", "Authenticated order outcomes", ["exchange", "status"]
+)
+live_trade_rejections_total = Counter(
+    "funding_live_trade_rejections_total", "Live entries rejected before exposure", ["reason"]
+)
+live_positions_open = Gauge("funding_live_positions_open", "Open real-money positions")
+live_equity = Gauge("funding_live_equity_usd", "Authenticated aggregate account equity")
+live_pnl = Gauge("funding_live_pnl_usd", "Equity delta since this live process started")
+live_reconciliation_failures_total = Counter(
+    "funding_live_reconciliation_failures_total", "Failed private-state reconciliations"
+)
+live_funding_payments_total = Counter(
+    "funding_live_funding_payments_total", "New actual funding cashflows", ["exchange"]
+)
+live_funding_poll_errors_total = Counter(
+    "funding_live_funding_poll_errors_total", "Private funding-history poll errors", ["exchange"]
+)
+live_trading_paused = Gauge(
+    "funding_live_trading_paused", "Whether the persistent live entry interlock is active"
 )

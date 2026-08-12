@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -20,6 +20,7 @@ from funding_arbitrage.exchanges.base.exceptions import (
 )
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.base.models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     InstrumentType,
@@ -30,6 +31,7 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
+from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
 
 logger = logging.getLogger(__name__)
 
@@ -180,23 +182,42 @@ class OkxPublicAdapter(ExchangeAdapter):
             instruments,
             key=lambda item: (0 if item.get("instId") in popular else 1, str(item.get("instId"))),
         )[: self.funding_symbol_limit]
-        for instrument in instruments:
-            symbol = str(instrument.get("instId", ""))
-            if not symbol:
+        symbols = [str(item.get("instId", "")) for item in instruments if item.get("instId")]
+        responses = await asyncio.gather(
+            *(
+                self._request("/api/v5/public/funding-rate", {"instId": symbol})
+                for symbol in symbols
+            ),
+            return_exceptions=True,
+        )
+        for symbol, rows in zip(symbols, responses, strict=True):
+            if isinstance(rows, BaseException):
+                logger.warning(
+                    "okx_funding_symbol_failed",
+                    extra={"exchange": self.name, "symbol": symbol, "error": str(rows)},
+                )
                 continue
-            rows = await self._request(
-                "/api/v5/public/funding-rate", {"instId": symbol}
-            )
             for row in rows:
+                funding_time = _ms(row["fundingTime"]) if row.get("fundingTime") else None
+                following_funding_time = (
+                    _ms(row["nextFundingTime"]) if row.get("nextFundingTime") else None
+                )
+                interval_hours = Decimal("8")
+                if (
+                    funding_time is not None
+                    and following_funding_time is not None
+                    and following_funding_time > funding_time
+                ):
+                    interval_hours = Decimal(
+                        str((following_funding_time - funding_time).total_seconds() / 3600)
+                    )
                 result.append(
                     FundingSnapshot(
                         exchange=self.name,
                         symbol=str(row["instId"]),
                         funding_rate=decimal(row.get("fundingRate", "0"), "fundingRate"),
-                        funding_interval_hours=Decimal("8"),
-                        next_funding_time=_ms(row["nextFundingTime"])
-                        if row.get("nextFundingTime")
-                        else None,
+                        funding_interval_hours=interval_hours,
+                        next_funding_time=funding_time or following_funding_time,
                         mark_price=_opt(row.get("markPx"), "markPx"),
                         index_price=_opt(row.get("idxPx"), "idxPx"),
                         timestamp=datetime.now(UTC),
@@ -207,25 +228,107 @@ class OkxPublicAdapter(ExchangeAdapter):
     async def get_funding_history(
         self, symbol: str, start: datetime, end: datetime
     ) -> list[FundingHistoryPoint]:
-        rows = await self._request(
-            "/api/v5/public/funding-rate-history",
-            {
-                "instId": symbol,
-                "after": str(int(end.timestamp() * 1000)),
-                "before": str(int(start.timestamp() * 1000)),
-                "limit": 100,
-            },
-        )
-        result = [
-            FundingHistoryPoint(
-                exchange=self.name,
-                symbol=symbol,
-                funding_rate=decimal(row["fundingRate"], "fundingRate"),
-                funding_timestamp=_ms(row["fundingTime"]),
+        if start >= end:
+            raise ValueError("start must be before end")
+        start_ms = int(start.astimezone(UTC).timestamp() * 1000)
+        cursor_end = int(end.astimezone(UTC).timestamp() * 1000)
+        result: dict[datetime, FundingHistoryPoint] = {}
+        while cursor_end >= start_ms:
+            rows = await self._request(
+                "/api/v5/public/funding-rate-history",
+                {
+                    "instId": symbol,
+                    "after": str(cursor_end),
+                    "before": str(start_ms),
+                    "limit": 100,
+                },
             )
-            for row in rows
-        ]
-        return sorted(result, key=lambda item: item.funding_timestamp)
+            batch = [
+                FundingHistoryPoint(
+                    exchange=self.name,
+                    symbol=symbol,
+                    funding_rate=decimal(row["fundingRate"], "fundingRate"),
+                    funding_timestamp=_ms(row["fundingTime"]),
+                )
+                for row in rows
+            ]
+            for point in batch:
+                if start <= point.funding_timestamp <= end:
+                    result[point.funding_timestamp] = point
+            if len(batch) < 100 or not batch:
+                break
+            next_cursor = int(
+                min(item.funding_timestamp for item in batch).timestamp() * 1000
+            ) - 1
+            if next_cursor >= cursor_end:
+                break
+            cursor_end = next_cursor
+        return [result[key] for key in sorted(result)]
+
+    async def get_candles(
+        self,
+        symbol: str,
+        instrument_type: InstrumentType,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int = 60,
+    ) -> list[Candle]:
+        if start >= end:
+            raise ValueError("start must be before end")
+        start_ms = int(start.astimezone(UTC).timestamp() * 1000)
+        cursor_end = int(end.astimezone(UTC).timestamp() * 1000)
+        bar = "1H" if interval_minutes == 60 else f"{interval_minutes}m"
+        candles: dict[datetime, Candle] = {}
+        while cursor_end >= start_ms:
+            rows = await self._request(
+                "/api/v5/market/history-candles",
+                {
+                    "instId": symbol,
+                    "bar": bar,
+                    "after": str(cursor_end),
+                    "before": str(start_ms),
+                    "limit": 100,
+                },
+            )
+            batch = [
+                self._parse_candle(row, symbol, instrument_type, interval_minutes)
+                for row in rows
+            ]
+            for candle in batch:
+                if start <= candle.open_time < end and candle.is_closed:
+                    candles[candle.open_time] = candle
+            if len(batch) < 100 or not batch:
+                break
+            next_cursor = int(min(item.open_time for item in batch).timestamp() * 1000) - 1
+            if next_cursor >= cursor_end:
+                break
+            cursor_end = next_cursor
+        return [candles[key] for key in sorted(candles)]
+
+    def _parse_candle(
+        self,
+        row: object,
+        symbol: str,
+        instrument_type: InstrumentType,
+        interval_minutes: int,
+    ) -> Candle:
+        if not isinstance(row, list) or len(row) < 9:
+            raise InvalidResponseError("invalid OKX candle row")
+        open_time = _ms(row[0])
+        return Candle(
+            exchange=self.name,
+            symbol=symbol,
+            instrument_type=instrument_type,
+            interval_minutes=interval_minutes,
+            open_time=open_time,
+            close_time=open_time + timedelta(minutes=interval_minutes),
+            open=decimal(row[1], "open"),
+            high=decimal(row[2], "high"),
+            low=decimal(row[3], "low"),
+            close=decimal(row[4], "close"),
+            volume=decimal(row[5], "volume"),
+            is_closed=str(row[8]) == "1",
+        )
 
     async def get_orderbook(
         self, symbol: str, depth: int, instrument_type: InstrumentType = InstrumentType.PERPETUAL
@@ -238,6 +341,7 @@ class OkxPublicAdapter(ExchangeAdapter):
             book = OrderBook(
                 exchange=self.name,
                 symbol=symbol,
+                instrument_type=instrument_type,
                 bids=tuple(
                     OrderBookLevel(
                         price=decimal(level[0], "bid_price"), quantity=decimal(level[1], "bid_qty")
@@ -257,10 +361,15 @@ class OkxPublicAdapter(ExchangeAdapter):
             raise InvalidResponseError(f"invalid OKX orderbook: {row!r}") from exc
         return validate_orderbook(book)
 
-    def stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    def stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
         return self._stream_tickers(symbols)
 
-    async def _stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    async def _stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
+        instrument_types = dict(symbols)
         reconnects = 0
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
             try:
@@ -272,7 +381,8 @@ class OkxPublicAdapter(ExchangeAdapter):
                             {
                                 "op": "subscribe",
                                 "args": [
-                                    {"channel": "tickers", "instId": symbol} for symbol in symbols
+                                    {"channel": "tickers", "instId": symbol}
+                                    for symbol in instrument_types
                                 ],
                             }
                         )
@@ -286,10 +396,111 @@ class OkxPublicAdapter(ExchangeAdapter):
                             and payload.get("arg", {}).get("channel") == "tickers"
                         ):
                             for row in payload.get("data", []):
-                                yield self._parse_ticker(row, InstrumentType.PERPETUAL)
+                                symbol = str(row.get("instId", ""))
+                                instrument_type = instrument_types.get(symbol)
+                                if instrument_type is not None:
+                                    yield self._parse_ticker(row, instrument_type)
                 reconnects = 0
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("OKX WebSocket reconnect limit reached") from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    def stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int = 20,
+    ) -> AsyncIterator[OrderBook]:
+        return self._stream_orderbooks(symbols, depth)
+
+    async def _stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int,
+    ) -> AsyncIterator[OrderBook]:
+        if not symbols:
+            return
+        instrument_types = dict(symbols)
+        reconnects = 0
+        while self.max_reconnects is None or reconnects <= self.max_reconnects:
+            try:
+                async with websockets.connect(
+                    self.websocket_url, ping_interval=20, ping_timeout=20
+                ) as socket:
+                    await socket.send(
+                        json.dumps(
+                            {
+                                "op": "subscribe",
+                                "args": [
+                                    {"channel": "books5", "instId": symbol}
+                                    for symbol in instrument_types
+                                ],
+                            }
+                        )
+                    )
+                    async for message in socket:
+                        payload = json.loads(
+                            message.decode() if isinstance(message, bytes) else message
+                        )
+                        if isinstance(payload, dict) and payload.get("event") == "error":
+                            raise InvalidResponseError(
+                                f"OKX orderbook subscription failed: {payload}"
+                            )
+                        if not (
+                            isinstance(payload, dict)
+                            and payload.get("arg", {}).get("channel") == "books5"
+                        ):
+                            continue
+                        symbol = str(payload.get("arg", {}).get("instId", ""))
+                        instrument_type = instrument_types.get(symbol)
+                        if instrument_type is None:
+                            continue
+                        for row in payload.get("data", []):
+                            reconnects = 0
+                            yield self._parse_ws_orderbook(
+                                symbol, row, instrument_type, depth
+                            )
+            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
+                reconnects += 1
+                if self.max_reconnects is not None and reconnects > self.max_reconnects:
+                    raise NetworkError("OKX orderbook WebSocket reconnect limit reached") from exc
+                await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    def _parse_ws_orderbook(
+        self,
+        symbol: str,
+        payload: object,
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> OrderBook:
+        if not isinstance(payload, dict):
+            raise InvalidResponseError("invalid OKX WebSocket orderbook payload")
+        try:
+            sequence_value = payload.get("seqId") or payload["ts"]
+            book = OrderBook(
+                exchange=self.name,
+                symbol=symbol,
+                instrument_type=instrument_type,
+                bids=tuple(
+                    OrderBookLevel(
+                        price=decimal(row[0], "bid_price"),
+                        quantity=decimal(row[1], "bid_quantity"),
+                    )
+                    for row in payload["bids"][:depth]
+                ),
+                asks=tuple(
+                    OrderBookLevel(
+                        price=decimal(row[0], "ask_price"),
+                        quantity=decimal(row[1], "ask_quantity"),
+                    )
+                    for row in payload["asks"][:depth]
+                ),
+                timestamp=_ms(payload["ts"]),
+                sequence=int(sequence_value),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidResponseError(f"invalid OKX WebSocket orderbook: {payload!r}") from exc
+        return validate_orderbook(book)
