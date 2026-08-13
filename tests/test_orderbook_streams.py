@@ -256,3 +256,33 @@ async def test_collector_refreshes_funding_before_it_becomes_stale() -> None:
 
     assert collector._last_rest_ticker_fetch[adapter.name] == first_rest_ticker_fetch
     assert adapter.funding_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_collector_refetches_funding_that_aged_during_collection() -> None:
+    class AgingFundingMock(MockExchangeAdapter):
+        def __init__(self) -> None:
+            super().__init__("bybit", sleep=0)
+            self.funding_calls = 0
+
+        async def get_funding_rates(self) -> list[FundingSnapshot]:
+            self.funding_calls += 1
+            rows = await super().get_funding_rates()
+            timestamp = datetime.now(UTC)
+            if self.funding_calls == 1:
+                timestamp -= timedelta(seconds=31)
+            return [row.model_copy(update={"timestamp": timestamp}) for row in rows]
+
+    adapter = AgingFundingMock()
+    collector = MarketDataCollector(
+        [adapter], enable_streams=False, stale_after_seconds=30
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert adapter.funding_calls == 2
+    assert all(
+        (snapshot.captured_at - row.timestamp).total_seconds() <= 30
+        for row in snapshot.funding
+    )

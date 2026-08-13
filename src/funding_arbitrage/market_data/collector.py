@@ -179,6 +179,11 @@ class MarketDataCollector:
         force_history_refresh: bool = True,
         force_history_symbols: dict[str, list[str]] | None = None,
     ) -> MarketSnapshot:
+        active_adapters = tuple(
+            adapter
+            for adapter in self.adapters
+            if self.health[adapter.name].can_attempt()
+        )
         collections = await asyncio.gather(
             *(
                 self._collect_venue(
@@ -189,10 +194,13 @@ class MarketDataCollector:
                     force_history_refresh,
                     (force_history_symbols or {}).get(adapter.name, []),
                 )
-                for adapter in self.adapters
-                if self.health[adapter.name].can_attempt()
+                for adapter in active_adapters
             )
         )
+        collections = await self._refresh_funding_aged_during_collection(
+            active_adapters, list(collections)
+        )
+        captured_at = datetime.now(UTC)
         instruments = [item for result in collections for item in result.instruments]
         tickers = [item for result in collections for item in result.tickers]
         funding = [item for result in collections for item in result.funding]
@@ -210,10 +218,58 @@ class MarketDataCollector:
             tickers=tickers,
             funding=funding,
             orderbooks=orderbooks,
-            captured_at=datetime.now(UTC),
+            captured_at=captured_at,
             funding_history=dict(self._funding_history_cache),
             stale_after_seconds=self.stale_after_seconds,
         )
+
+    async def _refresh_funding_aged_during_collection(
+        self,
+        adapters: tuple[ExchangeAdapter, ...],
+        collections: list[_VenueCollection],
+    ) -> list[_VenueCollection]:
+        """Refresh venue funding that became stale while slow books/history loaded."""
+
+        now = datetime.now(UTC)
+        stale_indexes = [
+            index
+            for index, result in enumerate(collections)
+            if result.funding
+            and any(
+                (now - item.timestamp).total_seconds() > self.stale_after_seconds
+                for item in result.funding
+            )
+        ]
+        if not stale_indexes:
+            return collections
+        refreshed = await asyncio.gather(
+            *(adapters[index].get_funding_rates() for index in stale_indexes),
+            return_exceptions=True,
+        )
+        refreshed_at = datetime.now(UTC)
+        for index, value in zip(stale_indexes, refreshed, strict=True):
+            adapter = adapters[index]
+            if not isinstance(value, list):
+                logger.warning(
+                    "stale_funding_refresh_failed",
+                    extra={
+                        "exchange": adapter.name,
+                        "event": "market_data_validation",
+                        "error": str(value),
+                    },
+                )
+                continue
+            current = collections[index]
+            collections[index] = _VenueCollection(
+                current.instruments,
+                current.tickers,
+                value,
+                current.orderbooks,
+                current.funding_history,
+            )
+            self._funding_cache[adapter.name] = value
+            self._last_funding_fetch[adapter.name] = refreshed_at
+        return collections
 
     async def _collect_venue(
         self,
