@@ -68,21 +68,22 @@ funding payments, closed positions, fees, and the equity curve.
 
 ## Current VM acceptance gates
 
-The Gate/Binance/Bybit schedule-corrected v20 canary starts when release
-`funding-pnl-v2-20260813-050` is activated. Record the first shared v20 snapshot
-timestamp and use it as `<V20_START_UTC>` below. Run the read-only audit from
-the project directory after the relevant deadline:
+The pre-market-filtered, schedule-corrected v21 canary started with release
+`funding-pnl-v2-20260813-051`. Its first shared snapshot is
+`2026-08-13T17:34:18.497070Z`; use that exact timestamp as `<V21_START_UTC>`
+below. Run the read-only audit from the project directory after the relevant
+deadline:
 
 ```bash
-# Earliest useful run: 72 hours after <V20_START_UTC>.
+# Earliest useful run: 2026-08-16T17:34:18.497070Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V20_START_UTC> \
+  --start <V21_START_UTC> \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 30 days after <V20_START_UTC>.
+# Earliest useful run: 2026-09-12T17:34:18.497070Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V20_START_UTC> \
+  --start <V21_START_UTC> \
   --gate acceptance \
   --timeout 45
 ```

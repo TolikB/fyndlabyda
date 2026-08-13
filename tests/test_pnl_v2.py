@@ -194,6 +194,66 @@ async def test_cross_venue_fills_use_each_venues_fee() -> None:
 
 
 @pytest.mark.asyncio
+async def test_high_price_btc_closes_each_leg_at_exact_open_quantity() -> None:
+    now = datetime.now(UTC)
+    tickers = [
+        Ticker(
+            exchange=venue,
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            last_price=Decimal("50000"),
+            timestamp=now,
+        )
+        for venue in ("bybit", "gate")
+    ]
+    books = {
+        (ticker.exchange, ticker.symbol, ticker.instrument_type): OrderBook(
+            exchange=ticker.exchange,
+            symbol=ticker.symbol,
+            instrument_type=ticker.instrument_type,
+            bids=(OrderBookLevel(price=Decimal("50000"), quantity=Decimal("1")),),
+            asks=(OrderBookLevel(price=Decimal("50000"), quantity=Decimal("1")),),
+            timestamp=now,
+        )
+        for ticker in tickers
+    }
+    opportunity = Opportunity(
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING,
+        asset="BTC",
+        venue_a="bybit",
+        venue_b="gate",
+        symbol_a="BTCUSDT",
+        symbol_b="BTCUSDT",
+        leg_a_type="PERPETUAL",
+        leg_b_type="PERPETUAL",
+        leg_a_side="BUY",
+        leg_b_side="SELL",
+        price_a=Decimal("50000"),
+        price_b=Decimal("50000"),
+        gross_edge=Decimal("0.01"),
+        net_edge=Decimal("0.005"),
+        expected_holding_hours=Decimal("8"),
+        net_apr=Decimal("0.1"),
+        available_liquidity=Decimal("50000"),
+        risk_score=Decimal("10"),
+    )
+    snapshot = MarketSnapshot([], tickers, [], books, now)
+    executor = PaperTradingExecutor()
+
+    position = await executor.open(opportunity, Decimal("100"), snapshot)
+
+    assert position.leg_a is not None and position.leg_b is not None
+    assert position.leg_a.filled_quantity == Decimal("0.002")
+    assert position.leg_b.filled_quantity == Decimal("0.002")
+
+    await executor.close(position, snapshot)
+
+    assert position.close_leg_a is not None and position.close_leg_b is not None
+    assert position.close_leg_a.requested_quantity == position.leg_a.filled_quantity
+    assert position.close_leg_b.requested_quantity == position.leg_b.filled_quantity
+
+
+@pytest.mark.asyncio
 async def test_spot_perp_convergence_is_attributed_to_basis_without_double_count() -> None:
     opportunity = _spot_perp_opportunity().model_copy(
         update={
