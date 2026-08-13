@@ -65,7 +65,13 @@ async def test_binance_uses_adjusted_symbol_funding_interval() -> None:
                         "lastFundingRate": "0.001",
                         "nextFundingTime": 1735718400000,
                         "time": 1735689600000,
-                    }
+                    },
+                    {
+                        "symbol": "BTCUSDT_261225",
+                        "lastFundingRate": "0",
+                        "nextFundingTime": 0,
+                        "time": 1735689600000,
+                    },
                 ],
             )
         if request.url.path.endswith("/fundingInfo"):
@@ -82,6 +88,7 @@ async def test_binance_uses_adjusted_symbol_funding_interval() -> None:
     funding = await adapter.get_funding_rates()
     await client.aclose()
 
+    assert len(funding) == 1
     assert funding[0].funding_interval_hours == Decimal("4")
     assert funding[0].funding_rate_daily == Decimal("0.006")
 

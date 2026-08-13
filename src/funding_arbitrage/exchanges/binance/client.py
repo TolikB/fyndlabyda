@@ -256,6 +256,7 @@ class BinancePublicAdapter(ExchangeAdapter):
             )
             for row in payload
             if isinstance(row, dict)
+            and row.get("nextFundingTime") not in (None, "", 0, "0")
         ]
 
     async def _refresh_funding_intervals(self) -> None:
