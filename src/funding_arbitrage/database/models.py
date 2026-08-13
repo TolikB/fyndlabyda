@@ -279,6 +279,25 @@ class PortfolioSnapshotRecord(Base):
     balances: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class PaperRuntimeIncidentRecord(Base):
+    """Restart-safe evidence that a paper runner cycle failed."""
+
+    __tablename__ = "paper_runtime_incidents"
+    __table_args__ = (
+        Index(
+            "ix_paper_runtime_incident_version_timestamp",
+            "simulation_version",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    simulation_version: Mapped[str] = mapped_column(String(32), index=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    error_type: Mapped[str] = mapped_column(String(128))
+
+
 class BacktestRunRecord(Base):
     """Reproducible backtest metadata and deterministic configuration hash."""
 

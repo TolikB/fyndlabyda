@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.backtest.events import (
@@ -20,6 +20,7 @@ from funding_arbitrage.database.models import (
     PaperFillRecord,
     PaperFundingPaymentRecord,
     PaperPositionRecord,
+    PaperRuntimeIncidentRecord,
     PortfolioSnapshotRecord,
 )
 from funding_arbitrage.execution.base import PaperFill
@@ -38,6 +39,7 @@ class PaperReplayDataset:
     max_snapshot_gap_seconds: Decimal = Decimal("0")
     max_accounting_invariant_error: Decimal = Decimal("0")
     snapshot_pnl_delta: Decimal | None = None
+    runtime_incident_count: int = 0
 
 
 class DatabasePaperReplay:
@@ -62,6 +64,18 @@ class DatabasePaperReplay:
                 )
                 .limit(1)
             )
+        incident_statement = select(func.count(PaperRuntimeIncidentRecord.id)).where(
+            PaperRuntimeIncidentRecord.simulation_version == simulation_version
+        )
+        if start is not None:
+            incident_statement = incident_statement.where(
+                PaperRuntimeIncidentRecord.occurred_at >= start
+            )
+        if end is not None:
+            incident_statement = incident_statement.where(
+                PaperRuntimeIncidentRecord.occurred_at < end
+            )
+        runtime_incident_count = int(await session.scalar(incident_statement) or 0)
         snapshot_statement = (
             select(PortfolioSnapshotRecord)
             .where(PortfolioSnapshotRecord.simulation_version == simulation_version)
@@ -123,7 +137,14 @@ class DatabasePaperReplay:
             return PaperReplayDataset(
                 events=[],
                 dataset_version=self._version(
-                    simulation_version, start, end, 0, 0, 0, len(snapshots)
+                    simulation_version,
+                    start,
+                    end,
+                    0,
+                    0,
+                    0,
+                    len(snapshots),
+                    runtime_incident_count,
                 ),
                 attribution={"strategy": {}, "exchange": {}, "asset": {}},
                 position_count=0,
@@ -133,6 +154,7 @@ class DatabasePaperReplay:
                 max_snapshot_gap_seconds=max_snapshot_gap,
                 max_accounting_invariant_error=max_invariant_error,
                 snapshot_pnl_delta=snapshot_pnl_delta,
+                runtime_incident_count=runtime_incident_count,
             )
 
         position_ids = tuple(positions)
@@ -332,6 +354,7 @@ class DatabasePaperReplay:
                 len(fills),
                 len(funding),
                 len(snapshots),
+                runtime_incident_count,
             ),
             attribution=attribution,
             position_count=len(rows),
@@ -341,6 +364,7 @@ class DatabasePaperReplay:
             max_snapshot_gap_seconds=max_snapshot_gap,
             max_accounting_invariant_error=max_invariant_error,
             snapshot_pnl_delta=snapshot_pnl_delta,
+            runtime_incident_count=runtime_incident_count,
         )
 
     @staticmethod
@@ -362,6 +386,7 @@ class DatabasePaperReplay:
         fills: int,
         funding: int,
         snapshots: int,
+        runtime_incidents: int,
     ) -> str:
         return ":".join(
             (
@@ -369,6 +394,9 @@ class DatabasePaperReplay:
                 simulation_version,
                 start.isoformat() if start else "begin",
                 end.isoformat() if end else "latest",
-                f"p{positions}-f{fills}-u{funding}-s{snapshots}",
+                (
+                    f"p{positions}-f{fills}-u{funding}-s{snapshots}"
+                    f"-i{runtime_incidents}"
+                ),
             )
         )

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -101,3 +102,22 @@ def test_rolling_window_boundary_event_is_counted_only_once() -> None:
     result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
 
     assert result["profitable_candidate_windows"] == 1
+
+
+def test_durable_runtime_incident_invalidates_canary_and_acceptance_evidence() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=31)
+    timestamps = (start, start + timedelta(seconds=30), end)
+    baseline = _observed_dataset("baseline", start, end, timestamps)
+    candidate = replace(
+        _observed_dataset("candidate", start, end, timestamps),
+        runtime_incident_count=1,
+    )
+
+    result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+
+    assert result["canary"]["checks"]["runtime_incidents_zero"] is False
+    assert result["canary"]["ready"] is False
+    assert result["checks"]["runtime_incidents_zero"] is False
+    assert result["evidence_ready"] is False
+    assert result["accepted"] is False

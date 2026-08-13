@@ -27,11 +27,16 @@ class _Rows:
 
 
 class _ReplaySession:
-    def __init__(self, results: list[list[object]]) -> None:
+    def __init__(
+        self,
+        results: list[list[object]],
+        scalar_values: list[object | None] | None = None,
+    ) -> None:
         self.results = results
+        self.scalar_values = scalar_values or []
 
-    async def scalar(self, _statement: object) -> None:
-        return None
+    async def scalar(self, _statement: object) -> object | None:
+        return self.scalar_values.pop(0) if self.scalar_values else None
 
     async def execute(self, _statement: object) -> _Rows:
         return _Rows(self.results.pop(0))
@@ -148,6 +153,35 @@ async def test_database_replay_marks_open_position_and_reconciles_snapshot_pnl()
     assert result.metrics.net_profit_after_costs == Decimal("-3.5")
     assert comparison["checks"]["accounting_reconciled"] is True
     assert comparison["observation"]["candidate_replay_pnl_error"] == "0.0"
+
+
+@pytest.mark.asyncio
+async def test_database_replay_loads_restart_safe_runtime_incident_count() -> None:
+    start = datetime(2026, 8, 11, tzinfo=UTC)
+    snapshots = [
+        PortfolioSnapshotRecord(
+            timestamp=start,
+            simulation_version="candidate",
+            equity=Decimal("1000"),
+            cash=Decimal("1000"),
+            locked_capital=Decimal("0"),
+            total_pnl=Decimal("0"),
+            funding_pnl=Decimal("0"),
+            fees=Decimal("0"),
+            balances={},
+        )
+    ]
+    session = _ReplaySession(
+        [snapshots, []],
+        scalar_values=[None, 2],
+    )
+
+    dataset = await DatabasePaperReplay().load(  # type: ignore[arg-type]
+        session, "candidate", start
+    )
+
+    assert dataset.runtime_incident_count == 2
+    assert dataset.dataset_version.endswith("-i2")
 
 
 @pytest.mark.asyncio

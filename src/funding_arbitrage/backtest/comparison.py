@@ -99,6 +99,10 @@ def compare_paper_datasets(
         and baseline_replay_pnl_error <= Decimal("0.01")
         and candidate_replay_pnl_error <= Decimal("0.01")
     )
+    runtime_incidents_zero = (
+        baseline.runtime_incident_count == 0
+        and candidate.runtime_incident_count == 0
+    )
     has_snapshot_evidence = bool(
         baseline.snapshot_timestamps and candidate.snapshot_timestamps
     )
@@ -141,6 +145,7 @@ def compare_paper_datasets(
         "maximum_gap_within_5_minutes": (
             has_snapshot_evidence and maximum_gap <= Decimal("300")
         ),
+        "runtime_incidents_zero": runtime_incidents_zero,
     }
     checks = {
         "net_pnl_at_least_10_percent_better": ten_percent_better,
@@ -155,12 +160,14 @@ def compare_paper_datasets(
         "minimum_30_days": evidence_days >= Decimal("30"),
         "accounting_reconciled": accounting_reconciled,
         "exact_shared_timestamps": exact_shared_timestamps,
+        "runtime_incidents_zero": runtime_incidents_zero,
     }
     return {
         "evidence_ready": (
             checks["minimum_30_days"]
             and checks["accounting_reconciled"]
             and checks["exact_shared_timestamps"]
+            and checks["runtime_incidents_zero"]
         ),
         "accepted": all(checks.values()),
         "evidence_days": str(evidence_days),
@@ -190,6 +197,8 @@ def compare_paper_datasets(
                 if candidate.snapshot_pnl_delta is not None
                 else None
             ),
+            "baseline_runtime_incident_count": baseline.runtime_incident_count,
+            "candidate_runtime_incident_count": candidate.runtime_incident_count,
         },
         "canary": {
             "ready": all(canary_checks.values()),

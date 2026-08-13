@@ -26,6 +26,7 @@ from funding_arbitrage.database.repositories.market_data import (
     save_opportunities,
     save_paper_funding_payment,
     save_paper_position,
+    save_paper_runtime_incident,
     save_portfolio_snapshot,
 )
 from funding_arbitrage.exchanges.base.models import (
@@ -59,6 +60,32 @@ from funding_arbitrage.services.daily_report import DailyReportService
 from funding_arbitrage.services.runtime import RuntimeState
 
 logger = logging.getLogger(__name__)
+
+
+async def _persist_runtime_incident(
+    session_factory: async_sessionmaker[AsyncSession],
+    simulation_versions: tuple[str, ...],
+    category: str,
+    error: Exception,
+) -> None:
+    """Best-effort durable failure evidence without persisting error messages."""
+
+    try:
+        async with session_factory() as session:
+            await save_paper_runtime_incident(
+                session,
+                simulation_versions,
+                category,
+                type(error).__name__,
+                datetime.now(UTC),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "paper_runtime_incident_persist_failed",
+            extra={"event": "paper_runtime_incident", "category": category},
+        )
 
 
 def _initialize_scan_worker() -> None:
@@ -154,9 +181,15 @@ class PaperTestRunner:
                 paper_runner_last_cycle_timestamp.set(datetime.now(UTC).timestamp())
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
                 paper_runner_errors_total.inc()
                 logger.exception("paper_test_cycle_failed")
+                await _persist_runtime_incident(
+                    self.session_factory,
+                    (self.settings.paper_simulation_version,),
+                    "paper_cycle",
+                    error,
+                )
             await _wait_for_next_cycle(
                 self.stop_event,
                 started,
@@ -942,9 +975,18 @@ class SharedMarketPaperComparisonRunner:
                 paper_runner_last_cycle_timestamp.set(datetime.now(UTC).timestamp())
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
                 paper_runner_errors_total.inc()
                 logger.exception("paper_comparison_cycle_failed")
+                await _persist_runtime_incident(
+                    self.candidate.session_factory,
+                    (
+                        self.candidate.settings.paper_simulation_version,
+                        self.baseline.settings.paper_simulation_version,
+                    ),
+                    "comparison_cycle",
+                    error,
+                )
             await _wait_for_next_cycle(
                 self.stop_event,
                 started,

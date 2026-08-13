@@ -32,7 +32,10 @@ from funding_arbitrage.opportunity.models import (
 )
 from funding_arbitrage.portfolio.portfolio import PaperPortfolio
 from funding_arbitrage.portfolio.position import PaperPosition, PositionState
-from funding_arbitrage.services.paper_runner import PaperTestRunner
+from funding_arbitrage.services.paper_runner import (
+    PaperTestRunner,
+    SharedMarketPaperComparisonRunner,
+)
 from funding_arbitrage.services.runtime import RuntimeState
 
 
@@ -279,6 +282,77 @@ async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
 
     await candidate.close()
     await baseline.close()
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_runner_persists_cycle_failure_for_both_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_simulation_version="candidate-incident-test",
+        paper_strategy_profile="candidate",
+        paper_comparison_enabled=True,
+        paper_baseline_simulation_version="baseline-incident-test",
+    )
+    baseline_settings = candidate_settings.model_copy(
+        update={
+            "paper_strategy_profile": "baseline",
+            "paper_simulation_version": "baseline-incident-test",
+            "telegram_enabled": False,
+        }
+    )
+    adapters = create_public_adapters(candidate_settings)
+    factory = cast(async_sessionmaker[AsyncSession], EmptySessionFactory())
+    candidate = PaperTestRunner(
+        candidate_settings,
+        RuntimeState(candidate_settings, adapters),
+        factory,
+    )
+    baseline = PaperTestRunner(
+        baseline_settings,
+        RuntimeState(baseline_settings, adapters, emit_metrics=False),
+        factory,
+        collector=candidate.collector,
+    )
+    shared = SharedMarketPaperComparisonRunner(candidate, baseline)
+    captured: list[tuple[tuple[str, ...], str, str]] = []
+
+    async def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def fail(*_args: object, **_kwargs: object) -> MarketSnapshot:
+        raise RuntimeError("synthetic cycle failure")
+
+    async def capture_incident(
+        _factory: object,
+        versions: tuple[str, ...],
+        category: str,
+        error: Exception,
+    ) -> None:
+        captured.append((versions, category, type(error).__name__))
+        shared.stop_event.set()
+
+    monkeypatch.setattr(candidate, "restore", noop)
+    monkeypatch.setattr(baseline, "restore", noop)
+    monkeypatch.setattr(candidate, "collect_snapshot", fail)
+    monkeypatch.setattr(
+        paper_runner_module, "_persist_runtime_incident", capture_incident
+    )
+
+    await shared.run()
+
+    assert captured == [
+        (
+            ("candidate-incident-test", "baseline-incident-test"),
+            "comparison_cycle",
+            "RuntimeError",
+        )
+    ]
+    await shared.close()
     for adapter in adapters.values():
         await adapter.close()
 

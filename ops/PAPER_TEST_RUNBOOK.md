@@ -100,7 +100,9 @@ errors, acceptable snapshot gaps, zero current runner errors, a fresh latest
 cycle, and complete funding-history/orderbook coverage with zero stale books on
 Binance, Bybit, Gate, Hyperliquid, and OKX. Recent normalized ticker and
 orderbook messages must also be observed from each venue's WebSocket stream;
-REST fallback alone cannot satisfy the gate. The 30-day gate additionally
+REST fallback alone cannot satisfy the gate. Cycle failures are persisted per
+simulation version in PostgreSQL and any incident inside the requested window
+invalidates both gates after a container restart. The 30-day gate additionally
 requires candidate net PnL to exceed baseline by at least 10%, higher median
 monthly PnL, no worse max drawdown, and profitable candidate PnL in at least two
 of three rolling windows.

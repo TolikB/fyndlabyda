@@ -37,6 +37,7 @@ from ..models import (
     PaperFillRecord,
     PaperFundingPaymentRecord,
     PaperPositionRecord,
+    PaperRuntimeIncidentRecord,
     PortfolioSnapshotRecord,
     TickerSnapshotRecord,
 )
@@ -315,6 +316,27 @@ async def save_portfolio_snapshot(session: AsyncSession, snapshot: PortfolioSnap
             balances={key: str(value) for key, value in snapshot.balances.items()},
         )
     )
+    await session.commit()
+
+
+async def save_paper_runtime_incident(
+    session: AsyncSession,
+    simulation_versions: Iterable[str],
+    category: str,
+    error_type: str,
+    occurred_at: datetime,
+) -> None:
+    """Persist one redacted cycle failure for every affected paper ledger."""
+
+    for simulation_version in dict.fromkeys(simulation_versions):
+        session.add(
+            PaperRuntimeIncidentRecord(
+                occurred_at=occurred_at,
+                simulation_version=simulation_version,
+                category=category,
+                error_type=error_type[:128],
+            )
+        )
     await session.commit()
 
 
