@@ -176,6 +176,46 @@ def build_audit(
             "duplicate_open_exposure_count"
         )
         == 0,
+        "candidate_historical_exposure_keys_complete": candidate.get(
+            "historical_positions_missing_exposure_key_count"
+        )
+        == 0,
+        "baseline_historical_exposure_keys_complete": baseline.get(
+            "historical_positions_missing_exposure_key_count"
+        )
+        == 0,
+        "candidate_historical_exposure_keys_verifiable": candidate.get(
+            "historical_positions_unverifiable_exposure_key_count"
+        )
+        == 0,
+        "baseline_historical_exposure_keys_verifiable": baseline.get(
+            "historical_positions_unverifiable_exposure_key_count"
+        )
+        == 0,
+        "candidate_historical_exposure_keys_canonical": candidate.get(
+            "historical_positions_mismatched_exposure_key_count"
+        )
+        == 0,
+        "baseline_historical_exposure_keys_canonical": baseline.get(
+            "historical_positions_mismatched_exposure_key_count"
+        )
+        == 0,
+        "candidate_historical_intervals_complete": candidate.get(
+            "historical_positions_missing_interval_count"
+        )
+        == 0,
+        "baseline_historical_intervals_complete": baseline.get(
+            "historical_positions_missing_interval_count"
+        )
+        == 0,
+        "candidate_overlapping_exposure_intervals_zero": candidate.get(
+            "overlapping_exposure_interval_count"
+        )
+        == 0,
+        "baseline_overlapping_exposure_intervals_zero": baseline.get(
+            "overlapping_exposure_interval_count"
+        )
+        == 0,
     }
     healthy_venues = set(ready.get("healthy_venues") or [])
     history_coverage = operational_metrics.get("history_coverage") or {}
@@ -250,6 +290,21 @@ def build_audit(
             "duplicate_open_exposures": candidate.get(
                 "duplicate_open_exposure_count"
             ),
+            "historical_missing_exposure_keys": candidate.get(
+                "historical_positions_missing_exposure_key_count"
+            ),
+            "historical_unverifiable_exposure_keys": candidate.get(
+                "historical_positions_unverifiable_exposure_key_count"
+            ),
+            "historical_mismatched_exposure_keys": candidate.get(
+                "historical_positions_mismatched_exposure_key_count"
+            ),
+            "historical_missing_intervals": candidate.get(
+                "historical_positions_missing_interval_count"
+            ),
+            "overlapping_exposure_intervals": candidate.get(
+                "overlapping_exposure_interval_count"
+            ),
             "funding_pnl": candidate.get("funding_pnl"),
             "fees": candidate.get("fees"),
         },
@@ -270,6 +325,21 @@ def build_audit(
             ),
             "duplicate_open_exposures": baseline.get(
                 "duplicate_open_exposure_count"
+            ),
+            "historical_missing_exposure_keys": baseline.get(
+                "historical_positions_missing_exposure_key_count"
+            ),
+            "historical_unverifiable_exposure_keys": baseline.get(
+                "historical_positions_unverifiable_exposure_key_count"
+            ),
+            "historical_mismatched_exposure_keys": baseline.get(
+                "historical_positions_mismatched_exposure_key_count"
+            ),
+            "historical_missing_intervals": baseline.get(
+                "historical_positions_missing_interval_count"
+            ),
+            "overlapping_exposure_intervals": baseline.get(
+                "overlapping_exposure_interval_count"
             ),
             "funding_pnl": baseline.get("funding_pnl"),
             "fees": baseline.get("fees"),

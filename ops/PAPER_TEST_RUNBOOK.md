@@ -70,7 +70,7 @@ funding payments, closed positions, fees, and the equity curve.
 ## Current VM acceptance gates
 
 The restart-safe, reverse-route-deduplicated v26 canary starts with release
-`funding-pnl-v2-20260813-066`. Its clean evidence boundary and enforced
+`funding-pnl-v2-20260813-067`. Its clean evidence boundary and enforced
 autotrade boundary are both `2026-08-13T23:15:00Z`; use that exact timestamp as
 the `--start` value below. Run the read-only audit inside the deployed
 application container after the relevant deadline:
@@ -114,7 +114,9 @@ are excluded from both ledgers and remain visible as snapshot gaps and skip
 metrics. The 30-day gate additionally
 requires candidate net PnL to exceed baseline by at least 10%, higher median
 monthly PnL, no worse max drawdown, and profitable candidate PnL in at least two
-of three rolling windows.
+of three rolling windows. It also independently reconstructs canonical exposure
+keys for every persisted position and rejects any overlapping holding intervals,
+including duplicates that opened and closed between audit runs.
 
 The release also requires the digest-pinned Python base image and exact
 `requirements.lock` dependency graph. Any dependency update is a new release

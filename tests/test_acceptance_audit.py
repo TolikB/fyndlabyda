@@ -1,8 +1,12 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from scripts.paper_acceptance_audit import build_audit, parse_operational_metrics
 
-from funding_arbitrage.api.routes.analytics import _open_exposure_safety
+from funding_arbitrage.api.routes.analytics import (
+    _historical_exposure_safety,
+    _open_exposure_safety,
+)
 
 
 def _operational(**updates: object) -> dict[str, object]:
@@ -55,6 +59,11 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
             "open_positions_unverifiable_exposure_key_count": 0,
             "open_positions_mismatched_exposure_key_count": 0,
             "duplicate_open_exposure_count": 0,
+            "historical_positions_missing_exposure_key_count": 0,
+            "historical_positions_unverifiable_exposure_key_count": 0,
+            "historical_positions_mismatched_exposure_key_count": 0,
+            "historical_positions_missing_interval_count": 0,
+            "overlapping_exposure_interval_count": 0,
         },
         {
             "simulation_version": "baseline",
@@ -63,6 +72,11 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
             "open_positions_unverifiable_exposure_key_count": 0,
             "open_positions_mismatched_exposure_key_count": 0,
             "duplicate_open_exposure_count": 0,
+            "historical_positions_missing_exposure_key_count": 0,
+            "historical_positions_unverifiable_exposure_key_count": 0,
+            "historical_positions_mismatched_exposure_key_count": 0,
+            "historical_positions_missing_interval_count": 0,
+            "overlapping_exposure_interval_count": 0,
         },
         {"raw_candidates": 5},
         _operational(),
@@ -94,6 +108,11 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
         "open_positions_unverifiable_exposure_key_count": 1,
         "open_positions_mismatched_exposure_key_count": 1,
         "duplicate_open_exposure_count": 1,
+        "historical_positions_missing_exposure_key_count": 0,
+        "historical_positions_unverifiable_exposure_key_count": 0,
+        "historical_positions_mismatched_exposure_key_count": 0,
+        "historical_positions_missing_interval_count": 0,
+        "overlapping_exposure_interval_count": 1,
     }
     baseline = {
         "simulation_version": "baseline",
@@ -101,6 +120,11 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
         "open_positions_unverifiable_exposure_key_count": 0,
         "open_positions_mismatched_exposure_key_count": 0,
         "duplicate_open_exposure_count": 0,
+        "historical_positions_missing_exposure_key_count": 0,
+        "historical_positions_unverifiable_exposure_key_count": 0,
+        "historical_positions_mismatched_exposure_key_count": 0,
+        "historical_positions_missing_interval_count": 0,
+        "overlapping_exposure_interval_count": 0,
     }
     result = build_audit(
         {
@@ -133,6 +157,10 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
     assert result["runtime_checks"]["candidate_open_exposure_keys_verifiable"] is False
     assert result["runtime_checks"]["candidate_open_exposure_keys_canonical"] is False
     assert result["runtime_checks"]["candidate_duplicate_open_exposures_zero"] is False
+    assert (
+        result["runtime_checks"]["candidate_overlapping_exposure_intervals_zero"]
+        is False
+    )
     assert result["runtime_safe"] is False
     assert result["canary_ready"] is False
 
@@ -169,6 +197,52 @@ def test_open_exposure_safety_counts_missing_and_excess_positions() -> None:
         "open_positions_unverifiable_exposure_key_count": 1,
         "open_positions_mismatched_exposure_key_count": 1,
         "duplicate_open_exposure_count": 1,
+    }
+
+
+def test_historical_exposure_safety_detects_closed_interval_overlap() -> None:
+    canonical = (
+        "exposure|COTI|bybit|COTIUSDT|PERPETUAL|gate|COTI_USDT|PERPETUAL"
+    )
+    payload = {
+        "asset": "COTI",
+        "exposure_key": canonical,
+        "leg_a": {
+            "exchange": "gate",
+            "symbol": "COTI_USDT",
+            "instrument_type": "PERPETUAL",
+        },
+        "leg_b": {
+            "exchange": "bybit",
+            "symbol": "COTIUSDT",
+            "instrument_type": "PERPETUAL",
+        },
+    }
+    start = datetime(2026, 8, 13, 23, 15, tzinfo=UTC)
+    rows = [
+        SimpleNamespace(
+            payload=payload,
+            opened_at=start,
+            closed_at=start + timedelta(hours=2),
+        ),
+        SimpleNamespace(
+            payload=payload,
+            opened_at=start + timedelta(hours=1),
+            closed_at=start + timedelta(hours=3),
+        ),
+        SimpleNamespace(
+            payload=payload,
+            opened_at=start + timedelta(hours=3),
+            closed_at=start + timedelta(hours=4),
+        ),
+    ]
+
+    assert _historical_exposure_safety(rows) == {
+        "historical_positions_missing_exposure_key_count": 0,
+        "historical_positions_unverifiable_exposure_key_count": 0,
+        "historical_positions_mismatched_exposure_key_count": 0,
+        "historical_positions_missing_interval_count": 0,
+        "overlapping_exposure_interval_count": 1,
     }
 
 
