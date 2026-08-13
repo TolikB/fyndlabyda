@@ -38,7 +38,7 @@ shared-feed comparison in `.env`:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
-PAPER_AUTOTRADE_START_UTC=2026-08-13T20:00:00Z
+PAPER_AUTOTRADE_START_UTC=2026-08-13T20:30:00Z
 PAPER_SIMULATION_VERSION=v24-oos-candidate
 PAPER_BASELINE_SIMULATION_VERSION=v24-oos-baseline
 ```
@@ -69,22 +69,26 @@ funding payments, closed positions, fees, and the equity curve.
 
 ## Current VM acceptance gates
 
-The restart-safe, pre-market-filtered v23 canary starts with release
+The restart-safe, pre-market-filtered v24 canary starts with release
 `funding-pnl-v2-20260813-062`. Its clean evidence boundary and enforced
 autotrade boundary are both `2026-08-13T20:30:00Z`; use that exact timestamp as
-`<V23_DURABLE_START_UTC>` below. Run the read-only audit from the project
-directory after the relevant deadline:
+the `--start` value below. Run the read-only audit inside the deployed
+application container after the relevant deadline:
 
 ```bash
 # Earliest useful run: 2026-08-16T20:31:00Z.
-python3 scripts/paper_acceptance_audit.py \
-  --start <V23_DURABLE_START_UTC> \
+cd /opt/funding_arbitrage_paper
+docker compose -p funding_arbitrage_paper exec -T app \
+  python scripts/paper_acceptance_audit.py \
+  --start 2026-08-13T20:30:00Z \
   --gate canary \
   --timeout 45
 
 # Earliest useful run: 2026-09-12T20:31:00Z.
-python3 scripts/paper_acceptance_audit.py \
-  --start <V23_DURABLE_START_UTC> \
+cd /opt/funding_arbitrage_paper
+docker compose -p funding_arbitrage_paper exec -T app \
+  python scripts/paper_acceptance_audit.py \
+  --start 2026-08-13T20:30:00Z \
   --gate acceptance \
   --timeout 45
 ```
