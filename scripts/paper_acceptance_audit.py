@@ -144,6 +144,22 @@ def build_audit(
         "comparison_enabled": ready.get("comparison_enabled") is True,
         "candidate_version": candidate.get("simulation_version") == candidate_version,
         "baseline_version": baseline.get("simulation_version") == baseline_version,
+        "candidate_open_exposure_keys_complete": candidate.get(
+            "open_positions_missing_exposure_key_count"
+        )
+        == 0,
+        "baseline_open_exposure_keys_complete": baseline.get(
+            "open_positions_missing_exposure_key_count"
+        )
+        == 0,
+        "candidate_duplicate_open_exposures_zero": candidate.get(
+            "duplicate_open_exposure_count"
+        )
+        == 0,
+        "baseline_duplicate_open_exposures_zero": baseline.get(
+            "duplicate_open_exposure_count"
+        )
+        == 0,
     }
     healthy_venues = set(ready.get("healthy_venues") or [])
     history_coverage = operational_metrics.get("history_coverage") or {}
@@ -205,6 +221,13 @@ def build_audit(
             "snapshots": candidate.get("snapshot_count"),
             "positions": candidate.get("position_count"),
             "open_positions": candidate.get("open_position_count"),
+            "open_exposure_keys": candidate.get("open_exposure_key_count"),
+            "missing_open_exposure_keys": candidate.get(
+                "open_positions_missing_exposure_key_count"
+            ),
+            "duplicate_open_exposures": candidate.get(
+                "duplicate_open_exposure_count"
+            ),
             "funding_pnl": candidate.get("funding_pnl"),
             "fees": candidate.get("fees"),
         },
@@ -213,6 +236,13 @@ def build_audit(
             "snapshots": baseline.get("snapshot_count"),
             "positions": baseline.get("position_count"),
             "open_positions": baseline.get("open_position_count"),
+            "open_exposure_keys": baseline.get("open_exposure_key_count"),
+            "missing_open_exposure_keys": baseline.get(
+                "open_positions_missing_exposure_key_count"
+            ),
+            "duplicate_open_exposures": baseline.get(
+                "duplicate_open_exposure_count"
+            ),
             "funding_pnl": baseline.get("funding_pnl"),
             "fees": baseline.get("fees"),
         },

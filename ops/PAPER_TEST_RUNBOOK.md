@@ -70,7 +70,7 @@ funding payments, closed positions, fees, and the equity curve.
 ## Current VM acceptance gates
 
 The restart-safe, reverse-route-deduplicated v26 canary starts with release
-`funding-pnl-v2-20260813-064`. Its clean evidence boundary and enforced
+`funding-pnl-v2-20260813-065`. Its clean evidence boundary and enforced
 autotrade boundary are both `2026-08-13T23:15:00Z`; use that exact timestamp as
 the `--start` value below. Run the read-only audit inside the deployed
 application container after the relevant deadline:

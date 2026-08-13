@@ -1,4 +1,8 @@
+from types import SimpleNamespace
+
 from scripts.paper_acceptance_audit import build_audit, parse_operational_metrics
+
+from funding_arbitrage.api.routes.analytics import _open_exposure_safety
 
 
 def _operational(**updates: object) -> dict[str, object]:
@@ -44,8 +48,18 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
             "evidence_days": "30",
             "observation": {},
         },
-        {"simulation_version": "candidate", "snapshot_count": 10},
-        {"simulation_version": "baseline", "snapshot_count": 10},
+        {
+            "simulation_version": "candidate",
+            "snapshot_count": 10,
+            "open_positions_missing_exposure_key_count": 0,
+            "duplicate_open_exposure_count": 0,
+        },
+        {
+            "simulation_version": "baseline",
+            "snapshot_count": 10,
+            "open_positions_missing_exposure_key_count": 0,
+            "duplicate_open_exposure_count": 0,
+        },
         {"raw_candidates": 5},
         _operational(),
         "candidate",
@@ -67,6 +81,65 @@ def test_acceptance_audit_rejects_non_paper_execution() -> None:
     assert result["runtime_safe"] is False
     assert result["canary_ready"] is False
     assert result["acceptance_ready"] is False
+
+
+def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
+    candidate = {
+        "simulation_version": "candidate",
+        "open_positions_missing_exposure_key_count": 1,
+        "duplicate_open_exposure_count": 1,
+    }
+    baseline = {
+        "simulation_version": "baseline",
+        "open_positions_missing_exposure_key_count": 0,
+        "duplicate_open_exposure_count": 0,
+    }
+    result = build_audit(
+        {
+            "status": "ok",
+            "run_mode": "paper_test",
+            "market_data_mode": "live_public",
+            "execution_mode": "paper",
+            "paper_autotrade_enabled": True,
+            "paper_autotrade_active": True,
+        },
+        {
+            "status": "ready",
+            "comparison_enabled": True,
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+        },
+        {
+            "canary": {"ready": True},
+            "evidence_ready": True,
+            "accepted": True,
+        },
+        candidate,
+        baseline,
+        {},
+        _operational(),
+        "candidate",
+        "baseline",
+    )
+
+    assert result["runtime_checks"]["candidate_open_exposure_keys_complete"] is False
+    assert result["runtime_checks"]["candidate_duplicate_open_exposures_zero"] is False
+    assert result["runtime_safe"] is False
+    assert result["canary_ready"] is False
+
+
+def test_open_exposure_safety_counts_missing_and_excess_positions() -> None:
+    rows = [
+        SimpleNamespace(payload={"exposure_key": "same-pair"}),
+        SimpleNamespace(payload={"exposure_key": "same-pair"}),
+        SimpleNamespace(payload={"exposure_key": "other-pair"}),
+        SimpleNamespace(payload={}),
+    ]
+
+    assert _open_exposure_safety(rows) == {
+        "open_exposure_key_count": 2,
+        "open_positions_missing_exposure_key_count": 1,
+        "duplicate_open_exposure_count": 1,
+    }
 
 
 def test_acceptance_audit_rejects_wrong_or_inactive_autotrade_boundary() -> None:

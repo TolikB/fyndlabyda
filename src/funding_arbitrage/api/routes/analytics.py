@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
@@ -22,6 +24,28 @@ from funding_arbitrage.database.models import (
 from funding_arbitrage.services.runtime import RuntimeState
 
 router = APIRouter()
+
+
+def _open_exposure_safety(
+    rows: Iterable[PaperPositionRecord],
+) -> dict[str, int]:
+    """Summarize persisted exposure-key coverage and duplicate open positions."""
+
+    exposure_counts: Counter[str] = Counter()
+    missing = 0
+    for row in rows:
+        exposure_key = row.payload.get("exposure_key")
+        if not isinstance(exposure_key, str) or not exposure_key:
+            missing += 1
+            continue
+        exposure_counts[exposure_key] += 1
+    return {
+        "open_exposure_key_count": len(exposure_counts),
+        "open_positions_missing_exposure_key_count": missing,
+        "duplicate_open_exposure_count": sum(
+            count - 1 for count in exposure_counts.values() if count > 1
+        ),
+    }
 
 
 @router.get("/analytics/compare")
@@ -115,12 +139,17 @@ async def paper_statistics(
             PaperPositionRecord.simulation_version == active_version
         )
     )
-    open_positions = await session.scalar(
-        select(func.count(PaperPositionRecord.id)).where(
-            PaperPositionRecord.state == "OPEN",
-            PaperPositionRecord.simulation_version == active_version,
-        )
+    open_position_rows = list(
+        (
+            await session.execute(
+                select(PaperPositionRecord).where(
+                    PaperPositionRecord.state == "OPEN",
+                    PaperPositionRecord.simulation_version == active_version,
+                )
+            )
+        ).scalars()
     )
+    exposure_safety = _open_exposure_safety(open_position_rows)
     funding_pnl = await session.scalar(
         select(func.coalesce(func.sum(PaperFundingPaymentRecord.pnl), 0))
         .join(
@@ -140,7 +169,8 @@ async def paper_statistics(
         "snapshot_count": len(ordered),
         "fill_count": int(fills or 0),
         "position_count": int(positions or 0),
-        "open_position_count": int(open_positions or 0),
+        "open_position_count": len(open_position_rows),
+        **exposure_safety,
         "funding_pnl": str(funding_pnl or 0),
         "fees": str(fees or 0),
         "equity_curve": [
