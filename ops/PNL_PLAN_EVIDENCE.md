@@ -15,7 +15,7 @@ goal remains open until every row is proven, including the last two rows.
 | Reject missing, stale, shallow, or partial paper books | Executor tests in `tests/test_pnl_v2.py`; no fabricated partial close | Proven |
 | Ratio units for spread/slippage | Default `0.0015`/`0.0020` plus config tests | Proven |
 | Enforce `PAPER_AUTOTRADE` and a UTC start boundary | Runtime health fields and runner tests | Proven |
-| Exclude pre-fix data | Invalidated v25 retained separately; clean namespace `v26-oos-*` | Prepared; VM redeploy pending |
+| Exclude pre-fix data | Invalidated v25 retained separately; clean namespace `v26-oos-*` started with zero position rows | Proven running |
 
 ## Signal, funding, borrow, and market data
 
@@ -50,7 +50,7 @@ goal remains open until every row is proven, including the last two rows.
 | Event-driven deterministic replay with costs and attribution | Historical replay tests and portable dataset digest | Proven |
 | Same dataset/config candidate versus baseline, no look-ahead | Dataset `market-db-sha256:0745b20ed8e77c0ba02a7472ab10f6d48264e25405ad9e5d81f83e7c5c0103dc`; deterministic candidate event SHA `53e9e263f2709bb84ef4466a522ed1766e53cdd6235b019b082e9a96742c9534` | Proven |
 | Historical candidate beats baseline acceptance checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; lower drawdown, higher median monthly PnL, 2/3 profitable windows | Historical evidence only |
-| Paper-only shared-feed candidate/baseline on VM | Target release `funding-pnl-v2-20260813-064`, `v26-oos-candidate`/`v26-oos-baseline` | Redeploy pending |
+| Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260813-064`, `v26-oos-candidate`/`v26-oos-baseline`; healthy pre-boundary postflight, restart count 0 | Proven running |
 | Clean 72-hour canary | Boundary `2026-08-13T23:15:00Z`; earliest audit `2026-08-16T23:16:00Z` | Pending time gate |
 | 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-12T23:16:00Z` | Pending time gate |
 
