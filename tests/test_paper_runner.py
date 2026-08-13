@@ -33,6 +33,7 @@ from funding_arbitrage.opportunity.models import (
 from funding_arbitrage.portfolio.portfolio import PaperPortfolio
 from funding_arbitrage.portfolio.position import PaperPosition, PositionState
 from funding_arbitrage.services.paper_runner import (
+    IncompleteMarketSnapshotError,
     PaperTestRunner,
     SharedMarketPaperComparisonRunner,
 )
@@ -82,6 +83,12 @@ class EmptySession:
         return EmptyResult()
 
     async def scalar(self, _statement: object) -> None:
+        return None
+
+    def add(self, _value: object) -> None:
+        return None
+
+    async def commit(self) -> None:
         return None
 
 
@@ -320,6 +327,7 @@ async def test_shared_runner_persists_cycle_failure_for_both_versions(
     )
     shared = SharedMarketPaperComparisonRunner(candidate, baseline)
     captured: list[tuple[tuple[str, ...], str, str]] = []
+    starts: list[tuple[str, ...]] = []
 
     async def noop(*_args: object, **_kwargs: object) -> None:
         return None
@@ -336,15 +344,23 @@ async def test_shared_runner_persists_cycle_failure_for_both_versions(
         captured.append((versions, category, type(error).__name__))
         shared.stop_event.set()
 
+    async def capture_start(
+        _factory: object,
+        versions: tuple[str, ...],
+    ) -> None:
+        starts.append(versions)
+
     monkeypatch.setattr(candidate, "restore", noop)
     monkeypatch.setattr(baseline, "restore", noop)
     monkeypatch.setattr(candidate, "collect_snapshot", fail)
     monkeypatch.setattr(
         paper_runner_module, "_persist_runtime_incident", capture_incident
     )
+    monkeypatch.setattr(paper_runner_module, "_persist_runner_start", capture_start)
 
     await shared.run()
 
+    assert starts == [("candidate-incident-test", "baseline-incident-test")]
     assert captured == [
         (
             ("candidate-incident-test", "baseline-incident-test"),
@@ -352,6 +368,73 @@ async def test_shared_runner_persists_cycle_failure_for_both_versions(
             "RuntimeError",
         )
     ]
+    await shared.close()
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_runner_skips_incomplete_market_without_incident(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_simulation_version="candidate-gap-test",
+        paper_strategy_profile="candidate",
+        paper_comparison_enabled=True,
+        paper_baseline_simulation_version="baseline-gap-test",
+    )
+    baseline_settings = candidate_settings.model_copy(
+        update={
+            "paper_strategy_profile": "baseline",
+            "paper_simulation_version": "baseline-gap-test",
+            "telegram_enabled": False,
+        }
+    )
+    adapters = create_public_adapters(candidate_settings)
+    factory = cast(async_sessionmaker[AsyncSession], EmptySessionFactory())
+    candidate = PaperTestRunner(
+        candidate_settings,
+        RuntimeState(candidate_settings, adapters),
+        factory,
+    )
+    baseline = PaperTestRunner(
+        baseline_settings,
+        RuntimeState(baseline_settings, adapters, emit_metrics=False),
+        factory,
+        collector=candidate.collector,
+    )
+    shared = SharedMarketPaperComparisonRunner(candidate, baseline)
+    incidents: list[object] = []
+    process_calls: list[object] = []
+
+    async def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def gap(*_args: object, **_kwargs: object) -> MarketSnapshot:
+        shared.stop_event.set()
+        raise IncompleteMarketSnapshotError(("bybit",))
+
+    async def capture_process(*args: object, **_kwargs: object) -> None:
+        process_calls.append(args)
+
+    async def capture_incident(*args: object, **_kwargs: object) -> None:
+        incidents.append(args)
+
+    monkeypatch.setattr(candidate, "restore", noop)
+    monkeypatch.setattr(baseline, "restore", noop)
+    monkeypatch.setattr(candidate, "collect_snapshot", gap)
+    monkeypatch.setattr(candidate, "process_snapshot", capture_process)
+    monkeypatch.setattr(baseline, "process_snapshot", capture_process)
+    monkeypatch.setattr(
+        paper_runner_module, "_persist_runtime_incident", capture_incident
+    )
+
+    await shared.run()
+
+    assert process_calls == []
+    assert incidents == []
     await shared.close()
     for adapter in adapters.values():
         await adapter.close()

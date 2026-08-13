@@ -69,19 +69,19 @@ funding payments, closed positions, fees, and the equity curve.
 ## Current VM acceptance gates
 
 The restart-safe, pre-market-filtered v21 canary starts with release
-`funding-pnl-v2-20260813-055`. Its clean evidence boundary is
-`2026-08-13T18:25:00Z`; use that exact timestamp as
+`funding-pnl-v2-20260813-056`. Its clean evidence boundary is
+`2026-08-13T18:45:00Z`; use that exact timestamp as
 `<V21_DURABLE_START_UTC>` below. Run the read-only audit from the project
 directory after the relevant deadline:
 
 ```bash
-# Earliest useful run: 2026-08-16T18:25:00Z.
+# Earliest useful run: 2026-08-16T18:45:00Z.
 python3 scripts/paper_acceptance_audit.py \
   --start <V21_DURABLE_START_UTC> \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 2026-09-12T18:25:00Z.
+# Earliest useful run: 2026-09-12T18:45:00Z.
 python3 scripts/paper_acceptance_audit.py \
   --start <V21_DURABLE_START_UTC> \
   --gate acceptance \
@@ -102,7 +102,11 @@ Binance, Bybit, Gate, Hyperliquid, and OKX. Recent normalized ticker and
 orderbook messages must also be observed from each venue's WebSocket stream;
 REST fallback alone cannot satisfy the gate. Cycle failures are persisted per
 simulation version in PostgreSQL and any incident inside the requested window
-invalidates both gates after a container restart. The 30-day gate additionally
+invalidates both gates after a container restart. Every process start is also
+persisted, so an unplanned restart inside the requested window invalidates the
+window even when no exception could be recorded first. Short public-data gaps
+are excluded from both ledgers and remain visible as snapshot gaps and skip
+metrics. The 30-day gate additionally
 requires candidate net PnL to exceed baseline by at least 10%, higher median
 monthly PnL, no worse max drawdown, and profitable candidate PnL in at least two
 of three rolling windows.

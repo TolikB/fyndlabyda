@@ -280,7 +280,7 @@ class PortfolioSnapshotRecord(Base):
 
 
 class PaperRuntimeIncidentRecord(Base):
-    """Restart-safe evidence that a paper runner cycle failed."""
+    """Restart-safe evidence of a paper runner failure or process epoch."""
 
     __tablename__ = "paper_runtime_incidents"
     __table_args__ = (

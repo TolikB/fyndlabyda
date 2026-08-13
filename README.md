@@ -120,7 +120,8 @@ GET  /backtests/compare-market/jobs/{job_id}
 exist and the candidate beats baseline net PnL by 10%, improves median monthly
 PnL, does not increase drawdown, and is profitable in two of three windows.
 Paper-cycle failures are stored as redacted, version-scoped PostgreSQL
-incidents, so a container restart cannot reset or hide a failed canary window.
+incidents. Runner process epochs are stored in the same ledger, so a container
+restart cannot reset or hide a failed canary window.
 
 Build an idempotent 30–90 day research dataset from public hourly candles and
 actual settled funding events, then compare both profiles without look-ahead:

@@ -43,6 +43,7 @@ class MarketSnapshot:
     captured_at: datetime
     funding_history: dict[tuple[str, str], list[FundingHistoryPoint]] | None = None
     stale_after_seconds: int = 30
+    incomplete_venues: tuple[str, ...] = ()
     _ticker_index: dict[tuple[str, str, InstrumentType], Ticker] = field(
         init=False, repr=False, compare=False
     )
@@ -100,6 +101,7 @@ class _VenueCollection:
     funding: list[FundingSnapshot]
     orderbooks: dict[tuple[str, str, InstrumentType], OrderBook]
     funding_history: dict[tuple[str, str], list[FundingHistoryPoint]]
+    operationally_complete: bool
 
 
 class MarketDataCollector:
@@ -220,6 +222,18 @@ class MarketDataCollector:
             for result in collections
             for key, points in result.funding_history.items()
         }
+        collection_by_venue = {
+            adapter.name: result
+            for adapter, result in zip(active_adapters, collections, strict=True)
+        }
+        incomplete_venues = tuple(
+            sorted(
+                adapter.name
+                for adapter in self.adapters
+                if not collection_by_venue.get(adapter.name)
+                or not collection_by_venue[adapter.name].operationally_complete
+            )
+        )
         self._funding_history_cache.update(funding_history)
         return MarketSnapshot(
             instruments=instruments,
@@ -229,6 +243,7 @@ class MarketDataCollector:
             captured_at=captured_at,
             funding_history=dict(self._funding_history_cache),
             stale_after_seconds=self.stale_after_seconds,
+            incomplete_venues=incomplete_venues,
         )
 
     async def _refresh_funding_aged_during_collection(
@@ -258,6 +273,15 @@ class MarketDataCollector:
         for index, value in zip(stale_indexes, refreshed, strict=True):
             adapter = adapters[index]
             if not isinstance(value, list):
+                current = collections[index]
+                collections[index] = _VenueCollection(
+                    current.instruments,
+                    current.tickers,
+                    current.funding,
+                    current.orderbooks,
+                    current.funding_history,
+                    False,
+                )
                 logger.warning(
                     "stale_funding_refresh_failed",
                     extra={
@@ -282,6 +306,7 @@ class MarketDataCollector:
                 normalized,
                 current.orderbooks,
                 current.funding_history,
+                current.operationally_complete,
             )
             self._funding_cache[adapter.name] = value
             self._last_funding_fetch[adapter.name] = refreshed_at
@@ -299,6 +324,7 @@ class MarketDataCollector:
         breaker = self.health[adapter.name]
         orderbooks: dict[tuple[str, str, InstrumentType], OrderBook] = {}
         funding_history: dict[tuple[str, str], list[FundingHistoryPoint]] = {}
+        history_complete = True
         try:
             venue_instruments = self._instrument_cache.get(adapter.name)
             if venue_instruments is None:
@@ -323,17 +349,18 @@ class MarketDataCollector:
             )
             if refresh_tickers and refresh_funding:
                 venue_tickers, all_venue_funding = await asyncio.gather(
-                    adapter.get_tickers(), adapter.get_funding_rates()
+                    self._load_tickers_with_stream_fallback(
+                        adapter, cached_tickers, now
+                    ),
+                    adapter.get_funding_rates(),
                 )
-                self._rest_ticker_cache[adapter.name] = venue_tickers
                 self._funding_cache[adapter.name] = all_venue_funding
-                self._last_rest_ticker_fetch[adapter.name] = now
                 self._last_funding_fetch[adapter.name] = now
             elif refresh_tickers:
-                venue_tickers = await adapter.get_tickers()
+                venue_tickers = await self._load_tickers_with_stream_fallback(
+                    adapter, cached_tickers, now
+                )
                 all_venue_funding = cached_funding or []
-                self._rest_ticker_cache[adapter.name] = venue_tickers
-                self._last_rest_ticker_fetch[adapter.name] = now
             elif refresh_funding:
                 venue_tickers = cached_tickers or []
                 all_venue_funding = await adapter.get_funding_rates()
@@ -457,14 +484,24 @@ class MarketDataCollector:
                 funding_history_coverage_ratio.labels(adapter.name).set(
                     len(covered) / len(selected) if selected else 0
                 )
+                history_complete = len(covered) == len(selected)
+            operationally_complete = (
+                bool(valid_tickers)
+                and bool(venue_funding)
+                and len(orderbooks) == len(book_requests)
+                and history_complete
+            )
             breaker.record_success()
-            market_data_age_seconds.labels(adapter.name).set(0)
+            market_data_age_seconds.labels(adapter.name).set(
+                0 if operationally_complete else -1
+            )
             return _VenueCollection(
                 venue_instruments,
                 valid_tickers,
                 venue_funding,
                 orderbooks,
                 funding_history,
+                operationally_complete,
             )
         except Exception:
             breaker.record_failure()
@@ -476,7 +513,42 @@ class MarketDataCollector:
                 "market_data_venue_collection_failed",
                 extra={"exchange": adapter.name, "event": "market_data_collection"},
             )
-            return _VenueCollection([], [], [], {}, {})
+            return _VenueCollection([], [], [], {}, {}, False)
+
+    async def _load_tickers_with_stream_fallback(
+        self,
+        adapter: ExchangeAdapter,
+        cached_tickers: list[Ticker] | None,
+        now: datetime,
+    ) -> list[Ticker]:
+        """Keep fresh WS data primary when periodic REST validation is unavailable."""
+
+        try:
+            tickers = await adapter.get_tickers()
+        except Exception:
+            has_fresh_stream = any(
+                key[0] == adapter.name
+                and (now - ticker.timestamp).total_seconds()
+                <= self.stale_after_seconds
+                for key, ticker in self._stream_ticker_cache.items()
+            )
+            if not self.enable_streams or not has_fresh_stream:
+                raise
+            market_data_dropped_total.labels(
+                adapter.name, "rest_ticker_validation_error"
+            ).inc()
+            logger.warning(
+                "rest_ticker_validation_failed_using_stream",
+                extra={
+                    "exchange": adapter.name,
+                    "event": "market_data_recovery",
+                },
+                exc_info=True,
+            )
+            return cached_tickers or []
+        self._rest_ticker_cache[adapter.name] = tickers
+        self._last_rest_ticker_fetch[adapter.name] = now
+        return tickers
 
     def _ensure_ticker_stream(
         self, adapter: ExchangeAdapter, tickers: list[Ticker]

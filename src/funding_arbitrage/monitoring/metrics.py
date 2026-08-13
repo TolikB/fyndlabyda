@@ -65,6 +65,11 @@ paper_runner_cycles_total = Counter(
 paper_runner_errors_total = Counter(
     "funding_paper_runner_errors_total", "Paper-test runner cycle errors"
 )
+paper_market_cycles_skipped_total = Counter(
+    "funding_paper_market_cycles_skipped_total",
+    "Paper market cycles skipped before persistence",
+    ["reason"],
+)
 paper_runner_cycle_duration_seconds = Histogram(
     "funding_paper_runner_cycle_duration_seconds", "Paper runner cycle duration"
 )

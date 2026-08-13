@@ -57,6 +57,13 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
             if "exchange" in item["labels"]
         }
 
+    def reasons(name: str) -> dict[str, float]:
+        return {
+            str(item["labels"]["reason"]): float(item["value"])
+            for item in samples.get(name, [])
+            if "reason" in item["labels"]
+        }
+
     observed_at = time.time() if now is None else now
 
     def stream_ages(name: str) -> dict[str, dict[str, float | None]]:
@@ -77,6 +84,9 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
     return {
         "paper_runner_cycles": scalar("funding_paper_runner_cycles_total"),
         "paper_runner_errors": scalar("funding_paper_runner_errors_total"),
+        "market_cycles_skipped": reasons(
+            "funding_paper_market_cycles_skipped_total"
+        ),
         "last_cycle_age_seconds": (
             observed_at - last_cycle if last_cycle is not None else None
         ),

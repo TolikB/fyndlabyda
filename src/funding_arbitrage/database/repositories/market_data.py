@@ -326,7 +326,7 @@ async def save_paper_runtime_incident(
     error_type: str,
     occurred_at: datetime,
 ) -> None:
-    """Persist one redacted cycle failure for every affected paper ledger."""
+    """Persist one redacted runtime event for every affected paper ledger."""
 
     for simulation_version in dict.fromkeys(simulation_versions):
         session.add(

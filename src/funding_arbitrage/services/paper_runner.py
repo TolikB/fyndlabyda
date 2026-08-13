@@ -39,6 +39,7 @@ from funding_arbitrage.execution.paper import PaperTradingExecutor
 from funding_arbitrage.market_data.collector import MarketDataCollector, MarketSnapshot
 from funding_arbitrage.market_data.orderbook import OrderSide, calculate_execution_price
 from funding_arbitrage.monitoring.metrics import (
+    paper_market_cycles_skipped_total,
     paper_runner_cycle_duration_seconds,
     paper_runner_cycles_total,
     paper_runner_errors_total,
@@ -60,6 +61,14 @@ from funding_arbitrage.services.daily_report import DailyReportService
 from funding_arbitrage.services.runtime import RuntimeState
 
 logger = logging.getLogger(__name__)
+
+
+class IncompleteMarketSnapshotError(Exception):
+    """A recoverable public-data gap that must not enter the PnL dataset."""
+
+    def __init__(self, venues: tuple[str, ...]) -> None:
+        self.venues = venues
+        super().__init__(f"incomplete venues: {','.join(venues)}")
 
 
 async def _persist_runtime_incident(
@@ -85,6 +94,22 @@ async def _persist_runtime_incident(
         logger.exception(
             "paper_runtime_incident_persist_failed",
             extra={"event": "paper_runtime_incident", "category": category},
+        )
+
+
+async def _persist_runner_start(
+    session_factory: async_sessionmaker[AsyncSession],
+    simulation_versions: tuple[str, ...],
+) -> None:
+    """Make every process epoch durable before any paper cycle can complete."""
+
+    async with session_factory() as session:
+        await save_paper_runtime_incident(
+            session,
+            simulation_versions,
+            "process_start",
+            "ProcessStart",
+            datetime.now(UTC),
         )
 
 
@@ -172,6 +197,10 @@ class PaperTestRunner:
 
     async def run(self) -> None:
         await self.restore(restore_history=True)
+        await _persist_runner_start(
+            self.session_factory,
+            (self.settings.paper_simulation_version,),
+        )
         while not self.stop_event.is_set():
             started = time.monotonic()
             try:
@@ -181,6 +210,15 @@ class PaperTestRunner:
                 paper_runner_last_cycle_timestamp.set(datetime.now(UTC).timestamp())
             except asyncio.CancelledError:
                 raise
+            except IncompleteMarketSnapshotError as error:
+                paper_market_cycles_skipped_total.labels("incomplete_venue").inc()
+                logger.warning(
+                    "paper_market_cycle_skipped",
+                    extra={
+                        "event": "paper_market_gap",
+                        "exchanges": list(error.venues),
+                    },
+                )
             except Exception as error:
                 paper_runner_errors_total.inc()
                 logger.exception("paper_test_cycle_failed")
@@ -254,6 +292,8 @@ class PaperTestRunner:
         paper_runner_stage_duration_seconds.labels("collect").observe(
             time.monotonic() - stage_started
         )
+        if snapshot.incomplete_venues:
+            raise IncompleteMarketSnapshotError(snapshot.incomplete_venues)
         if periodic_history_refresh:
             self._last_history_refresh = snapshot.captured_at
         if refresh_history:
@@ -962,6 +1002,13 @@ class SharedMarketPaperComparisonRunner:
     async def run(self) -> None:
         await self.candidate.restore(restore_history=True)
         await self.baseline.restore(restore_history=False)
+        await _persist_runner_start(
+            self.candidate.session_factory,
+            (
+                self.candidate.settings.paper_simulation_version,
+                self.baseline.settings.paper_simulation_version,
+            ),
+        )
         while not self.stop_event.is_set():
             started = time.monotonic()
             try:
@@ -975,6 +1022,15 @@ class SharedMarketPaperComparisonRunner:
                 paper_runner_last_cycle_timestamp.set(datetime.now(UTC).timestamp())
             except asyncio.CancelledError:
                 raise
+            except IncompleteMarketSnapshotError as error:
+                paper_market_cycles_skipped_total.labels("incomplete_venue").inc()
+                logger.warning(
+                    "paper_comparison_market_cycle_skipped",
+                    extra={
+                        "event": "paper_market_gap",
+                        "exchanges": list(error.venues),
+                    },
+                )
             except Exception as error:
                 paper_runner_errors_total.inc()
                 logger.exception("paper_comparison_cycle_failed")

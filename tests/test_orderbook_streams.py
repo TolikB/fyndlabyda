@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 
+from funding_arbitrage.exchanges.base.exceptions import NetworkError
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
     FundingSnapshot,
@@ -224,6 +225,76 @@ async def test_collector_records_ticker_and_orderbook_stream_heartbeats() -> Non
     assert exchange_stream_last_message_timestamp.labels(
         "bybit", "orderbook"
     )._value.get() == 0
+
+
+@pytest.mark.asyncio
+async def test_collector_keeps_fresh_websocket_tickers_when_rest_validation_fails() -> None:
+    class RestFailingMock(MockExchangeAdapter):
+        def __init__(self) -> None:
+            super().__init__("bybit", sleep=0)
+            self.fail_rest = False
+
+        async def get_tickers(self) -> list[Ticker]:
+            if self.fail_rest:
+                raise NetworkError("synthetic REST outage")
+            return await super().get_tickers()
+
+        def stream_tickers(
+            self, symbols: list[tuple[str, InstrumentType]]
+        ) -> AsyncIterator[Ticker]:
+            return self._reliable_stream(symbols)
+
+        async def _reliable_stream(
+            self, symbols: list[tuple[str, InstrumentType]]
+        ) -> AsyncIterator[Ticker]:
+            requested = set(symbols)
+            for ticker in await MockExchangeAdapter.get_tickers(self):
+                if (ticker.symbol, ticker.instrument_type) in requested:
+                    yield ticker
+            await asyncio.Event().wait()
+
+    adapter = RestFailingMock()
+    collector = MarketDataCollector(
+        [adapter],
+        enable_streams=True,
+        stale_after_seconds=300,
+        rest_validation_seconds=60,
+    )
+    first = await collector.collect_once()
+    for _ in range(100):
+        if collector._stream_ticker_cache:
+            break
+        await asyncio.sleep(0)
+    assert collector._stream_ticker_cache
+
+    adapter.fail_rest = True
+    collector._last_rest_ticker_fetch[adapter.name] = datetime.now(UTC) - timedelta(
+        seconds=61
+    )
+    second = await collector.collect_once()
+    await collector.close()
+
+    assert first.tickers
+    assert second.tickers
+    assert {ticker.exchange for ticker in second.tickers} == {"bybit"}
+    assert second.incomplete_venues == ()
+
+
+@pytest.mark.asyncio
+async def test_collector_does_not_mask_rest_failure_without_fresh_stream() -> None:
+    class InitialFailureMock(MockExchangeAdapter):
+        async def get_tickers(self) -> list[Ticker]:
+            raise NetworkError("synthetic initial outage")
+
+    adapter = InitialFailureMock("bybit", sleep=0)
+    collector = MarketDataCollector([adapter], enable_streams=True)
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert snapshot.tickers == []
+    assert snapshot.funding == []
+    assert snapshot.incomplete_venues == ("bybit",)
 
 
 @pytest.mark.asyncio
