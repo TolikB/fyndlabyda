@@ -1,11 +1,10 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-RUN python -c "import subprocess, sys, tomllib; config = tomllib.load(open('pyproject.toml', 'rb')); subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', *config['project']['dependencies']])"
-RUN pip install --no-cache-dir "setuptools>=69"
+COPY pyproject.toml README.md requirements.lock ./
+RUN pip install --no-cache-dir --requirement requirements.lock
 
 COPY src ./src
 COPY config ./config

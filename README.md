@@ -62,6 +62,9 @@ Grafana support. The default lightweight profile starts only app, PostgreSQL,
 and Redis; add `--profile observability` when the host has enough resources for
 Prometheus and Grafana. It never sends exchange orders. Use
 `.env.paper-test.example` only for the fully offline deterministic mock profile.
+The Docker base image is digest-pinned and `requirements.lock` fixes the exact
+tested runtime dependency graph so a rebuild cannot silently change the
+candidate or baseline environment.
 
 The live-data paper profile persists full market snapshots every five minutes
 to keep PostgreSQL growth bounded. Diagnose current public-market candidates
