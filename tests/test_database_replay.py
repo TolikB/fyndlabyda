@@ -214,6 +214,35 @@ async def test_database_replay_detects_position_carried_across_boundary() -> Non
 
 
 @pytest.mark.asyncio
+async def test_database_replay_includes_boundary_to_first_snapshot_gap() -> None:
+    start = datetime(2026, 8, 11, tzinfo=UTC)
+    first_snapshot = start + timedelta(seconds=301)
+    snapshots = [
+        PortfolioSnapshotRecord(
+            timestamp=first_snapshot,
+            simulation_version="candidate",
+            equity=Decimal("1000"),
+            cash=Decimal("1000"),
+            locked_capital=Decimal("0"),
+            total_pnl=Decimal("0"),
+            funding_pnl=Decimal("0"),
+            fees=Decimal("0"),
+            balances={},
+        )
+    ]
+    session = _ReplaySession(
+        [snapshots, []],
+        scalar_values=[None, 0, 0],
+    )
+
+    dataset = await DatabasePaperReplay().load(  # type: ignore[arg-type]
+        session, "candidate", start
+    )
+
+    assert dataset.max_snapshot_gap_seconds == Decimal("301.0")
+
+
+@pytest.mark.asyncio
 async def test_database_replay_excludes_close_data_after_requested_cutoff() -> None:
     start = datetime(2026, 8, 11, tzinfo=UTC)
     end = start + timedelta(hours=1)

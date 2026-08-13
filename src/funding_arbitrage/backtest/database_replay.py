@@ -107,15 +107,27 @@ class DatabasePaperReplay:
             )
         snapshots = list((await session.execute(snapshot_statement)).scalars())
         snapshot_timestamps = tuple(row.timestamp for row in snapshots)
-        max_snapshot_gap = max(
-            (
-                Decimal(str((current - previous).total_seconds()))
-                for previous, current in zip(
-                    snapshot_timestamps, snapshot_timestamps[1:], strict=False
+        snapshot_gaps = [
+            Decimal(str((current - previous).total_seconds()))
+            for previous, current in zip(
+                snapshot_timestamps, snapshot_timestamps[1:], strict=False
+            )
+        ]
+        if start is not None and snapshot_timestamps:
+            snapshot_gaps.append(
+                max(
+                    Decimal("0"),
+                    Decimal(str((snapshot_timestamps[0] - start).total_seconds())),
                 )
-            ),
-            default=Decimal("0"),
-        )
+            )
+        if end is not None and snapshot_timestamps:
+            snapshot_gaps.append(
+                max(
+                    Decimal("0"),
+                    Decimal(str((end - snapshot_timestamps[-1]).total_seconds())),
+                )
+            )
+        max_snapshot_gap = max(snapshot_gaps, default=Decimal("0"))
         max_invariant_error = max(
             (
                 abs(

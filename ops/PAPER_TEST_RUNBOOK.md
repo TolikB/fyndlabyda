@@ -70,19 +70,19 @@ funding payments, closed positions, fees, and the equity curve.
 ## Current VM acceptance gates
 
 The restart-safe, pre-market-filtered v23 canary starts with release
-`funding-pnl-v2-20260813-060`. Its clean evidence boundary and enforced
-autotrade boundary are both `2026-08-13T20:00:00Z`; use that exact timestamp as
+`funding-pnl-v2-20260813-061`. Its clean evidence boundary and enforced
+autotrade boundary are both `2026-08-13T20:30:00Z`; use that exact timestamp as
 `<V23_DURABLE_START_UTC>` below. Run the read-only audit from the project
 directory after the relevant deadline:
 
 ```bash
-# Earliest useful run: 2026-08-16T20:00:00Z.
+# Earliest useful run: 2026-08-16T20:31:00Z.
 python3 scripts/paper_acceptance_audit.py \
   --start <V23_DURABLE_START_UTC> \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 2026-09-12T20:00:00Z.
+# Earliest useful run: 2026-09-12T20:31:00Z.
 python3 scripts/paper_acceptance_audit.py \
   --start <V23_DURABLE_START_UTC> \
   --gate acceptance \
