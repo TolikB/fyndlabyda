@@ -96,10 +96,12 @@ failure exits with another non-zero code and should be investigated.
 
 Both gates require a paper-only runtime, distinct candidate and baseline
 simulation versions, exact shared snapshot timestamps, no accounting invariant
-errors, and acceptable snapshot gaps. The 30-day gate additionally requires
-candidate net PnL to exceed baseline by at least 10%, higher median monthly PnL,
-no worse max drawdown, and profitable candidate PnL in at least two of three
-rolling windows.
+errors, acceptable snapshot gaps, zero current runner errors, a fresh latest
+cycle, and complete funding-history/orderbook coverage with zero stale books on
+Binance, Bybit, Gate, Hyperliquid, and OKX. The 30-day gate additionally
+requires candidate net PnL to exceed baseline by at least 10%, higher median
+monthly PnL, no worse max drawdown, and profitable candidate PnL in at least two
+of three rolling windows.
 
 ## Telegram daily report
 

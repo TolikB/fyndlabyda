@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import urlopen
+
+from prometheus_client.parser import text_string_to_metric_families
+
+EXPECTED_VENUES = frozenset({"binance", "bybit", "gate", "hyperliquid", "okx"})
 
 
 def _fetch_json(
@@ -25,6 +30,49 @@ def _fetch_json(
     return payload
 
 
+def _fetch_text(base_url: str, path: str, timeout: float = 30) -> str:
+    url = f"{base_url.rstrip('/')}{path}"
+    with urlopen(url, timeout=timeout) as response:  # noqa: S310 - operator-selected URL
+        return response.read().decode("utf-8")
+
+
+def parse_operational_metrics(payload: str, now: float | None = None) -> dict[str, Any]:
+    """Extract the low-cardinality safety metrics used by the canary gate."""
+
+    samples: dict[str, list[dict[str, Any]]] = {}
+    for family in text_string_to_metric_families(payload):
+        for sample in family.samples:
+            samples.setdefault(sample.name, []).append(
+                {"labels": dict(sample.labels), "value": float(sample.value)}
+            )
+
+    def scalar(name: str) -> float | None:
+        values = samples.get(name, [])
+        return values[0]["value"] if len(values) == 1 else None
+
+    def venues(name: str) -> dict[str, float]:
+        return {
+            str(item["labels"]["exchange"]): float(item["value"])
+            for item in samples.get(name, [])
+            if "exchange" in item["labels"]
+        }
+
+    last_cycle = scalar("funding_paper_runner_last_cycle_timestamp")
+    observed_at = time.time() if now is None else now
+    return {
+        "paper_runner_cycles": scalar("funding_paper_runner_cycles_total"),
+        "paper_runner_errors": scalar("funding_paper_runner_errors_total"),
+        "last_cycle_age_seconds": (
+            observed_at - last_cycle if last_cycle is not None else None
+        ),
+        "history_coverage": venues("funding_history_coverage_ratio"),
+        "orderbook_coverage": venues("funding_orderbook_coverage_ratio"),
+        "stale_or_missing_orderbooks": venues(
+            "funding_stale_or_missing_orderbooks"
+        ),
+    }
+
+
 def build_audit(
     health: dict[str, Any],
     ready: dict[str, Any],
@@ -32,6 +80,7 @@ def build_audit(
     candidate: dict[str, Any],
     baseline: dict[str, Any],
     funnel: dict[str, Any],
+    operational_metrics: dict[str, Any],
     candidate_version: str,
     baseline_version: str,
 ) -> dict[str, Any]:
@@ -45,19 +94,45 @@ def build_audit(
         "candidate_version": candidate.get("simulation_version") == candidate_version,
         "baseline_version": baseline.get("simulation_version") == baseline_version,
     }
+    healthy_venues = set(ready.get("healthy_venues") or [])
+    history_coverage = operational_metrics.get("history_coverage") or {}
+    orderbook_coverage = operational_metrics.get("orderbook_coverage") or {}
+    stale_books = operational_metrics.get("stale_or_missing_orderbooks") or {}
+    last_cycle_age = operational_metrics.get("last_cycle_age_seconds")
+    operational_checks = {
+        "cycles_observed": (operational_metrics.get("paper_runner_cycles") or 0) > 0,
+        "cycle_errors_zero": operational_metrics.get("paper_runner_errors") == 0,
+        "last_cycle_within_5_minutes": (
+            isinstance(last_cycle_age, (int, float))
+            and -30 <= last_cycle_age <= 300
+        ),
+        "all_venues_healthy": EXPECTED_VENUES.issubset(healthy_venues),
+        "funding_history_coverage_complete": all(
+            history_coverage.get(venue, 0) >= 1 for venue in EXPECTED_VENUES
+        ),
+        "orderbook_coverage_complete": all(
+            orderbook_coverage.get(venue, 0) >= 1 for venue in EXPECTED_VENUES
+        ),
+        "stale_or_missing_orderbooks_zero": all(
+            stale_books.get(venue) == 0 for venue in EXPECTED_VENUES
+        ),
+    }
+    runtime_safe = all(runtime_checks.values()) and all(operational_checks.values())
     comparison_canary = comparison.get("canary") or {}
     comparison_checks = comparison.get("checks") or {}
-    canary_ready = all(runtime_checks.values()) and comparison_canary.get("ready") is True
+    canary_ready = runtime_safe and comparison_canary.get("ready") is True
     acceptance_ready = (
-        all(runtime_checks.values())
+        runtime_safe
         and comparison.get("evidence_ready") is True
         and comparison.get("accepted") is True
     )
     return {
-        "runtime_safe": all(runtime_checks.values()),
+        "runtime_safe": runtime_safe,
         "canary_ready": canary_ready,
         "acceptance_ready": acceptance_ready,
         "runtime_checks": runtime_checks,
+        "operational_checks": operational_checks,
+        "operational_metrics": operational_metrics,
         "canary": comparison_canary,
         "acceptance_checks": comparison_checks,
         "observation": comparison.get("observation"),
@@ -122,6 +197,9 @@ def main() -> int:
         args.timeout,
     )
     funnel = _fetch_json(args.base_url, "/opportunities/funnel", timeout=args.timeout)
+    operational_metrics = parse_operational_metrics(
+        _fetch_text(args.base_url, "/metrics/", timeout=args.timeout)
+    )
     audit = build_audit(
         health,
         ready,
@@ -129,6 +207,7 @@ def main() -> int:
         candidate,
         baseline,
         funnel,
+        operational_metrics,
         args.candidate_version,
         args.baseline_version,
     )
