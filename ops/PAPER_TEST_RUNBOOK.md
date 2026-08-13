@@ -68,22 +68,22 @@ funding payments, closed positions, fees, and the equity curve.
 
 ## Current VM acceptance gates
 
-The pre-market-filtered, schedule-corrected v21 canary started with release
-`funding-pnl-v2-20260813-051`. Its first shared snapshot is
-`2026-08-13T17:34:18.497070Z`; use that exact timestamp as `<V21_START_UTC>`
-below. Run the read-only audit from the project directory after the relevant
-deadline:
+The restart-safe, pre-market-filtered v21 canary starts with release
+`funding-pnl-v2-20260813-055`. Its clean evidence boundary is
+`2026-08-13T18:25:00Z`; use that exact timestamp as
+`<V21_DURABLE_START_UTC>` below. Run the read-only audit from the project
+directory after the relevant deadline:
 
 ```bash
-# Earliest useful run: 2026-08-16T17:34:18.497070Z.
+# Earliest useful run: 2026-08-16T18:25:00Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V21_START_UTC> \
+  --start <V21_DURABLE_START_UTC> \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 2026-09-12T17:34:18.497070Z.
+# Earliest useful run: 2026-09-12T18:25:00Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V21_START_UTC> \
+  --start <V21_DURABLE_START_UTC> \
   --gate acceptance \
   --timeout 45
 ```
