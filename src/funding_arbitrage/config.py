@@ -107,7 +107,7 @@ class Settings(BaseSettings):
         default=False, alias="PAPER_AUTO_INIT_DATABASE"
     )
     paper_simulation_version: str = Field(
-        default="v17-oos-candidate", alias="PAPER_SIMULATION_VERSION"
+        default="v18-oos-candidate", alias="PAPER_SIMULATION_VERSION"
     )
     paper_strategy_profile: Literal["baseline", "candidate"] = Field(
         default="candidate", alias="PAPER_STRATEGY_PROFILE"
@@ -116,7 +116,7 @@ class Settings(BaseSettings):
         default=False, alias="PAPER_COMPARISON_ENABLED"
     )
     paper_baseline_simulation_version: str = Field(
-        default="v17-oos-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
+        default="v18-oos-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
     )
     paper_exit_edge_miss_cycles: int = Field(
         default=2, alias="PAPER_EXIT_EDGE_MISS_CYCLES"

@@ -38,8 +38,8 @@ shared-feed comparison in `.env`:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
-PAPER_SIMULATION_VERSION=v17-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v17-oos-baseline
+PAPER_SIMULATION_VERSION=v18-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v18-oos-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -57,7 +57,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v17-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v18-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -68,21 +68,21 @@ funding payments, closed positions, fees, and the equity curve.
 
 ## Current VM acceptance gates
 
-The Gate/Binance schedule-corrected v17 canary starts when release
-`funding-pnl-v2-20260813-046` is activated. Record the first shared v17 snapshot
-timestamp and use it as `<V17_START_UTC>` below. Run the read-only audit from
+The Gate/Binance/Bybit schedule-corrected v18 canary starts when release
+`funding-pnl-v2-20260813-047` is activated. Record the first shared v18 snapshot
+timestamp and use it as `<V18_START_UTC>` below. Run the read-only audit from
 the project directory after the relevant deadline:
 
 ```bash
-# Earliest useful run: 72 hours after <V17_START_UTC>.
+# Earliest useful run: 72 hours after <V18_START_UTC>.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V17_START_UTC> \
+  --start <V18_START_UTC> \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 30 days after <V17_START_UTC>.
+# Earliest useful run: 30 days after <V18_START_UTC>.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V17_START_UTC> \
+  --start <V18_START_UTC> \
   --gate acceptance \
   --timeout 45
 ```

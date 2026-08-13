@@ -120,6 +120,9 @@ class BybitPublicAdapter(ExchangeAdapter):
         result = payload.get("result")
         if not isinstance(result, dict):
             raise InvalidResponseError("Bybit result is not an object")
+        response_time = payload.get("time")
+        if response_time not in (None, ""):
+            result = {**result, "_response_time": response_time}
         return result
 
     async def get_instruments(self) -> list[NormalizedInstrument]:
@@ -204,7 +207,10 @@ class BybitPublicAdapter(ExchangeAdapter):
             rows = result.get("list")
             if not isinstance(rows, list):
                 raise InvalidResponseError("Bybit ticker list is missing")
-            tickers.extend(self._parse_ticker(row, category, result.get("time")) for row in rows)
+            tickers.extend(
+                self._parse_ticker(row, category, result.get("_response_time"))
+                for row in rows
+            )
         return tickers
 
     def _parse_ticker(self, row: object, category: str, response_time: object) -> Ticker:
@@ -231,7 +237,12 @@ class BybitPublicAdapter(ExchangeAdapter):
         rows = result.get("list")
         if not isinstance(rows, list):
             raise InvalidResponseError("Bybit funding ticker list is missing")
-        timestamp = _utc_from_ms(result.get("time", "0"))
+        response_time = result.get("_response_time")
+        timestamp = (
+            _utc_from_ms(response_time, "response_time")
+            if response_time not in (None, "")
+            else datetime.now(UTC)
+        )
         snapshots: list[FundingSnapshot] = []
         for row in rows:
             if not isinstance(row, dict) or row.get("fundingRate") in (None, ""):

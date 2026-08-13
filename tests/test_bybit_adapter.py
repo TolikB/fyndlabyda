@@ -113,7 +113,9 @@ async def test_bybit_rest_payloads_are_normalized() -> None:
         InstrumentType.PERPETUAL,
     }
     assert tickers[0].last_price == Decimal("100")
+    assert tickers[0].timestamp == datetime(2025, 1, 1, tzinfo=UTC)
     assert funding[0].funding_rate_daily == Decimal("0.003")
+    assert funding[0].timestamp == datetime(2025, 1, 1, tzinfo=UTC)
     assert history[0].funding_timestamp.year == 2025
     assert orderbook.bids[0].price < orderbook.asks[0].price
 
