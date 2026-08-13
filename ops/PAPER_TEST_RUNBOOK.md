@@ -98,7 +98,9 @@ Both gates require a paper-only runtime, distinct candidate and baseline
 simulation versions, exact shared snapshot timestamps, no accounting invariant
 errors, acceptable snapshot gaps, zero current runner errors, a fresh latest
 cycle, and complete funding-history/orderbook coverage with zero stale books on
-Binance, Bybit, Gate, Hyperliquid, and OKX. The 30-day gate additionally
+Binance, Bybit, Gate, Hyperliquid, and OKX. Recent normalized ticker and
+orderbook messages must also be observed from each venue's WebSocket stream;
+REST fallback alone cannot satisfy the gate. The 30-day gate additionally
 requires candidate net PnL to exceed baseline by at least 10%, higher median
 monthly PnL, no worse max drawdown, and profitable candidate PnL in at least two
 of three rolling windows.

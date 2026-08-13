@@ -12,6 +12,11 @@ websocket_connections = Gauge(
 websocket_reconnects_total = Counter(
     "funding_websocket_reconnects_total", "Exchange WebSocket reconnect attempts", ["exchange"]
 )
+exchange_stream_last_message_timestamp = Gauge(
+    "funding_exchange_stream_last_message_timestamp",
+    "Unix receipt timestamp of the latest normalized exchange WebSocket message",
+    ["exchange", "stream"],
+)
 market_data_age_seconds = Gauge(
     "funding_market_data_age_seconds", "Age of the latest normalized market snapshot", ["exchange"]
 )

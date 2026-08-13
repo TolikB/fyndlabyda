@@ -20,6 +20,7 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.health import CircuitBreaker
 from funding_arbitrage.monitoring.metrics import (
+    exchange_stream_last_message_timestamp,
     funding_history_coverage_ratio,
     market_data_age_seconds,
     market_data_dropped_total,
@@ -158,6 +159,13 @@ class MarketDataCollector:
         self._stream_ticker_requests.clear()
         self._orderbook_stream_tasks.clear()
         self._orderbook_stream_requests.clear()
+        for adapter in self.adapters:
+            exchange_stream_last_message_timestamp.labels(
+                adapter.name, "ticker"
+            ).set(0)
+            exchange_stream_last_message_timestamp.labels(
+                adapter.name, "orderbook"
+            ).set(0)
 
     def seed_funding_history(
         self, history: dict[tuple[str, str], list[FundingHistoryPoint]]
@@ -494,6 +502,7 @@ class MarketDataCollector:
         if existing is not None and not existing.done():
             existing.cancel()
         self._stream_ticker_requests[adapter.name] = target
+        exchange_stream_last_message_timestamp.labels(adapter.name, "ticker").set(0)
         self._stream_tasks[adapter.name] = asyncio.create_task(
             self._consume_ticker_stream(adapter, symbols),
             name=f"market-tickers-{adapter.name}",
@@ -510,6 +519,9 @@ class MarketDataCollector:
                     self._stream_ticker_cache[
                         (ticker.exchange, ticker.symbol, ticker.instrument_type)
                     ] = ticker
+                    exchange_stream_last_message_timestamp.labels(
+                        adapter.name, "ticker"
+                    ).set(datetime.now(UTC).timestamp())
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -536,6 +548,9 @@ class MarketDataCollector:
         if existing is not None and not existing.done():
             existing.cancel()
         self._orderbook_stream_requests[adapter.name] = target
+        exchange_stream_last_message_timestamp.labels(
+            adapter.name, "orderbook"
+        ).set(0)
         self._orderbook_stream_tasks[adapter.name] = asyncio.create_task(
             self._consume_orderbook_stream(adapter, list(target)),
             name=f"market-orderbooks-{adapter.name}",
@@ -551,6 +566,9 @@ class MarketDataCollector:
                 self._stream_orderbook_cache[
                     (book.exchange, book.symbol, book.instrument_type)
                 ] = book
+                exchange_stream_last_message_timestamp.labels(
+                    adapter.name, "orderbook"
+                ).set(datetime.now(UTC).timestamp())
         except asyncio.CancelledError:
             raise
         except NotImplementedError:

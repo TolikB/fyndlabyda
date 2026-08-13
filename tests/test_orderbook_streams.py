@@ -19,6 +19,9 @@ from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
 from funding_arbitrage.exchanges.mock import MockExchangeAdapter
 from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 from funding_arbitrage.market_data.collector import MarketDataCollector
+from funding_arbitrage.monitoring.metrics import (
+    exchange_stream_last_message_timestamp,
+)
 
 
 def test_bybit_orderbook_snapshot_and_delta_are_merged() -> None:
@@ -189,6 +192,38 @@ async def test_collector_uses_websocket_book_before_rest_revalidation() -> None:
     assert collector._stream_orderbook_cache
     assert initial_rest_books > 0
     assert adapter.rest_books == initial_rest_books
+
+
+@pytest.mark.asyncio
+async def test_collector_records_ticker_and_orderbook_stream_heartbeats() -> None:
+    adapter = MockExchangeAdapter("bybit", sleep=0)
+    collector = MarketDataCollector([adapter], enable_streams=True)
+
+    await collector.collect_once(
+        {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
+    )
+    ticker_value = 0.0
+    orderbook_value = 0.0
+    for _ in range(100):
+        ticker_value = exchange_stream_last_message_timestamp.labels(
+            "bybit", "ticker"
+        )._value.get()
+        orderbook_value = exchange_stream_last_message_timestamp.labels(
+            "bybit", "orderbook"
+        )._value.get()
+        if ticker_value > 0 and orderbook_value > 0:
+            break
+        await asyncio.sleep(0)
+
+    assert ticker_value > 0
+    assert orderbook_value > 0
+    await collector.close()
+    assert exchange_stream_last_message_timestamp.labels(
+        "bybit", "ticker"
+    )._value.get() == 0
+    assert exchange_stream_last_message_timestamp.labels(
+        "bybit", "orderbook"
+    )._value.get() == 0
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,12 @@ from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.exchanges.factory import create_public_adapters
 
 
+async def _close_stream(stream: object) -> None:
+    close = getattr(stream, "aclose", None)
+    if close is not None:
+        await close()
+
+
 async def probe(adapter: ExchangeAdapter) -> dict[str, object]:
     instruments = await adapter.get_instruments()
     quote_rank = {"USDT": 0, "USDC": 1, "USD": 2}
@@ -70,7 +76,7 @@ async def probe(adapter: ExchangeAdapter) -> dict[str, object]:
             "tickers": [tickers[key] for key in selected],
         }
     finally:
-        await stream.aclose()
+        await _close_stream(stream)
 
 
 async def run() -> int:

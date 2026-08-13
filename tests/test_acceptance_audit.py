@@ -10,6 +10,9 @@ def _operational(**updates: object) -> dict[str, object]:
         "history_coverage": {venue: 1.0 for venue in venues},
         "orderbook_coverage": {venue: 1.0 for venue in venues},
         "stale_or_missing_orderbooks": {venue: 0.0 for venue in venues},
+        "stream_message_ages": {
+            venue: {"ticker": 5.0, "orderbook": 5.0} for venue in venues
+        },
     }
     values.update(updates)
     return values
@@ -103,6 +106,50 @@ def test_acceptance_audit_rejects_cycle_errors_or_incomplete_market_data() -> No
     assert result["canary_ready"] is False
 
 
+def test_acceptance_audit_rejects_missing_or_stale_websocket_stream() -> None:
+    operational = _operational()
+    stream_ages = dict(operational["stream_message_ages"])
+    stream_ages["gate"] = {"ticker": 301.0, "orderbook": 5.0}
+    operational["stream_message_ages"] = stream_ages
+
+    result = build_audit(
+        {
+            "status": "ok",
+            "run_mode": "paper_test",
+            "market_data_mode": "live_public",
+            "execution_mode": "paper",
+        },
+        {
+            "status": "ready",
+            "comparison_enabled": True,
+            "healthy_venues": [
+                "binance",
+                "bybit",
+                "gate",
+                "hyperliquid",
+                "okx",
+            ],
+        },
+        {
+            "canary": {"ready": True, "checks": {}},
+            "checks": {"minimum_30_days": True},
+            "evidence_ready": True,
+            "accepted": True,
+        },
+        {"simulation_version": "candidate"},
+        {"simulation_version": "baseline"},
+        {},
+        operational,
+        "candidate",
+        "baseline",
+    )
+
+    assert result["runtime_safe"] is False
+    assert result["operational_checks"]["websocket_ticker_streams_fresh"] is False
+    assert result["operational_checks"]["websocket_orderbook_streams_fresh"] is True
+    assert result["canary_ready"] is False
+
+
 def test_prometheus_metrics_are_parsed_for_canary_safety() -> None:
     metrics = parse_operational_metrics(
         """
@@ -115,6 +162,8 @@ funding_paper_runner_last_cycle_timestamp 1000
 funding_history_coverage_ratio{exchange="gate"} 1
 funding_orderbook_coverage_ratio{exchange="gate"} 1
 funding_stale_or_missing_orderbooks{exchange="gate"} 0
+funding_exchange_stream_last_message_timestamp{exchange="gate",stream="ticker"} 1008
+funding_exchange_stream_last_message_timestamp{exchange="gate",stream="orderbook"} 1007
 """,
         now=1010,
     )
@@ -126,4 +175,7 @@ funding_stale_or_missing_orderbooks{exchange="gate"} 0
         "history_coverage": {"gate": 1.0},
         "orderbook_coverage": {"gate": 1.0},
         "stale_or_missing_orderbooks": {"gate": 0.0},
+        "stream_message_ages": {
+            "gate": {"ticker": 2.0, "orderbook": 3.0}
+        },
     }

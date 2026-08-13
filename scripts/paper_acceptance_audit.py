@@ -57,8 +57,23 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
             if "exchange" in item["labels"]
         }
 
-    last_cycle = scalar("funding_paper_runner_last_cycle_timestamp")
     observed_at = time.time() if now is None else now
+
+    def stream_ages(name: str) -> dict[str, dict[str, float | None]]:
+        result: dict[str, dict[str, float | None]] = {}
+        for item in samples.get(name, []):
+            labels = item["labels"]
+            exchange = labels.get("exchange")
+            stream = labels.get("stream")
+            if exchange is None or stream is None:
+                continue
+            timestamp = float(item["value"])
+            result.setdefault(str(exchange), {})[str(stream)] = (
+                observed_at - timestamp if timestamp > 0 else None
+            )
+        return result
+
+    last_cycle = scalar("funding_paper_runner_last_cycle_timestamp")
     return {
         "paper_runner_cycles": scalar("funding_paper_runner_cycles_total"),
         "paper_runner_errors": scalar("funding_paper_runner_errors_total"),
@@ -69,6 +84,9 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
         "orderbook_coverage": venues("funding_orderbook_coverage_ratio"),
         "stale_or_missing_orderbooks": venues(
             "funding_stale_or_missing_orderbooks"
+        ),
+        "stream_message_ages": stream_ages(
+            "funding_exchange_stream_last_message_timestamp"
         ),
     }
 
@@ -98,7 +116,13 @@ def build_audit(
     history_coverage = operational_metrics.get("history_coverage") or {}
     orderbook_coverage = operational_metrics.get("orderbook_coverage") or {}
     stale_books = operational_metrics.get("stale_or_missing_orderbooks") or {}
+    stream_ages = operational_metrics.get("stream_message_ages") or {}
     last_cycle_age = operational_metrics.get("last_cycle_age_seconds")
+
+    def stream_is_fresh(venue: str, stream: str) -> bool:
+        age = (stream_ages.get(venue) or {}).get(stream)
+        return isinstance(age, (int, float)) and -30 <= age <= 300
+
     operational_checks = {
         "cycles_observed": (operational_metrics.get("paper_runner_cycles") or 0) > 0,
         "cycle_errors_zero": operational_metrics.get("paper_runner_errors") == 0,
@@ -115,6 +139,12 @@ def build_audit(
         ),
         "stale_or_missing_orderbooks_zero": all(
             stale_books.get(venue) == 0 for venue in EXPECTED_VENUES
+        ),
+        "websocket_ticker_streams_fresh": all(
+            stream_is_fresh(venue, "ticker") for venue in EXPECTED_VENUES
+        ),
+        "websocket_orderbook_streams_fresh": all(
+            stream_is_fresh(venue, "orderbook") for venue in EXPECTED_VENUES
         ),
     }
     runtime_safe = all(runtime_checks.values()) and all(operational_checks.values())
