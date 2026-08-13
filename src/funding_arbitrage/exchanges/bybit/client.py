@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -24,6 +24,7 @@ from funding_arbitrage.exchanges.base.exceptions import (
 )
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.base.models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     InstrumentType,
@@ -34,8 +35,11 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
+from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
 
 logger = logging.getLogger(__name__)
+
+_WS_TOPIC_BATCH_SIZE = 10
 
 
 def _utc_from_ms(value: object, field: str = "timestamp") -> datetime:
@@ -56,6 +60,7 @@ class BybitPublicAdapter(ExchangeAdapter):
         self,
         base_url: str = "https://api.bybit.com",
         websocket_url: str = "wss://stream.bybit.com/v5/public/linear",
+        spot_websocket_url: str = "wss://stream.bybit.com/v5/public/spot",
         categories: tuple[str, ...] = ("linear", "spot"),
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
@@ -66,6 +71,7 @@ class BybitPublicAdapter(ExchangeAdapter):
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.websocket_url = websocket_url
+        self.spot_websocket_url = spot_websocket_url
         self.categories = categories
         self.timeout = timeout_seconds
         self._http = http_client
@@ -299,6 +305,73 @@ class BybitPublicAdapter(ExchangeAdapter):
             mark_price=_optional_decimal(row.get("markPrice"), "markPrice"),
         )
 
+    async def get_candles(
+        self,
+        symbol: str,
+        instrument_type: InstrumentType,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int = 60,
+    ) -> list[Candle]:
+        if start >= end:
+            raise ValueError("start must be before end")
+        category = "spot" if instrument_type is InstrumentType.SPOT else "linear"
+        start_ms = int(start.astimezone(UTC).timestamp() * 1000)
+        cursor_end = int(end.astimezone(UTC).timestamp() * 1000)
+        candles: dict[datetime, Candle] = {}
+        while cursor_end >= start_ms:
+            result = await self._request(
+                "/v5/market/kline",
+                {
+                    "category": category,
+                    "symbol": symbol,
+                    "interval": str(interval_minutes),
+                    "start": start_ms,
+                    "end": cursor_end,
+                    "limit": 1000,
+                },
+            )
+            rows = result.get("list")
+            if not isinstance(rows, list):
+                raise InvalidResponseError("Bybit candle list is missing")
+            batch = [
+                self._parse_candle(row, symbol, instrument_type, interval_minutes)
+                for row in rows
+            ]
+            for candle in batch:
+                if start <= candle.open_time < end and candle.is_closed:
+                    candles[candle.open_time] = candle
+            if len(batch) < 1000 or not batch:
+                break
+            cursor_end = int(min(item.open_time for item in batch).timestamp() * 1000) - 1
+        return [candles[key] for key in sorted(candles)]
+
+    def _parse_candle(
+        self,
+        row: object,
+        symbol: str,
+        instrument_type: InstrumentType,
+        interval_minutes: int,
+    ) -> Candle:
+        if not isinstance(row, list) or len(row) < 6:
+            raise InvalidResponseError("invalid Bybit candle row")
+        open_time = _utc_from_ms(row[0], "candle_start")
+        close_time = open_time + timedelta(minutes=interval_minutes)
+        return Candle(
+            exchange=self.name,
+            symbol=symbol,
+            instrument_type=instrument_type,
+            interval_minutes=interval_minutes,
+            open_time=open_time,
+            close_time=close_time,
+            open=decimal(row[1], "open"),
+            high=decimal(row[2], "high"),
+            low=decimal(row[3], "low"),
+            close=decimal(row[4], "close"),
+            volume=decimal(row[5], "volume"),
+            is_closed=close_time <= datetime.now(UTC),
+        )
+
     async def get_orderbook(
         self, symbol: str, depth: int, instrument_type: InstrumentType = InstrumentType.PERPETUAL
     ) -> OrderBook:
@@ -322,6 +395,7 @@ class BybitPublicAdapter(ExchangeAdapter):
             orderbook = OrderBook(
                 exchange=self.name,
                 symbol=symbol,
+                instrument_type=instrument_type,
                 bids=bids,
                 asks=asks,
                 timestamp=_utc_from_ms(result["ts"]),
@@ -331,17 +405,74 @@ class BybitPublicAdapter(ExchangeAdapter):
             raise InvalidResponseError(f"invalid Bybit order book: {result!r}") from exc
         return validate_orderbook(orderbook)
 
-    async def stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    def stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
+        return self._stream_tickers(symbols)
+
+    async def _stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
         if not symbols:
             return
+        groups = {
+            InstrumentType.PERPETUAL: (
+                self.websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.PERPETUAL],
+            ),
+            InstrumentType.SPOT: (
+                self.spot_websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.SPOT],
+            ),
+        }
+        queue: asyncio.Queue[Ticker | BaseException] = asyncio.Queue(maxsize=1)
+
+        async def pump(
+            url: str, requested: list[str], instrument_type: InstrumentType
+        ) -> None:
+            try:
+                async for ticker in self._stream_ticker_group(
+                    url, requested, instrument_type
+                ):
+                    await queue.put(ticker)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                await queue.put(exc)
+
+        tasks = [
+            asyncio.create_task(pump(url, batch, instrument_type))
+            for instrument_type, (url, requested) in groups.items()
+            for batch in _batches(requested, _WS_TOPIC_BATCH_SIZE)
+        ]
+        try:
+            while True:
+                item = await queue.get()
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _stream_ticker_group(
+        self,
+        url: str,
+        symbols: list[str],
+        instrument_type: InstrumentType,
+    ) -> AsyncIterator[Ticker]:
         args = [f"tickers.{symbol}" for symbol in symbols]
         reconnects = 0
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
             try:
-                async for ticker in self._stream_ticker_connection(args):
+                async for ticker in self._stream_ticker_connection(
+                    url, args, instrument_type
+                ):
                     reconnects = 0
                     yield ticker
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("Bybit WebSocket reconnect limit reached") from exc
@@ -352,9 +483,15 @@ class BybitPublicAdapter(ExchangeAdapter):
                 )
                 await self._sleep(delay)
 
-    async def _stream_ticker_connection(self, args: list[str]) -> AsyncIterator[Ticker]:
+    async def _stream_ticker_connection(
+        self,
+        url: str,
+        args: list[str],
+        instrument_type: InstrumentType,
+    ) -> AsyncIterator[Ticker]:
+        ticker_state: dict[str, dict[str, Any]] = {}
         async with websockets.connect(
-            self.websocket_url, ping_interval=20, ping_timeout=20
+            url, ping_interval=20, ping_timeout=20
         ) as socket:
             await socket.send(json.dumps({"op": "subscribe", "args": args}))
             async for message in socket:
@@ -364,10 +501,208 @@ class BybitPublicAdapter(ExchangeAdapter):
                 if isinstance(payload, dict) and payload.get("success") is False:
                     raise InvalidResponseError(f"Bybit WebSocket subscription failed: {payload}")
                 if isinstance(payload, dict) and payload.get("topic", "").startswith("tickers."):
-                    yield self._parse_ws_ticker(payload)
+                    ticker = self._merge_ws_ticker(
+                        payload, ticker_state, instrument_type
+                    )
+                    if ticker is not None:
+                        yield ticker
 
-    def _parse_ws_ticker(self, payload: object) -> Ticker:
+    def _merge_ws_ticker(
+        self,
+        payload: object,
+        ticker_state: dict[str, dict[str, Any]],
+        instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+    ) -> Ticker | None:
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+            raise InvalidResponseError("invalid Bybit WebSocket ticker payload")
+        update = payload["data"]
+        topic = str(payload.get("topic", ""))
+        symbol = str(update.get("symbol") or topic.removeprefix("tickers."))
+        if not symbol:
+            raise InvalidResponseError("Bybit WebSocket ticker symbol is missing")
+
+        if payload.get("type") == "snapshot":
+            ticker_state[symbol] = dict(update)
+        else:
+            ticker_state.setdefault(symbol, {}).update(update)
+        ticker_state[symbol]["symbol"] = symbol
+
+        merged = ticker_state[symbol]
+        if "lastPrice" not in merged:
+            return None
+        normalized_payload = dict(payload)
+        normalized_payload["data"] = merged
+        return self._parse_ws_ticker(normalized_payload, instrument_type)
+
+    def _parse_ws_ticker(
+        self,
+        payload: object,
+        instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+    ) -> Ticker:
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise InvalidResponseError("invalid Bybit WebSocket ticker payload")
         data = payload["data"]
-        return self._parse_ticker(data, "linear", payload.get("ts"))
+        category = "spot" if instrument_type is InstrumentType.SPOT else "linear"
+        return self._parse_ticker(data, category, payload.get("ts"))
+
+    def stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int = 20,
+    ) -> AsyncIterator[OrderBook]:
+        return self._stream_orderbooks(symbols, depth)
+
+    async def _stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int,
+    ) -> AsyncIterator[OrderBook]:
+        groups = {
+            InstrumentType.PERPETUAL: (
+                self.websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.PERPETUAL],
+            ),
+            InstrumentType.SPOT: (
+                self.spot_websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.SPOT],
+            ),
+        }
+        queue: asyncio.Queue[OrderBook | BaseException] = asyncio.Queue()
+
+        async def pump(
+            url: str, requested: list[str], instrument_type: InstrumentType
+        ) -> None:
+            try:
+                async for book in self._stream_orderbook_group(
+                    url, requested, instrument_type, depth
+                ):
+                    await queue.put(book)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                await queue.put(exc)
+
+        tasks = [
+            asyncio.create_task(pump(url, batch, instrument_type))
+            for instrument_type, (url, requested) in groups.items()
+            for batch in _batches(requested, _WS_TOPIC_BATCH_SIZE)
+        ]
+        if not tasks:
+            return
+        try:
+            while True:
+                item = await queue.get()
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _stream_orderbook_group(
+        self,
+        url: str,
+        symbols: list[str],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> AsyncIterator[OrderBook]:
+        reconnects = 0
+        stream_depth = 50
+        while self.max_reconnects is None or reconnects <= self.max_reconnects:
+            states: dict[str, dict[str, dict[Decimal, Decimal]]] = {}
+            try:
+                async with websockets.connect(url, ping_interval=20, ping_timeout=20) as socket:
+                    await socket.send(
+                        json.dumps(
+                            {
+                                "op": "subscribe",
+                                "args": [
+                                    f"orderbook.{stream_depth}.{symbol}" for symbol in symbols
+                                ],
+                            }
+                        )
+                    )
+                    async for message in socket:
+                        payload = json.loads(
+                            message.decode() if isinstance(message, bytes) else message
+                        )
+                        if isinstance(payload, dict) and payload.get("success") is False:
+                            raise InvalidResponseError(
+                                f"Bybit WebSocket subscription failed: {payload}"
+                            )
+                        if not (
+                            isinstance(payload, dict)
+                            and str(payload.get("topic", "")).startswith("orderbook.")
+                        ):
+                            continue
+                        book = self._apply_ws_orderbook(
+                            payload, states, instrument_type, depth
+                        )
+                        if book is not None:
+                            reconnects = 0
+                            yield book
+            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
+                reconnects += 1
+                if self.max_reconnects is not None and reconnects > self.max_reconnects:
+                    raise NetworkError("Bybit orderbook WebSocket reconnect limit reached") from exc
+                await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    def _apply_ws_orderbook(
+        self,
+        payload: object,
+        states: dict[str, dict[str, dict[Decimal, Decimal]]],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> OrderBook | None:
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+            raise InvalidResponseError("invalid Bybit WebSocket orderbook payload")
+        data = payload["data"]
+        symbol = str(data.get("s", ""))
+        if not symbol:
+            raise InvalidResponseError("Bybit WebSocket orderbook symbol is missing")
+        is_snapshot = payload.get("type") == "snapshot" or data.get("u") == 1
+        if is_snapshot:
+            states[symbol] = {"b": {}, "a": {}}
+        elif symbol not in states:
+            return None
+        state = states[symbol]
+        for side in ("b", "a"):
+            updates = data.get(side, [])
+            if not isinstance(updates, list):
+                raise InvalidResponseError("invalid Bybit WebSocket orderbook levels")
+            for row in updates:
+                price = decimal(row[0], f"{side}_price")
+                quantity = decimal(row[1], f"{side}_quantity")
+                if quantity == 0:
+                    state[side].pop(price, None)
+                else:
+                    state[side][price] = quantity
+        if not state["b"] or not state["a"]:
+            return None
+        bids = tuple(
+            OrderBookLevel(price=price, quantity=quantity)
+            for price, quantity in sorted(state["b"].items(), reverse=True)[:depth]
+        )
+        asks = tuple(
+            OrderBookLevel(price=price, quantity=quantity)
+            for price, quantity in sorted(state["a"].items())[:depth]
+        )
+        return validate_orderbook(
+            OrderBook(
+                exchange=self.name,
+                symbol=symbol,
+                instrument_type=instrument_type,
+                bids=bids,
+                asks=asks,
+                timestamp=_utc_from_ms(payload.get("ts", data.get("ts", "0"))),
+                sequence=int(data["u"]) if data.get("u") is not None else None,
+            )
+        )
+
+
+def _batches(items: list[str], size: int) -> list[list[str]]:
+    """Split public stream subscriptions under Bybit's per-request topic cap."""
+
+    return [items[index : index + size] for index in range(0, len(items), size)]

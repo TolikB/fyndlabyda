@@ -54,6 +54,13 @@ async def list_opportunities(
     ]
 
 
+@router.get("/opportunities/funnel")
+async def opportunity_funnel(
+    runtime: Annotated[RuntimeState, Depends(get_runtime)],
+) -> dict[str, object]:
+    return runtime.opportunity_funnel()
+
+
 @router.get("/opportunities/{opportunity_id}", response_model=Opportunity)
 async def get_opportunity(
     opportunity_id: str, runtime: Annotated[RuntimeState, Depends(get_runtime)]

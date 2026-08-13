@@ -26,6 +26,29 @@ background and performs a cycle every 15 seconds with real public data from
 Bybit, Gate, OKX, Binance, and Hyperliquid. All five venues receive $1,000 of
 tradable virtual balance plus a separate reserve.
 
+The default deployment is resource-limited and starts app, PostgreSQL, and
+Redis only. On a larger host, start monitoring with:
+
+```bash
+docker compose --profile observability up -d
+```
+
+For the baseline/candidate PnL comparison on the current small VM, enable the
+shared-feed comparison in `.env`:
+
+```dotenv
+PAPER_COMPARISON_ENABLED=true
+PAPER_SIMULATION_VERSION=v16-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v16-oos-baseline
+```
+
+Then run `docker compose up -d --build`. Candidate and baseline retain separate
+portfolios and simulation-version ledgers, but process the exact same immutable
+`MarketSnapshot` from one collector. This avoids doubling public API/WebSocket
+load and removes feed timing as a source of comparison bias. Do not combine the
+comparison and observability profiles on a constrained 2-vCPU VM unless
+capacity has been checked.
+
 ## Verify
 
 ```bash
@@ -33,6 +56,8 @@ curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
+curl http://127.0.0.1:8000/analytics/compare
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v16-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -40,6 +65,40 @@ docker compose logs -f app
 After the first cycle, `/health/ready` becomes `ready`. After confirmation and
 the configured hold/settlement intervals, `/analytics/paper` shows fills,
 funding payments, closed positions, fees, and the equity curve.
+
+## Current VM acceptance gates
+
+The clean shared-feed v16 canary for release `funding-pnl-v2-20260811-045`
+started at `2026-08-11T13:06:52.780865Z` (`2026-08-11 16:06:52.780865
+Europe/Kyiv`). Run the read-only audit from the project directory after the
+relevant deadline:
+
+```bash
+# Earliest useful run: 2026-08-14 16:06:52 Europe/Kyiv (72 hours).
+python3 scripts/paper_acceptance_audit.py \
+  --start 2026-08-11T13:06:52.780865Z \
+  --gate canary \
+  --timeout 45
+
+# Earliest useful run: 2026-09-10 16:06:52 Europe/Kyiv (30 days).
+python3 scripts/paper_acceptance_audit.py \
+  --start 2026-08-11T13:06:52.780865Z \
+  --gate acceptance \
+  --timeout 45
+```
+
+The script prints a JSON evidence bundle. Exit code `0` means the requested
+gate passed. Exit code `2` means the service responded correctly but the gate
+is not ready yet (for example, fewer than 72 hours or 30 days have elapsed, or
+an acceptance condition is still false). Any connection or malformed-response
+failure exits with another non-zero code and should be investigated.
+
+Both gates require a paper-only runtime, distinct candidate and baseline
+simulation versions, exact shared snapshot timestamps, no accounting invariant
+errors, and acceptable snapshot gaps. The 30-day gate additionally requires
+candidate net PnL to exceed baseline by at least 10%, higher median monthly PnL,
+no worse max drawdown, and profitable candidate PnL in at least two of three
+rolling windows.
 
 ## Telegram daily report
 
@@ -76,6 +135,32 @@ be intentionally deleted.
 - `PAPER_SETTLEMENT_INTERVAL_SECONDS`: accelerated mock funding event interval.
 - `PAPER_LOOP_INTERVAL_SECONDS`: runner cadence.
 - `PAPER_MAX_OPEN_POSITIONS`: portfolio cap.
+- `PAPER_SIMULATION_VERSION`: durable ledger namespace; never reuse it for a
+  materially different accounting model.
+- `PAPER_STRATEGY_PROFILE`: `candidate` for robust schedules/dynamic allocation
+  or `baseline` for corrected fixed-size comparison.
+- `PAPER_COMPARISON_ENABLED`: run an isolated baseline ledger beside the
+  candidate inside the same process and on the same market snapshots.
+- `PAPER_BASELINE_SIMULATION_VERSION`: durable namespace for the shared-feed
+  baseline; it must differ from `PAPER_SIMULATION_VERSION`.
+- `PAPER_EXIT_EDGE_MISS_CYCLES`: candidate exit debounce after edge disappears.
+- `PAPER_FUNDING_HORIZON_HOURS`: exact settlement-count forecast horizon.
+- `PAPER_ENTRY_WINDOW_HOURS`: maximum time capital may sit idle before the
+  nearest venue-specific settlement.
+- `PAPER_MIN_SETTLEMENT_COST_COVERAGE`: minimum nearest-settlement funding PnL
+  divided by full round-trip costs; defaults to `2`.
+- `PAPER_MAX_ADVERSE_BASIS_PERCENT`: candidate exits when combined two-leg
+  mark-to-market loss exceeds this fraction of per-leg capital.
+- Candidate positions also exit after the targeted funding event unless the next
+  venue-specific settlement covers exit plus re-entry costs. A missing or shallow
+  close book is treated as degraded execution and retried without a partial close.
+- `PAPER_MARKET_ASSET_LIMIT`: liquid base-assets retained per venue; their
+  available spot/perp pairs remain together.
+- `PAPER_HISTORY_SYMBOL_LIMIT`: funding-history queries per venue per refresh.
 
 The accelerated settlement interval changes wall-clock test speed only; it does
-not enable real funding or real trading.
+not enable real funding or real trading. It is used only by the deterministic
+`MARKET_DATA_MODE=mock` profile. The `live_public` profile accrues exact,
+symbol-scoped historical funding events reported by each venue, preserving the
+venue event timestamp and variable schedule across Bybit, Gate, OKX, Binance,
+and Hyperliquid.

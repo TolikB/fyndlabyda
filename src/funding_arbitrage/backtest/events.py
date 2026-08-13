@@ -38,6 +38,7 @@ class FundingEvent(BacktestEvent):
     symbol: str
     rate: Decimal
     notional: Decimal
+    pnl: Decimal | None = None
 
 
 class OpportunityEvent(BacktestEvent):
@@ -51,6 +52,7 @@ class FillEvent(BacktestEvent):
     position_id: str
     notional: Decimal
     fee: Decimal
+    spread: Decimal = Decimal("0")
     slippage: Decimal = Decimal("0")
 
 

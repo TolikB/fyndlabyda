@@ -57,6 +57,28 @@ class Settings(BaseSettings):
     )
     paper_venues: str = Field(default="bybit,gate,okx,binance,hyperliquid", alias="PAPER_VENUES")
     paper_reserve_percent: Decimal = Field(default=Decimal("20"), alias="PAPER_RESERVE_PERCENT")
+    paper_max_single_opportunity_percent: Decimal = Field(
+        default=Decimal("20"), alias="PAPER_MAX_SINGLE_OPPORTUNITY_PERCENT"
+    )
+    paper_max_single_asset_percent: Decimal = Field(
+        default=Decimal("30"), alias="PAPER_MAX_SINGLE_ASSET_PERCENT"
+    )
+    paper_max_single_exchange_percent: Decimal = Field(
+        default=Decimal("40"), alias="PAPER_MAX_SINGLE_EXCHANGE_PERCENT"
+    )
+    paper_max_single_strategy_percent: Decimal = Field(
+        default=Decimal("60"), alias="PAPER_MAX_SINGLE_STRATEGY_PERCENT"
+    )
+    paper_max_correlated_group_percent: Decimal = Field(
+        default=Decimal("50"), alias="PAPER_MAX_CORRELATED_GROUP_PERCENT"
+    )
+    paper_legging_move_percent: Decimal = Field(
+        default=Decimal("0.0002"), alias="PAPER_LEGGING_MOVE_PERCENT"
+    )
+    paper_correlation_groups: str = Field(
+        default="BTC,ETH,SOL;DOGE,SHIB,PEPE,WIF,BONK,FLOKI,TUT",
+        alias="PAPER_CORRELATION_GROUPS",
+    )
     paper_autotrade: bool = Field(default=False, alias="PAPER_AUTOTRADE")
     paper_loop_interval_seconds: float = Field(
         default=10.0, alias="PAPER_LOOP_INTERVAL_SECONDS"
@@ -76,8 +98,40 @@ class Settings(BaseSettings):
     paper_orderbook_symbol_limit: int = Field(
         default=10, alias="PAPER_ORDERBOOK_SYMBOL_LIMIT"
     )
+    paper_market_asset_limit: int = Field(default=12, alias="PAPER_MARKET_ASSET_LIMIT")
+    paper_history_symbol_limit: int = Field(default=5, alias="PAPER_HISTORY_SYMBOL_LIMIT")
+    paper_market_persist_interval_seconds: int = Field(
+        default=300, alias="PAPER_MARKET_PERSIST_INTERVAL_SECONDS"
+    )
     paper_auto_init_database: bool = Field(
         default=False, alias="PAPER_AUTO_INIT_DATABASE"
+    )
+    paper_simulation_version: str = Field(
+        default="v16-oos-candidate", alias="PAPER_SIMULATION_VERSION"
+    )
+    paper_strategy_profile: Literal["baseline", "candidate"] = Field(
+        default="candidate", alias="PAPER_STRATEGY_PROFILE"
+    )
+    paper_comparison_enabled: bool = Field(
+        default=False, alias="PAPER_COMPARISON_ENABLED"
+    )
+    paper_baseline_simulation_version: str = Field(
+        default="v16-oos-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
+    )
+    paper_exit_edge_miss_cycles: int = Field(
+        default=2, alias="PAPER_EXIT_EDGE_MISS_CYCLES"
+    )
+    paper_funding_horizon_hours: Decimal = Field(
+        default=Decimal("24"), alias="PAPER_FUNDING_HORIZON_HOURS"
+    )
+    paper_entry_window_hours: Decimal = Field(
+        default=Decimal("2"), alias="PAPER_ENTRY_WINDOW_HOURS"
+    )
+    paper_min_settlement_cost_coverage: Decimal = Field(
+        default=Decimal("2"), alias="PAPER_MIN_SETTLEMENT_COST_COVERAGE"
+    )
+    paper_max_adverse_basis_percent: Decimal = Field(
+        default=Decimal("0.005"), alias="PAPER_MAX_ADVERSE_BASIS_PERCENT"
     )
     telegram_enabled: bool = Field(default=False, alias="TELEGRAM_ENABLED")
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
@@ -95,16 +149,22 @@ class Settings(BaseSettings):
         default=Decimal("70"), alias="SCANNER_MINIMUM_LIQUIDITY_SCORE"
     )
     scanner_maximum_slippage_percent: Decimal = Field(
-        default=Decimal("0.15"), alias="SCANNER_MAXIMUM_SLIPPAGE_PERCENT"
+        default=Decimal("0.0015"), alias="SCANNER_MAXIMUM_SLIPPAGE_PERCENT"
     )
     scanner_maximum_spread_percent: Decimal = Field(
-        default=Decimal("0.20"), alias="SCANNER_MAXIMUM_SPREAD_PERCENT"
+        default=Decimal("0.0020"), alias="SCANNER_MAXIMUM_SPREAD_PERCENT"
     )
     scanner_minimum_funding_samples: int = Field(
         default=20, alias="SCANNER_MINIMUM_FUNDING_SAMPLES"
     )
     scanner_minimum_duration_seconds: int = Field(
         default=30, alias="SCANNER_MINIMUM_DURATION_SECONDS"
+    )
+    scanner_allow_spot_short: bool = Field(
+        default=False, alias="SCANNER_ALLOW_SPOT_SHORT"
+    )
+    scanner_borrowing_cost_daily: Decimal = Field(
+        default=Decimal("0"), alias="SCANNER_BORROWING_COST_DAILY"
     )
     bybit_maker_fee: Decimal = Field(default=Decimal("0.0002"), alias="BYBIT_MAKER_FEE")
     bybit_taker_fee: Decimal = Field(default=Decimal("0.00055"), alias="BYBIT_TAKER_FEE")
@@ -138,6 +198,18 @@ class Settings(BaseSettings):
     @property
     def paper_venue_values(self) -> tuple[str, ...]:
         return tuple(value.strip() for value in self.paper_venues.split(",") if value.strip())
+
+    @property
+    def paper_correlation_group_values(self) -> tuple[frozenset[str], ...]:
+        return tuple(
+            frozenset(
+                asset.strip().upper()
+                for asset in group.split(",")
+                if asset.strip()
+            )
+            for group in self.paper_correlation_groups.split(";")
+            if group.strip()
+        )
 
     @property
     def fee_schedules(self) -> dict[str, tuple[Decimal, Decimal]]:
@@ -205,6 +277,8 @@ def get_settings() -> Settings:
             "maximum_spread_percent": "scanner_maximum_spread_percent",
             "minimum_funding_samples": "scanner_minimum_funding_samples",
             "minimum_opportunity_duration_seconds": "scanner_minimum_duration_seconds",
+            "allow_spot_short": "scanner_allow_spot_short",
+            "borrowing_cost_daily": "scanner_borrowing_cost_daily",
         }
         for yaml_key, field_name in scanner_fields.items():
             if field_name not in settings.model_fields_set and yaml_key in scanner:
@@ -213,6 +287,13 @@ def get_settings() -> Settings:
         for yaml_key, field_name in {
             "initial_balance_usd": "paper_initial_balance_usd",
             "reserve_percent": "paper_reserve_percent",
+            "max_single_opportunity_percent": "paper_max_single_opportunity_percent",
+            "max_single_asset_percent": "paper_max_single_asset_percent",
+            "max_single_exchange_percent": "paper_max_single_exchange_percent",
+            "max_single_strategy_percent": "paper_max_single_strategy_percent",
+            "max_correlated_group_percent": "paper_max_correlated_group_percent",
+            "legging_move_percent": "paper_legging_move_percent",
+            "correlation_groups": "paper_correlation_groups",
             "autotrade": "paper_autotrade",
             "loop_interval_seconds": "paper_loop_interval_seconds",
             "confirmation_seconds": "paper_confirmation_seconds",
@@ -222,7 +303,19 @@ def get_settings() -> Settings:
             "settlement_interval_seconds": "paper_settlement_interval_seconds",
             "history_refresh_seconds": "paper_history_refresh_seconds",
             "orderbook_symbol_limit": "paper_orderbook_symbol_limit",
+            "market_asset_limit": "paper_market_asset_limit",
+            "history_symbol_limit": "paper_history_symbol_limit",
+            "market_persist_interval_seconds": "paper_market_persist_interval_seconds",
             "auto_init_database": "paper_auto_init_database",
+            "simulation_version": "paper_simulation_version",
+            "strategy_profile": "paper_strategy_profile",
+            "comparison_enabled": "paper_comparison_enabled",
+            "baseline_simulation_version": "paper_baseline_simulation_version",
+            "exit_edge_miss_cycles": "paper_exit_edge_miss_cycles",
+            "funding_horizon_hours": "paper_funding_horizon_hours",
+            "entry_window_hours": "paper_entry_window_hours",
+            "min_settlement_cost_coverage": "paper_min_settlement_cost_coverage",
+            "max_adverse_basis_percent": "paper_max_adverse_basis_percent",
         }.items():
             if field_name not in settings.model_fields_set and yaml_key in paper:
                 setattr(settings, field_name, paper[yaml_key])
@@ -248,22 +341,68 @@ def _validate_safe_values(settings: Settings) -> None:
         "live_public",
     }:
         raise ValueError("paper_test requires mock or live_public market data")
-    if settings.run_mode == "paper_test" and not settings.paper_autotrade:
-        raise ValueError("paper_test requires PAPER_AUTOTRADE=true")
     if settings.paper_loop_interval_seconds <= 0:
         raise ValueError("PAPER_LOOP_INTERVAL_SECONDS must be positive")
     if settings.paper_settlement_interval_seconds <= 0:
         raise ValueError("PAPER_SETTLEMENT_INTERVAL_SECONDS must be positive")
+    if settings.paper_max_hold_seconds <= 0:
+        raise ValueError("PAPER_MAX_HOLD_SECONDS must be positive")
     if settings.paper_history_refresh_seconds <= 0:
         raise ValueError("PAPER_HISTORY_REFRESH_SECONDS must be positive")
     if settings.paper_orderbook_symbol_limit <= 0:
         raise ValueError("PAPER_ORDERBOOK_SYMBOL_LIMIT must be positive")
+    if settings.paper_market_asset_limit <= 0:
+        raise ValueError("PAPER_MARKET_ASSET_LIMIT must be positive")
+    if settings.paper_history_symbol_limit <= 0:
+        raise ValueError("PAPER_HISTORY_SYMBOL_LIMIT must be positive")
+    if settings.paper_market_persist_interval_seconds <= 0:
+        raise ValueError("PAPER_MARKET_PERSIST_INTERVAL_SECONDS must be positive")
     if settings.okx_funding_symbol_limit <= 0:
         raise ValueError("OKX_FUNDING_SYMBOL_LIMIT must be positive")
     if not settings.paper_venue_values:
         raise ValueError("PAPER_VENUES must contain at least one venue")
     if settings.paper_position_size_usd <= 0:
         raise ValueError("PAPER_POSITION_SIZE_USD must be positive")
+    for field_name in (
+        "paper_reserve_percent",
+        "paper_max_single_opportunity_percent",
+        "paper_max_single_asset_percent",
+        "paper_max_single_exchange_percent",
+        "paper_max_single_strategy_percent",
+        "paper_max_correlated_group_percent",
+    ):
+        value = getattr(settings, field_name)
+        if not Decimal("0") <= value <= Decimal("100"):
+            raise ValueError(f"{field_name.upper()} must be between 0 and 100")
+    if settings.paper_exit_edge_miss_cycles <= 0:
+        raise ValueError("PAPER_EXIT_EDGE_MISS_CYCLES must be positive")
+    if not Decimal("0") <= settings.paper_legging_move_percent <= Decimal("0.01"):
+        raise ValueError("PAPER_LEGGING_MOVE_PERCENT must be between 0 and 0.01")
+    if (
+        settings.paper_comparison_enabled
+        and settings.paper_baseline_simulation_version == settings.paper_simulation_version
+    ):
+        raise ValueError("baseline and candidate simulation versions must be distinct")
+    if settings.paper_comparison_enabled and settings.paper_strategy_profile != "candidate":
+        raise ValueError("shared comparison service must use candidate as the primary profile")
+    if settings.paper_funding_horizon_hours <= 0:
+        raise ValueError("PAPER_FUNDING_HORIZON_HOURS must be positive")
+    if settings.paper_entry_window_hours <= 0:
+        raise ValueError("PAPER_ENTRY_WINDOW_HOURS must be positive")
+    if settings.paper_min_settlement_cost_coverage < 1:
+        raise ValueError("PAPER_MIN_SETTLEMENT_COST_COVERAGE must be at least 1")
+    if not Decimal("0") < settings.paper_max_adverse_basis_percent <= Decimal("0.05"):
+        raise ValueError("PAPER_MAX_ADVERSE_BASIS_PERCENT must be between 0 and 0.05")
+    if settings.scanner_borrowing_cost_daily < 0:
+        raise ValueError("SCANNER_BORROWING_COST_DAILY cannot be negative")
+    if settings.scanner_allow_spot_short and settings.scanner_borrowing_cost_daily <= 0:
+        raise ValueError(
+            "SCANNER_BORROWING_COST_DAILY must be positive when spot shorting is enabled"
+        )
+    if not Decimal("0") <= settings.scanner_maximum_slippage_percent <= Decimal("0.05"):
+        raise ValueError("SCANNER_MAXIMUM_SLIPPAGE_PERCENT must be a decimal ratio")
+    if not Decimal("0") <= settings.scanner_maximum_spread_percent <= Decimal("0.05"):
+        raise ValueError("SCANNER_MAXIMUM_SPREAD_PERCENT must be a decimal ratio")
     if not 0 <= settings.telegram_report_hour <= 23:
         raise ValueError("TELEGRAM_REPORT_HOUR must be between 0 and 23")
     if not 0 <= settings.telegram_report_minute <= 59:

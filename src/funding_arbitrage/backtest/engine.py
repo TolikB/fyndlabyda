@@ -39,6 +39,7 @@ class BacktestEngine:
         funding = Decimal("0")
         opportunities = 0
         slippage = Decimal("0")
+        pnl_curve: list[Decimal] = []
         opened_at: dict[str, datetime] = {}
         durations: list[Decimal] = []
 
@@ -46,17 +47,23 @@ class BacktestEngine:
             nonlocal fees, funding, opportunities, slippage
             month = event.timestamp.strftime("%Y-%m")
             if isinstance(event, FundingEvent):
-                monthly[month] += event.rate * event.notional
-                funding += event.rate * event.notional
+                funding_pnl = event.pnl if event.pnl is not None else event.rate * event.notional
+                monthly[month] += funding_pnl
+                funding += funding_pnl
+                pnl_curve.append(funding_pnl)
             elif isinstance(event, FillEvent):
-                monthly[month] -= event.fee
+                event_pnl = -event.fee
                 fees += event.fee
-                monthly[month] -= event.slippage
-                slippage += event.slippage
+                execution_cost = event.spread + event.slippage
+                event_pnl -= execution_cost
+                monthly[month] += event_pnl
+                slippage += execution_cost
+                pnl_curve.append(event_pnl)
             elif isinstance(event, OpportunityEvent):
                 opportunities += 1
             elif isinstance(event, PositionEvent):
                 monthly[month] += event.pnl
+                pnl_curve.append(event.pnl)
                 if event.state.upper() == "OPEN":
                     opened_at[event.position_id] = event.timestamp
                 elif event.state.upper() == "CLOSED" and event.position_id in opened_at:
@@ -79,5 +86,6 @@ class BacktestEngine:
                 if durations
                 else Decimal("0")
             ),
+            pnl_curve=pnl_curve,
         )
         return BacktestResult(metrics, config_hash(config), dataset_version, git_commit)

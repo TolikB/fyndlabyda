@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.api.dependencies import get_runtime, get_session_factory
 from funding_arbitrage.api.schemas.backtests import IncomeTargetRequest
+from funding_arbitrage.backtest.comparison import compare_paper_datasets
+from funding_arbitrage.backtest.database_replay import DatabasePaperReplay
 from funding_arbitrage.backtest.income_target import income_target_analysis
 from funding_arbitrage.database.models import (
     PaperFillRecord,
@@ -19,6 +22,44 @@ from funding_arbitrage.database.models import (
 from funding_arbitrage.services.runtime import RuntimeState
 
 router = APIRouter()
+
+
+@router.get("/analytics/compare")
+async def compare_paper_profiles(
+    session: Annotated[AsyncSession, Depends(get_session_factory)],
+    runtime: Annotated[RuntimeState, Depends(get_runtime)],
+    initial_capital: Annotated[Decimal, Query(gt=0)] = Decimal("6250"),
+    baseline_version: Annotated[str | None, Query()] = None,
+    candidate_version: Annotated[str | None, Query()] = None,
+    start: Annotated[datetime | None, Query()] = None,
+    end: Annotated[datetime | None, Query()] = None,
+) -> dict[str, object]:
+    active_baseline = baseline_version or runtime.settings.paper_baseline_simulation_version
+    active_candidate = candidate_version or runtime.settings.paper_simulation_version
+    loader = DatabasePaperReplay()
+    baseline = await loader.load(session, active_baseline, start, end)
+    candidate = await loader.load(session, active_candidate, start, end)
+    return compare_paper_datasets(baseline, candidate, initial_capital)
+
+
+@router.get("/analytics/attribution")
+async def paper_attribution(
+    session: Annotated[AsyncSession, Depends(get_session_factory)],
+    runtime: Annotated[RuntimeState, Depends(get_runtime)],
+    simulation_version: Annotated[str | None, Query()] = None,
+    start: Annotated[datetime | None, Query()] = None,
+    end: Annotated[datetime | None, Query()] = None,
+) -> dict[str, object]:
+    active_version = simulation_version or runtime.settings.paper_simulation_version
+    dataset = await DatabasePaperReplay().load(
+        session, active_version, start, end
+    )
+    return {
+        "simulation_version": active_version,
+        "dataset_version": dataset.dataset_version,
+        "position_count": dataset.position_count,
+        "attribution": dataset.attribution,
+    }
 
 
 def _income_target(runtime: RuntimeState, portfolio: Decimal, target: Decimal) -> dict[str, object]:
@@ -51,26 +92,51 @@ async def funding(runtime: Annotated[RuntimeState, Depends(get_runtime)]) -> dic
 @router.get("/analytics/paper")
 async def paper_statistics(
     session: Annotated[AsyncSession, Depends(get_session_factory)],
+    runtime: Annotated[RuntimeState, Depends(get_runtime)],
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    simulation_version: Annotated[str | None, Query()] = None,
 ) -> dict[str, object]:
+    active_version = simulation_version or runtime.settings.paper_simulation_version
     snapshots = (
         await session.execute(
             select(PortfolioSnapshotRecord)
+            .where(PortfolioSnapshotRecord.simulation_version == active_version)
             .order_by(PortfolioSnapshotRecord.timestamp.desc())
             .limit(limit)
         )
     ).scalars()
-    fills = await session.scalar(select(func.count(PaperFillRecord.id)))
-    positions = await session.scalar(select(func.count(PaperPositionRecord.id)))
+    fills = await session.scalar(
+        select(func.count(PaperFillRecord.id))
+        .join(PaperPositionRecord, PaperPositionRecord.position_id == PaperFillRecord.position_id)
+        .where(PaperPositionRecord.simulation_version == active_version)
+    )
+    positions = await session.scalar(
+        select(func.count(PaperPositionRecord.id)).where(
+            PaperPositionRecord.simulation_version == active_version
+        )
+    )
     open_positions = await session.scalar(
-        select(func.count(PaperPositionRecord.id)).where(PaperPositionRecord.state == "OPEN")
+        select(func.count(PaperPositionRecord.id)).where(
+            PaperPositionRecord.state == "OPEN",
+            PaperPositionRecord.simulation_version == active_version,
+        )
     )
     funding_pnl = await session.scalar(
         select(func.coalesce(func.sum(PaperFundingPaymentRecord.pnl), 0))
+        .join(
+            PaperPositionRecord,
+            PaperPositionRecord.position_id == PaperFundingPaymentRecord.position_id,
+        )
+        .where(PaperPositionRecord.simulation_version == active_version)
     )
-    fees = await session.scalar(select(func.coalesce(func.sum(PaperFillRecord.fee), 0)))
+    fees = await session.scalar(
+        select(func.coalesce(func.sum(PaperFillRecord.fee), 0))
+        .join(PaperPositionRecord, PaperPositionRecord.position_id == PaperFillRecord.position_id)
+        .where(PaperPositionRecord.simulation_version == active_version)
+    )
     ordered = list(reversed(list(snapshots)))
     return {
+        "simulation_version": active_version,
         "snapshot_count": len(ordered),
         "fill_count": int(fills or 0),
         "position_count": int(positions or 0),

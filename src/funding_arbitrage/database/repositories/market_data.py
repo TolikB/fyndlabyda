@@ -8,9 +8,11 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.exchanges.base.models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     NormalizedInstrument,
@@ -29,6 +31,7 @@ from ..models import (
     FundingHistoryRecord,
     FundingSnapshotRecord,
     InstrumentRecord,
+    MarketCandleRecord,
     OpportunityRecord,
     OrderBookSnapshotRecord,
     PaperFillRecord,
@@ -114,31 +117,112 @@ async def save_funding_snapshots(session: AsyncSession, snapshots: list[FundingS
 
 
 async def save_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
-    for item in points:
-        record = await session.scalar(
-            select(FundingHistoryRecord).where(
-                FundingHistoryRecord.exchange == item.exchange,
-                FundingHistoryRecord.symbol == item.symbol,
-                FundingHistoryRecord.funding_timestamp == item.funding_timestamp,
+    deduplicated = {
+        (item.exchange, item.symbol, item.funding_timestamp): item for item in points
+    }
+    rows: list[dict[str, Any]] = [
+        {
+            "exchange": item.exchange,
+            "symbol": item.symbol,
+            "funding_rate": item.funding_rate,
+            "funding_timestamp": item.funding_timestamp,
+            "mark_price": item.mark_price,
+        }
+        for item in deduplicated.values()
+    ]
+    if not rows:
+        return
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        for index in range(0, len(rows), 1000):
+            statement = pg_insert(FundingHistoryRecord).values(rows[index : index + 1000])
+            statement = statement.on_conflict_do_update(
+                constraint="uq_funding_history_event",
+                set_={
+                    "funding_rate": statement.excluded.funding_rate,
+                    "mark_price": statement.excluded.mark_price,
+                },
             )
-        )
-        if record is None:
-            session.add(
-                FundingHistoryRecord(
-                    exchange=item.exchange,
-                    symbol=item.symbol,
-                    funding_rate=item.funding_rate,
-                    funding_timestamp=item.funding_timestamp,
-                    mark_price=item.mark_price,
+            await session.execute(statement)
+    else:
+        for row in rows:
+            record = await session.scalar(
+                select(FundingHistoryRecord).where(
+                    FundingHistoryRecord.exchange == row["exchange"],
+                    FundingHistoryRecord.symbol == row["symbol"],
+                    FundingHistoryRecord.funding_timestamp == row["funding_timestamp"],
                 )
             )
-        else:
-            record.funding_rate = item.funding_rate
-            record.mark_price = item.mark_price
+            if record is None:
+                session.add(FundingHistoryRecord(**row))
+            else:
+                record.funding_rate = row["funding_rate"]
+                record.mark_price = row["mark_price"]
     await session.commit()
 
 
-async def save_market_snapshot(session: AsyncSession, snapshot: MarketSnapshot) -> None:
+async def save_candles(session: AsyncSession, candles: list[Candle]) -> None:
+    if not candles:
+        return
+    rows = [
+        {
+            "exchange": item.exchange,
+            "symbol": item.symbol,
+            "instrument_type": item.instrument_type.value,
+            "interval_minutes": item.interval_minutes,
+            "open_time": item.open_time,
+            "close_time": item.close_time,
+            "open": item.open,
+            "high": item.high,
+            "low": item.low,
+            "close": item.close,
+            "volume": item.volume,
+            "is_closed": item.is_closed,
+        }
+        for item in candles
+    ]
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        for index in range(0, len(rows), 1000):
+            statement = pg_insert(MarketCandleRecord).values(rows[index : index + 1000])
+            statement = statement.on_conflict_do_update(
+                constraint="uq_market_candle_identity",
+                set_={
+                    "close_time": statement.excluded.close_time,
+                    "open": statement.excluded.open,
+                    "high": statement.excluded.high,
+                    "low": statement.excluded.low,
+                    "close": statement.excluded.close,
+                    "volume": statement.excluded.volume,
+                    "is_closed": statement.excluded.is_closed,
+                },
+            )
+            await session.execute(statement)
+    else:
+        for row in rows:
+            record = await session.scalar(
+                select(MarketCandleRecord).where(
+                    MarketCandleRecord.exchange == row["exchange"],
+                    MarketCandleRecord.symbol == row["symbol"],
+                    MarketCandleRecord.instrument_type == row["instrument_type"],
+                    MarketCandleRecord.interval_minutes == row["interval_minutes"],
+                    MarketCandleRecord.open_time == row["open_time"],
+                )
+            )
+            if record is None:
+                session.add(MarketCandleRecord(**row))
+            else:
+                for field, value in row.items():
+                    setattr(record, field, value)
+    await session.commit()
+
+
+async def save_market_snapshot(
+    session: AsyncSession,
+    snapshot: MarketSnapshot,
+    *,
+    include_history: bool = True,
+) -> None:
     """Persist one normalized snapshot, including depth used for cost estimates."""
 
     await save_instruments(session, snapshot.instruments)
@@ -163,7 +247,7 @@ async def save_market_snapshot(session: AsyncSession, snapshot: MarketSnapshot) 
         else:
             record.status = "ONLINE"
             record.last_seen_at = snapshot.captured_at
-    if snapshot.funding_history:
+    if include_history and snapshot.funding_history:
         await save_funding_history(
             session,
             [point for points in snapshot.funding_history.values() for point in points],
@@ -173,6 +257,7 @@ async def save_market_snapshot(session: AsyncSession, snapshot: MarketSnapshot) 
             OrderBookSnapshotRecord(
                 exchange=book.exchange,
                 symbol=book.symbol,
+                instrument_type=book.instrument_type.value,
                 timestamp=book.timestamp,
                 sequence=book.sequence,
                 bids=[[str(level.price), str(level.quantity)] for level in book.bids],
@@ -220,6 +305,7 @@ async def save_portfolio_snapshot(session: AsyncSession, snapshot: PortfolioSnap
     session.add(
         PortfolioSnapshotRecord(
             timestamp=snapshot.timestamp,
+            simulation_version=snapshot.simulation_version,
             equity=snapshot.equity,
             cash=snapshot.cash,
             locked_capital=snapshot.locked_capital,
@@ -259,7 +345,9 @@ async def save_backtest_result(
             run_id=run_id,
             metrics=result.metrics.model_dump(mode="json"),
             monthly_distribution={
-                "monthly_returns": result.metrics.monthly_returns,
+                "monthly_returns": result.metrics.model_dump(mode="json")[
+                    "monthly_returns"
+                ],
             },
             created_at=finished_at,
         )
@@ -276,6 +364,7 @@ async def save_paper_position(session: AsyncSession, position: PaperPosition) ->
         "state": str(position.state),
         "asset": position.asset,
         "capital": position.capital,
+        "simulation_version": position.simulation_version,
         "opened_at": position.opened_at,
         "closed_at": position.closed_at,
         "payload": position.model_dump(mode="json"),
@@ -307,6 +396,7 @@ async def save_paper_fill(
         "position_id": position_id,
         "exchange": fill.exchange,
         "symbol": fill.symbol,
+        "instrument_type": fill.instrument_type.value if fill.instrument_type else None,
         "side": fill.side,
         "filled_quantity": fill.filled_quantity,
         "price": fill.price,

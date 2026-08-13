@@ -16,6 +16,7 @@ class CostEngine:
         default_fee: FeeSchedule | None = None,
         borrowing_cost_daily: Decimal = Decimal("0"),
         network_cost: Decimal = Decimal("0"),
+        legging_cost_percent: Decimal = Decimal("0"),
     ) -> None:
         self.fees = fees or {}
         self.default_fee = default_fee or FeeSchedule(
@@ -23,6 +24,7 @@ class CostEngine:
         )
         self.borrowing_cost_daily = borrowing_cost_daily
         self.network_cost = network_cost
+        self.legging_cost_percent = legging_cost_percent
 
     def fee_for(self, exchange: str) -> FeeSchedule:
         return self.fees.get(exchange, self.default_fee)
@@ -39,6 +41,7 @@ class CostEngine:
         orderbook_b: OrderBook | None = None,
         side_a: OrderSide = OrderSide.BUY,
         side_b: OrderSide = OrderSide.SELL,
+        borrowing_required: bool = False,
     ) -> CostBreakdown:
         if notional <= 0 or holding_hours <= 0:
             raise ValueError("notional and holding_hours must be positive")
@@ -51,7 +54,11 @@ class CostEngine:
         entry_slippage = self._slippage_cost(notional, ticker_a, orderbook_a, side_a)
         entry_slippage += self._slippage_cost(notional, ticker_b, orderbook_b, side_b)
         exit_slippage = entry_slippage
-        borrow = notional * self.borrowing_cost_daily * holding_hours / Decimal("24")
+        borrow = (
+            notional * self.borrowing_cost_daily * holding_hours / Decimal("24")
+            if borrowing_required
+            else Decimal("0")
+        )
         return CostBreakdown(
             entry_fees=entry_fees,
             exit_fees=exit_fees,
@@ -61,14 +68,19 @@ class CostEngine:
             exit_slippage=exit_slippage,
             borrowing_cost=borrow,
             network_cost=self.network_cost,
+            legging_cost=notional * self.legging_cost_percent,
         )
 
     @staticmethod
     def _spread_cost(notional: Decimal, ticker: Ticker | None) -> Decimal:
         if ticker is None or ticker.best_bid is None or ticker.best_ask is None:
             return Decimal("0")
+        if ticker.best_bid <= 0 or ticker.best_ask <= 0 or ticker.best_bid > ticker.best_ask:
+            return notional
         midpoint = (ticker.best_bid + ticker.best_ask) / Decimal("2")
-        return notional * (ticker.best_ask - ticker.best_bid) / midpoint
+        if midpoint <= 0:
+            return notional
+        return notional * (ticker.best_ask - ticker.best_bid) / midpoint / Decimal("2")
 
     @staticmethod
     def _slippage_cost(

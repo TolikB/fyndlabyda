@@ -79,6 +79,7 @@ async def funding(
             "symbol": row.symbol,
             "funding_rate": str(row.funding_rate),
             "funding_interval_hours": str(row.funding_interval_hours),
+            "next_funding_time": row.next_funding_time,
             "timestamp": row.timestamp,
         }
         for row in rows

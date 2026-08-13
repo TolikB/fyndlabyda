@@ -19,6 +19,7 @@ from funding_arbitrage.exchanges.base.exceptions import (
 )
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.base.models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     InstrumentType,
@@ -29,6 +30,7 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
+from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
 
 
 def _ms(value: object) -> datetime:
@@ -39,6 +41,18 @@ def _opt(value: object, field: str) -> Decimal | None:
     return None if value in (None, "") else decimal(value, field)
 
 
+def _tradeable_ticker_row(row: object) -> bool:
+    if not isinstance(row, dict):
+        return False
+    last = row.get("lastPrice", row.get("c", "0"))
+    bid = row.get("bidPrice", row.get("b", "0"))
+    ask = row.get("askPrice", row.get("a", "0"))
+    try:
+        return all(decimal(value, "ticker_quote") > 0 for value in (last, bid, ask))
+    except ValueError:
+        return False
+
+
 class BinancePublicAdapter(ExchangeAdapter):
     name = "binance"
 
@@ -47,6 +61,7 @@ class BinancePublicAdapter(ExchangeAdapter):
         spot_base_url: str = "https://api.binance.com",
         futures_base_url: str = "https://fapi.binance.com",
         websocket_url: str = "wss://fstream.binance.com/ws",
+        spot_websocket_url: str = "wss://stream.binance.com:9443/ws",
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
         burst: int = 8,
@@ -57,12 +72,14 @@ class BinancePublicAdapter(ExchangeAdapter):
         self.spot_base_url = spot_base_url.rstrip("/")
         self.futures_base_url = futures_base_url.rstrip("/")
         self.websocket_url = websocket_url
+        self.spot_websocket_url = spot_websocket_url
         self.timeout = timeout_seconds
         self._http = http_client
         self._owns_http = http_client is None
         self._limiter = RateLimiter(requests_per_second, burst)
         self._sleep = sleep
         self.max_reconnects = max_reconnects
+        self._funding_intervals_hours: dict[str, Decimal] = {}
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -90,8 +107,16 @@ class BinancePublicAdapter(ExchangeAdapter):
     async def get_instruments(self) -> list[NormalizedInstrument]:
         futures = await self._request(self.futures_base_url, "/fapi/v1/exchangeInfo", {})
         spot = await self._request(self.spot_base_url, "/api/v3/exchangeInfo", {})
-        if not isinstance(futures, dict) or not isinstance(spot, dict):
+        funding_info = await self._request(
+            self.futures_base_url, "/fapi/v1/fundingInfo", {}
+        )
+        if (
+            not isinstance(futures, dict)
+            or not isinstance(spot, dict)
+            or not isinstance(funding_info, list)
+        ):
             raise InvalidResponseError("Binance exchangeInfo responses must be objects")
+        self._update_funding_intervals(funding_info)
         return [self._parse_instrument(row, False) for row in futures.get("symbols", [])] + [
             self._parse_instrument(row, True) for row in spot.get("symbols", [])
         ]
@@ -132,7 +157,11 @@ class BinancePublicAdapter(ExchangeAdapter):
                 tick_size=decimal(price_filter["tickSize"], "tickSize"),
                 step_size=decimal(lot_filter["stepSize"], "stepSize"),
                 min_order_size=decimal(lot_filter["minQty"], "minQty"),
-                funding_interval=8 if instrument_type is InstrumentType.PERPETUAL else None,
+                funding_interval=(
+                    int(self._funding_intervals_hours.get(symbol, Decimal("8")))
+                    if instrument_type is InstrumentType.PERPETUAL
+                    else None
+                ),
                 expiry=expiry,
                 is_active=str(row.get("status", "TRADING")) == "TRADING",
             )
@@ -153,8 +182,9 @@ class BinancePublicAdapter(ExchangeAdapter):
         result = [
             self._parse_futures_ticker(row, premium_by_symbol.get(str(row.get("symbol"))))
             for row in futures
+            if _tradeable_ticker_row(row)
         ]
-        result.extend(self._parse_spot_ticker(row) for row in spot)
+        result.extend(self._parse_spot_ticker(row) for row in spot if _tradeable_ticker_row(row))
         return result
 
     def _parse_futures_ticker(self, row: object, premium: dict[str, Any] | None) -> Ticker:
@@ -184,25 +214,40 @@ class BinancePublicAdapter(ExchangeAdapter):
             raise InvalidResponseError("Binance spot ticker row is not an object")
         return Ticker(
             exchange=self.name,
-            symbol=str(row["symbol"]),
+            symbol=str(row.get("symbol", row.get("s"))),
             instrument_type=InstrumentType.SPOT,
-            last_price=decimal(row["lastPrice"], "lastPrice"),
-            best_bid=_opt(row.get("bidPrice"), "bidPrice"),
-            best_ask=_opt(row.get("askPrice"), "askPrice"),
-            volume_24h=decimal(row.get("quoteVolume", "0"), "quoteVolume"),
-            timestamp=_ms(row.get("closeTime", int(datetime.now(UTC).timestamp() * 1000))),
+            last_price=decimal(row.get("lastPrice", row.get("c")), "lastPrice"),
+            best_bid=_opt(row.get("bidPrice", row.get("b")), "bidPrice"),
+            best_ask=_opt(row.get("askPrice", row.get("a")), "askPrice"),
+            volume_24h=decimal(
+                row.get("quoteVolume", row.get("q", "0")), "quoteVolume"
+            ),
+            timestamp=_ms(
+                row.get(
+                    "closeTime",
+                    row.get("E", int(datetime.now(UTC).timestamp() * 1000)),
+                )
+            ),
         )
 
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         payload = await self._request(self.futures_base_url, "/fapi/v1/premiumIndex", {})
-        if not isinstance(payload, list):
-            raise InvalidResponseError("Binance premium index response must be an array")
+        funding_info = (
+            await self._request(self.futures_base_url, "/fapi/v1/fundingInfo", {})
+            if not self._funding_intervals_hours
+            else []
+        )
+        if not isinstance(payload, list) or not isinstance(funding_info, list):
+            raise InvalidResponseError("Binance funding responses must be arrays")
+        self._update_funding_intervals(funding_info)
         return [
             FundingSnapshot(
                 exchange=self.name,
                 symbol=str(row["symbol"]),
                 funding_rate=decimal(row.get("lastFundingRate", "0"), "lastFundingRate"),
-                funding_interval_hours=Decimal("8"),
+                funding_interval_hours=self._funding_intervals_hours.get(
+                    str(row["symbol"]), Decimal("8")
+                ),
                 next_funding_time=_ms(row["nextFundingTime"])
                 if row.get("nextFundingTime")
                 else None,
@@ -213,6 +258,19 @@ class BinancePublicAdapter(ExchangeAdapter):
             for row in payload
             if isinstance(row, dict)
         ]
+
+    def _update_funding_intervals(self, rows: list[object]) -> None:
+        self._funding_intervals_hours.update(
+            {
+                str(row["symbol"]): decimal(
+                    row["fundingIntervalHours"], "fundingIntervalHours"
+                )
+                for row in rows
+                if isinstance(row, dict)
+                and row.get("symbol")
+                and row.get("fundingIntervalHours") is not None
+            }
+        )
 
     async def get_funding_history(
         self, symbol: str, start: datetime, end: datetime
@@ -240,6 +298,94 @@ class BinancePublicAdapter(ExchangeAdapter):
             if isinstance(row, dict)
         ]
 
+    async def get_candles(
+        self,
+        symbol: str,
+        instrument_type: InstrumentType,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int = 60,
+    ) -> list[Candle]:
+        if start >= end:
+            raise ValueError("start must be before end")
+        base_url = (
+            self.spot_base_url
+            if instrument_type is InstrumentType.SPOT
+            else self.futures_base_url
+        )
+        path = (
+            "/api/v3/klines"
+            if instrument_type is InstrumentType.SPOT
+            else "/fapi/v1/klines"
+        )
+        start_ms = int(start.astimezone(UTC).timestamp() * 1000)
+        end_ms = int(end.astimezone(UTC).timestamp() * 1000)
+        cursor = start_ms
+        interval_ms = interval_minutes * 60 * 1000
+        interval = {
+            60: "1h",
+            120: "2h",
+            240: "4h",
+            360: "6h",
+            480: "8h",
+            720: "12h",
+            1440: "1d",
+        }.get(interval_minutes, f"{interval_minutes}m")
+        candles: dict[datetime, Candle] = {}
+        while cursor < end_ms:
+            payload = await self._request(
+                base_url,
+                path,
+                {
+                    "symbol": symbol,
+                    "interval": interval,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                    "limit": 1500,
+                },
+            )
+            if not isinstance(payload, list):
+                raise InvalidResponseError("Binance candle response must be an array")
+            batch = [
+                self._parse_candle(row, symbol, instrument_type, interval_minutes)
+                for row in payload
+            ]
+            for candle in batch:
+                if start <= candle.open_time < end and candle.is_closed:
+                    candles[candle.open_time] = candle
+            if len(batch) < 1500 or not batch:
+                break
+            next_cursor = int(max(item.open_time for item in batch).timestamp() * 1000)
+            next_cursor += interval_ms
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return [candles[key] for key in sorted(candles)]
+
+    def _parse_candle(
+        self,
+        row: object,
+        symbol: str,
+        instrument_type: InstrumentType,
+        interval_minutes: int,
+    ) -> Candle:
+        if not isinstance(row, list) or len(row) < 7:
+            raise InvalidResponseError("invalid Binance candle row")
+        return Candle(
+            exchange=self.name,
+            symbol=symbol,
+            instrument_type=instrument_type,
+            interval_minutes=interval_minutes,
+            open_time=_ms(row[0]),
+            close_time=_ms(row[6]),
+            open=decimal(row[1], "open"),
+            high=decimal(row[2], "high"),
+            low=decimal(row[3], "low"),
+            close=decimal(row[4], "close"),
+            volume=decimal(row[5], "volume"),
+            is_closed=_ms(row[6]) <= datetime.now(UTC),
+        )
+
     async def get_orderbook(
         self, symbol: str, depth: int, instrument_type: InstrumentType = InstrumentType.PERPETUAL
     ) -> OrderBook:
@@ -256,6 +402,7 @@ class BinancePublicAdapter(ExchangeAdapter):
             book = OrderBook(
                 exchange=self.name,
                 symbol=symbol,
+                instrument_type=instrument_type,
                 bids=tuple(
                     OrderBookLevel(
                         price=decimal(row[0], "bid_price"), quantity=decimal(row[1], "bid_qty")
@@ -277,21 +424,79 @@ class BinancePublicAdapter(ExchangeAdapter):
             raise InvalidResponseError(f"invalid Binance orderbook: {payload!r}") from exc
         return validate_orderbook(book)
 
-    def stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    def stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
         return self._stream_tickers(symbols)
 
-    async def _stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    async def _stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
+        groups = {
+            InstrumentType.PERPETUAL: (
+                self.websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.PERPETUAL],
+            ),
+            InstrumentType.SPOT: (
+                self.spot_websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.SPOT],
+            ),
+        }
+        queue: asyncio.Queue[Ticker | BaseException] = asyncio.Queue(maxsize=1)
+
+        async def pump(
+            url: str, requested: list[str], instrument_type: InstrumentType
+        ) -> None:
+            try:
+                async for ticker in self._stream_ticker_group(
+                    url, requested, instrument_type
+                ):
+                    await queue.put(ticker)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                await queue.put(exc)
+
+        tasks = [
+            asyncio.create_task(pump(url, requested, instrument_type))
+            for instrument_type, (url, requested) in groups.items()
+            if requested
+        ]
+        if not tasks:
+            return
+        try:
+            while True:
+                item = await queue.get()
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _stream_ticker_group(
+        self,
+        url: str,
+        symbols: list[str],
+        instrument_type: InstrumentType,
+    ) -> AsyncIterator[Ticker]:
         reconnects = 0
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
             try:
                 async with websockets.connect(
-                    self.websocket_url, ping_interval=20, ping_timeout=20
+                    url, ping_interval=20, ping_timeout=20
                 ) as socket:
                     await socket.send(
                         json.dumps(
                             {
                                 "method": "SUBSCRIBE",
-                                "params": [f"{symbol.lower()}@ticker" for symbol in symbols],
+                                "params": [
+                                    f"{symbol.lower()}@ticker"
+                                    if instrument_type is InstrumentType.SPOT
+                                    else f"{symbol.lower()}@bookTicker"
+                                    for symbol in symbols
+                                ],
                                 "id": 1,
                             }
                         )
@@ -300,11 +505,205 @@ class BinancePublicAdapter(ExchangeAdapter):
                         payload = json.loads(
                             message.decode() if isinstance(message, bytes) else message
                         )
-                        if isinstance(payload, dict) and payload.get("e") == "24hrTicker":
-                            yield self._parse_futures_ticker(payload, None)
+                        if not isinstance(payload, dict):
+                            continue
+                        if (
+                            instrument_type is InstrumentType.SPOT
+                            and payload.get("e") == "24hrTicker"
+                        ):
+                            yield self._parse_spot_ticker(payload)
+                        elif (
+                            instrument_type is InstrumentType.PERPETUAL
+                            and payload.get("e") == "bookTicker"
+                        ):
+                            yield self._parse_futures_book_ticker(payload)
                 reconnects = 0
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("Binance WebSocket reconnect limit reached") from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    def _parse_futures_book_ticker(self, payload: object) -> Ticker:
+        if not isinstance(payload, dict):
+            raise InvalidResponseError("invalid Binance futures book ticker payload")
+        try:
+            bid = decimal(payload["b"], "bid_price")
+            ask = decimal(payload["a"], "ask_price")
+            return Ticker(
+                exchange=self.name,
+                symbol=str(payload["s"]),
+                instrument_type=InstrumentType.PERPETUAL,
+                last_price=(bid + ask) / Decimal("2"),
+                best_bid=bid,
+                best_ask=ask,
+                volume_24h=Decimal("0"),
+                timestamp=_ms(payload.get("E", payload.get("T"))),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidResponseError(
+                f"invalid Binance futures book ticker: {payload!r}"
+            ) from exc
+
+    def stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int = 20,
+    ) -> AsyncIterator[OrderBook]:
+        return self._stream_orderbooks(symbols, depth)
+
+    async def _stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int,
+    ) -> AsyncIterator[OrderBook]:
+        groups = {
+            InstrumentType.PERPETUAL: (
+                self.websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.PERPETUAL],
+            ),
+            InstrumentType.SPOT: (
+                self.spot_websocket_url,
+                [symbol for symbol, kind in symbols if kind is InstrumentType.SPOT],
+            ),
+        }
+        queue: asyncio.Queue[OrderBook | BaseException] = asyncio.Queue()
+
+        async def pump(
+            url: str, requested: list[str], instrument_type: InstrumentType
+        ) -> None:
+            try:
+                async for book in self._stream_orderbook_group(
+                    url, requested, instrument_type, depth
+                ):
+                    await queue.put(book)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                await queue.put(exc)
+
+        tasks = [
+            asyncio.create_task(pump(url, requested, instrument_type))
+            for instrument_type, (url, requested) in groups.items()
+            if requested
+        ]
+        if not tasks:
+            return
+        try:
+            while True:
+                item = await queue.get()
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _stream_orderbook_group(
+        self,
+        url: str,
+        symbols: list[str],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> AsyncIterator[OrderBook]:
+        reconnects = 0
+        stream_depth = 20 if depth > 10 else 10 if depth > 5 else 5
+        spot = instrument_type is InstrumentType.SPOT
+        connection_url = url
+        if spot:
+            streams = "/".join(
+                f"{symbol.lower()}@depth{stream_depth}@100ms" for symbol in symbols
+            )
+            connection_url = f"{url.removesuffix('/ws')}/stream?streams={streams}"
+        while self.max_reconnects is None or reconnects <= self.max_reconnects:
+            try:
+                async with websockets.connect(
+                    connection_url, ping_interval=20, ping_timeout=20
+                ) as socket:
+                    if not spot:
+                        await socket.send(
+                            json.dumps(
+                                {
+                                    "method": "SUBSCRIBE",
+                                    "params": [
+                                        f"{symbol.lower()}@depth{stream_depth}@100ms"
+                                        for symbol in symbols
+                                    ],
+                                    "id": 2,
+                                }
+                            )
+                        )
+                    async for message in socket:
+                        payload = json.loads(
+                            message.decode() if isinstance(message, bytes) else message
+                        )
+                        if isinstance(payload, dict) and payload.get("code") is not None:
+                            raise InvalidResponseError(
+                                f"Binance orderbook subscription failed: {payload}"
+                            )
+                        if not isinstance(payload, dict):
+                            continue
+                        if spot and isinstance(payload.get("data"), dict):
+                            stream = str(payload.get("stream", ""))
+                            payload = dict(payload["data"])
+                            payload["s"] = stream.partition("@")[0].upper()
+                        is_update = (
+                            "lastUpdateId" in payload
+                            if spot
+                            else payload.get("e") == "depthUpdate"
+                        )
+                        if not is_update:
+                            continue
+                        reconnects = 0
+                        yield self._parse_ws_orderbook(payload, instrument_type, depth)
+            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
+                reconnects += 1
+                if self.max_reconnects is not None and reconnects > self.max_reconnects:
+                    raise NetworkError(
+                        "Binance orderbook WebSocket reconnect limit reached"
+                    ) from exc
+                await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    def _parse_ws_orderbook(
+        self,
+        payload: object,
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> OrderBook:
+        if not isinstance(payload, dict):
+            raise InvalidResponseError("invalid Binance WebSocket orderbook payload")
+        try:
+            spot = instrument_type is InstrumentType.SPOT
+            bid_rows = payload["bids"] if spot else payload["b"]
+            ask_rows = payload["asks"] if spot else payload["a"]
+            book = OrderBook(
+                exchange=self.name,
+                symbol=str(payload.get("s", "")),
+                instrument_type=instrument_type,
+                bids=tuple(
+                    OrderBookLevel(
+                        price=decimal(row[0], "bid_price"),
+                        quantity=decimal(row[1], "bid_quantity"),
+                    )
+                    for row in bid_rows[:depth]
+                    if decimal(row[1], "bid_quantity") > 0
+                ),
+                asks=tuple(
+                    OrderBookLevel(
+                        price=decimal(row[0], "ask_price"),
+                        quantity=decimal(row[1], "ask_quantity"),
+                    )
+                    for row in ask_rows[:depth]
+                    if decimal(row[1], "ask_quantity") > 0
+                ),
+                timestamp=_ms(payload["E"]) if not spot else datetime.now(UTC),
+                sequence=int(payload["lastUpdateId"] if spot else payload["u"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidResponseError(
+                f"invalid Binance WebSocket orderbook: {payload!r}"
+            ) from exc
+        return validate_orderbook(book)

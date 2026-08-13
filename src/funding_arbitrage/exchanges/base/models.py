@@ -84,6 +84,18 @@ class FundingSnapshot(BaseModel):
     index_price: Decimal | None = None
     timestamp: datetime
 
+    @field_validator("timestamp")
+    @classmethod
+    def normalize_timestamp(cls, value: datetime) -> datetime:
+        return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+
+    @field_validator("next_funding_time")
+    @classmethod
+    def normalize_next_funding_time(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+
     @property
     def funding_rate_daily(self) -> Decimal:
         return self.funding_rate * Decimal("24") / self.funding_interval_hours
@@ -102,6 +114,41 @@ class FundingHistoryPoint(BaseModel):
     funding_timestamp: datetime
     mark_price: Decimal | None = None
 
+    @field_validator("funding_timestamp")
+    @classmethod
+    def normalize_funding_timestamp(cls, value: datetime) -> datetime:
+        return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+
+
+class Candle(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    exchange: str
+    symbol: str
+    instrument_type: InstrumentType
+    interval_minutes: int = Field(gt=0)
+    open_time: datetime
+    close_time: datetime
+    open: Decimal = Field(gt=0)
+    high: Decimal = Field(gt=0)
+    low: Decimal = Field(gt=0)
+    close: Decimal = Field(gt=0)
+    volume: Decimal = Field(ge=0)
+    is_closed: bool = True
+
+    @field_validator("open_time", "close_time")
+    @classmethod
+    def normalize_candle_timestamp(cls, value: datetime) -> datetime:
+        return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+
+    def model_post_init(self, __context: object) -> None:
+        if self.close_time <= self.open_time:
+            raise ValueError("candle close_time must be after open_time")
+        if self.high < max(self.open, self.low, self.close):
+            raise ValueError("candle high is below OHLC values")
+        if self.low > min(self.open, self.high, self.close):
+            raise ValueError("candle low is above OHLC values")
+
 
 class OrderBookLevel(BaseModel):
     price: Decimal = Field(gt=0)
@@ -113,6 +160,7 @@ class OrderBook(BaseModel):
 
     exchange: str
     symbol: str
+    instrument_type: InstrumentType = InstrumentType.PERPETUAL
     bids: tuple[OrderBookLevel, ...]
     asks: tuple[OrderBookLevel, ...]
     timestamp: datetime

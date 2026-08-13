@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.execution.base import PaperFill
 
 
@@ -27,12 +28,24 @@ class PnLBreakdown(BaseModel):
     price_pnl_leg_a: Decimal = Decimal("0")
     price_pnl_leg_b: Decimal = Decimal("0")
     fees: Decimal = Decimal("0")
+    spread: Decimal = Decimal("0")
     slippage: Decimal = Decimal("0")
     borrow_cost: Decimal = Decimal("0")
+    legging_cost: Decimal = Decimal("0")
 
     @property
     def total_pnl(self) -> Decimal:
-        return sum(self.model_dump().values(), Decimal("0"))
+        return (
+            self.funding_pnl
+            + self.basis_pnl
+            + self.price_pnl_leg_a
+            + self.price_pnl_leg_b
+            - self.fees
+            - self.spread
+            - self.slippage
+            - self.borrow_cost
+            - self.legging_cost
+        )
 
 
 class PaperPosition(BaseModel):
@@ -40,6 +53,12 @@ class PaperPosition(BaseModel):
     opportunity_id: str
     asset: str
     capital: Decimal = Field(gt=0)
+    strategy: str | None = None
+    simulation_version: str = "v1-legacy"
+    entry_net_edge: Decimal = Decimal("0")
+    entry_basis_percent: Decimal = Decimal("0")
+    leg_a_type: InstrumentType | None = None
+    leg_b_type: InstrumentType | None = None
     state: PositionState = PositionState.DETECTED
     leg_a: PaperFill | None = None
     leg_b: PaperFill | None = None
@@ -47,6 +66,11 @@ class PaperPosition(BaseModel):
     close_leg_b: PaperFill | None = None
     pnl: PnLBreakdown = Field(default_factory=PnLBreakdown)
     legging_risk: Decimal = Decimal("0")
+    target_settlements: tuple[datetime, ...] = ()
+    funding_events: int = Field(default=0, ge=0)
+    edge_miss_count: int = Field(default=0, ge=0)
+    borrow_rate_daily: Decimal = Field(default=Decimal("0"), ge=0)
+    borrow_accrued_until: datetime | None = None
     opened_at: datetime | None = None
     closed_at: datetime | None = None
     allocated_venues: tuple[str, ...] = ()

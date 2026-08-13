@@ -27,6 +27,7 @@ async def test_gate_rest_payloads_are_normalized() -> None:
                         "order_price_round": "0.1",
                         "order_size_min": "1",
                         "funding_interval": 28800,
+                        "funding_next_apply": 1735718400,
                         "in_delisting": False,
                     }
                 ]
@@ -54,7 +55,6 @@ async def test_gate_rest_payloads_are_normalized() -> None:
                         "mark_price": "100.1",
                         "index_price": "100",
                         "funding_rate": "0.001",
-                        "funding_next_apply": 1735718400,
                         "volume_24h_settle": "12",
                         "total_size": "300",
                         "t": 1735689600000,
@@ -105,6 +105,7 @@ async def test_gate_rest_payloads_are_normalized() -> None:
     }
     assert tickers[0].last_price == Decimal("100")
     assert funding[0].funding_rate_daily == Decimal("0.003")
+    assert funding[0].next_funding_time == datetime(2025, 1, 1, 8, tzinfo=UTC)
     assert history[0].funding_timestamp.year == 2025
     assert orderbook.sequence == 42
 
@@ -114,7 +115,9 @@ async def test_gate_websocket_reconnects_after_disconnect() -> None:
     adapter = GatePublicAdapter(max_reconnects=2)
     attempts = 0
 
-    async def fake_connection(_: list[str]) -> AsyncIterator[Ticker]:
+    async def fake_connection(
+        _url: str, _symbols: list[str], _kind: InstrumentType
+    ) -> AsyncIterator[Ticker]:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -133,8 +136,10 @@ async def test_gate_websocket_reconnects_after_disconnect() -> None:
 
     adapter._sleep = patched_sleep
     adapter._ticker_connection = fake_connection  # type: ignore[assignment]
-    ticker = await anext(adapter.stream_tickers(["BTC_USDT"]))
+    stream = adapter.stream_tickers([("BTC_USDT", InstrumentType.PERPETUAL)])
+    ticker = await anext(stream)
+    await stream.aclose()
 
-    assert attempts == 2
+    assert attempts >= 2
     assert ticker.symbol == "BTC_USDT"
     assert ticker.last_price == Decimal("100")

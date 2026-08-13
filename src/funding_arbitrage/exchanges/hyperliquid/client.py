@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -19,6 +19,7 @@ from funding_arbitrage.exchanges.base.exceptions import (
 )
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.base.models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     InstrumentType,
@@ -29,6 +30,13 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
+from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
+
+
+def _ms(value: object) -> datetime:
+    return datetime.fromtimestamp(
+        float(decimal(value, "timestamp") / Decimal("1000")), tz=UTC
+    )
 
 
 class HyperliquidPublicAdapter(ExchangeAdapter):
@@ -144,6 +152,10 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         universe, contexts = await self._meta_contexts()
         result: list[FundingSnapshot] = []
+        timestamp = datetime.now(UTC)
+        next_funding_time = timestamp.replace(
+            minute=0, second=0, microsecond=0
+        ) + timedelta(hours=1)
         for row, context in zip(universe, contexts, strict=False):
             if context.get("funding") in (None, ""):
                 continue
@@ -153,13 +165,14 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
                     symbol=str(row["name"]),
                     funding_rate=decimal(context["funding"], "funding"),
                     funding_interval_hours=Decimal("1"),
+                    next_funding_time=next_funding_time,
                     mark_price=decimal(context["markPx"], "markPx")
                     if context.get("markPx")
                     else None,
                     index_price=decimal(context["oraclePx"], "oraclePx")
                     if context.get("oraclePx")
                     else None,
-                    timestamp=datetime.now(UTC),
+                    timestamp=timestamp,
                 )
             )
         return result
@@ -167,28 +180,102 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
     async def get_funding_history(
         self, symbol: str, start: datetime, end: datetime
     ) -> list[FundingHistoryPoint]:
+        if start >= end:
+            raise ValueError("start must be before end")
+        cursor = int(start.astimezone(UTC).timestamp() * 1000)
+        end_ms = int(end.astimezone(UTC).timestamp() * 1000)
+        result: dict[datetime, FundingHistoryPoint] = {}
+        while cursor <= end_ms:
+            payload = await self._info(
+                {
+                    "type": "fundingHistory",
+                    "coin": symbol,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                }
+            )
+            if not isinstance(payload, list):
+                raise InvalidResponseError("invalid Hyperliquid funding history response")
+            batch = [
+                FundingHistoryPoint(
+                    exchange=self.name,
+                    symbol=symbol,
+                    funding_rate=decimal(row["fundingRate"], "fundingRate"),
+                    funding_timestamp=_ms(row["time"]),
+                )
+                for row in payload
+                if isinstance(row, dict)
+            ]
+            for point in batch:
+                if start <= point.funding_timestamp <= end:
+                    result[point.funding_timestamp] = point
+            if len(batch) < 500 or not batch:
+                break
+            next_cursor = int(
+                max(item.funding_timestamp for item in batch).timestamp() * 1000
+            ) + 1
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return [result[key] for key in sorted(result)]
+
+    async def get_candles(
+        self,
+        symbol: str,
+        instrument_type: InstrumentType,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int = 60,
+    ) -> list[Candle]:
+        if start >= end:
+            raise ValueError("start must be before end")
+        interval = "1h" if interval_minutes == 60 else f"{interval_minutes}m"
         payload = await self._info(
             {
-                "type": "fundingHistory",
-                "coin": symbol,
-                "startTime": int(start.timestamp() * 1000),
-                "endTime": int(end.timestamp() * 1000),
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": symbol,
+                    "interval": interval,
+                    "startTime": int(start.astimezone(UTC).timestamp() * 1000),
+                    "endTime": int(end.astimezone(UTC).timestamp() * 1000),
+                },
             }
         )
         if not isinstance(payload, list):
-            raise InvalidResponseError("invalid Hyperliquid funding history response")
-        return [
-            FundingHistoryPoint(
-                exchange=self.name,
-                symbol=symbol,
-                funding_rate=decimal(row["fundingRate"], "fundingRate"),
-                funding_timestamp=datetime.fromtimestamp(
-                    float(decimal(row["time"], "time") / Decimal("1000")), tz=UTC
-                ),
-            )
+            raise InvalidResponseError("invalid Hyperliquid candle response")
+        candles = [
+            self._parse_candle(row, symbol, instrument_type, interval_minutes)
             for row in payload
-            if isinstance(row, dict)
         ]
+        return [
+            candle
+            for candle in sorted(candles, key=lambda item: item.open_time)
+            if start <= candle.open_time < end and candle.is_closed
+        ]
+
+    def _parse_candle(
+        self,
+        row: object,
+        symbol: str,
+        instrument_type: InstrumentType,
+        interval_minutes: int,
+    ) -> Candle:
+        if not isinstance(row, dict):
+            raise InvalidResponseError("invalid Hyperliquid candle row")
+        return Candle(
+            exchange=self.name,
+            symbol=symbol,
+            instrument_type=instrument_type,
+            interval_minutes=interval_minutes,
+            open_time=_ms(row["t"]),
+            close_time=_ms(row["T"]),
+            open=decimal(row["o"], "open"),
+            high=decimal(row["h"], "high"),
+            low=decimal(row["l"], "low"),
+            close=decimal(row["c"], "close"),
+            volume=decimal(row["v"], "volume"),
+            is_closed=_ms(row["T"]) <= datetime.now(UTC),
+        )
 
     async def get_orderbook(
         self, symbol: str, depth: int, instrument_type: InstrumentType = InstrumentType.PERPETUAL
@@ -213,6 +300,7 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
             book = OrderBook(
                 exchange=self.name,
                 symbol=symbol,
+                instrument_type=instrument_type,
                 bids=bids,
                 asks=asks,
                 timestamp=datetime.now(UTC),
@@ -222,17 +310,22 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
             raise InvalidResponseError(f"invalid Hyperliquid orderbook: {payload!r}") from exc
         return validate_orderbook(book)
 
-    def stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    def stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
         return self._stream_tickers(symbols)
 
-    async def _stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]:
+    async def _stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]:
+        instrument_types = dict(symbols)
         reconnects = 0
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
             try:
                 async with websockets.connect(
                     self.websocket_url, ping_interval=20, ping_timeout=20
                 ) as socket:
-                    if symbols:
+                    if instrument_types:
                         await socket.send(
                             json.dumps({"method": "subscribe", "subscription": {"type": "allMids"}})
                         )
@@ -244,17 +337,117 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
                             continue
                         mids = payload.get("data", {}).get("mids", {})
                         for symbol, price in mids.items():
-                            if not symbols or symbol in symbols:
+                            instrument_type = instrument_types.get(symbol)
+                            if instrument_type is not None:
                                 yield Ticker(
                                     exchange=self.name,
                                     symbol=symbol,
-                                    instrument_type=InstrumentType.PERPETUAL,
+                                    instrument_type=instrument_type,
                                     last_price=decimal(price, "mid"),
                                     timestamp=datetime.now(UTC),
                                 )
                 reconnects = 0
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("Hyperliquid WebSocket reconnect limit reached") from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    def stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int = 20,
+    ) -> AsyncIterator[OrderBook]:
+        return self._stream_orderbooks(symbols, depth)
+
+    async def _stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int,
+    ) -> AsyncIterator[OrderBook]:
+        if not symbols:
+            return
+        instrument_types = dict(symbols)
+        reconnects = 0
+        while self.max_reconnects is None or reconnects <= self.max_reconnects:
+            try:
+                async with websockets.connect(
+                    self.websocket_url, ping_interval=20, ping_timeout=20
+                ) as socket:
+                    for symbol in instrument_types:
+                        await socket.send(
+                            json.dumps(
+                                {
+                                    "method": "subscribe",
+                                    "subscription": {"type": "l2Book", "coin": symbol},
+                                }
+                            )
+                        )
+                    async for message in socket:
+                        payload = json.loads(
+                            message.decode() if isinstance(message, bytes) else message
+                        )
+                        if not (
+                            isinstance(payload, dict)
+                            and payload.get("channel") == "l2Book"
+                        ):
+                            continue
+                        data = payload.get("data")
+                        if not isinstance(data, dict):
+                            raise InvalidResponseError(
+                                "invalid Hyperliquid WebSocket orderbook payload"
+                            )
+                        symbol = str(data.get("coin", ""))
+                        instrument_type = instrument_types.get(symbol)
+                        if instrument_type is None:
+                            continue
+                        reconnects = 0
+                        yield self._parse_ws_orderbook(
+                            data, instrument_type, depth
+                        )
+            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                websocket_reconnects_total.labels(self.name).inc()
+                reconnects += 1
+                if self.max_reconnects is not None and reconnects > self.max_reconnects:
+                    raise NetworkError(
+                        "Hyperliquid orderbook WebSocket reconnect limit reached"
+                    ) from exc
+                await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    def _parse_ws_orderbook(
+        self,
+        payload: object,
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> OrderBook:
+        if not isinstance(payload, dict):
+            raise InvalidResponseError("invalid Hyperliquid WebSocket orderbook payload")
+        try:
+            levels = payload["levels"]
+            book = OrderBook(
+                exchange=self.name,
+                symbol=str(payload["coin"]),
+                instrument_type=instrument_type,
+                bids=tuple(
+                    OrderBookLevel(
+                        price=decimal(row["px"], "bid_price"),
+                        quantity=decimal(row["sz"], "bid_quantity"),
+                    )
+                    for row in levels[0][:depth]
+                ),
+                asks=tuple(
+                    OrderBookLevel(
+                        price=decimal(row["px"], "ask_price"),
+                        quantity=decimal(row["sz"], "ask_quantity"),
+                    )
+                    for row in levels[1][:depth]
+                ),
+                timestamp=_ms(payload["time"]),
+                sequence=int(payload["time"]),
+            )
+        except (IndexError, KeyError, TypeError, ValueError) as exc:
+            raise InvalidResponseError(
+                f"invalid Hyperliquid WebSocket orderbook: {payload!r}"
+            ) from exc
+        return validate_orderbook(book)
