@@ -80,7 +80,7 @@ an SSH tunnel such as `ssh -L 8000:127.0.0.1:8000 user@vm`, then open
 
 ## PnL-correct comparison mode
 
-The clean shared-feed OOS candidate is versioned as `v22-oos-candidate`. It requires typed,
+The clean shared-feed OOS candidate is versioned as `v23-oos-candidate`. It requires typed,
 fresh order books for both legs, closes the exact opened quantity, applies the
 taker fee of each venue, and separates legacy results from the current equity
 curve. A deterministic adverse second-leg move is charged in signal sizing,
@@ -112,7 +112,7 @@ profiles share PostgreSQL but restore and report only their own
 
 ```text
 GET  /analytics/compare
-GET  /analytics/attribution?simulation_version=v22-oos-candidate
+GET  /analytics/attribution?simulation_version=v23-oos-candidate
 POST /backtests/replay-paper
 POST /backtests/compare-market
 POST /backtests/compare-market/jobs

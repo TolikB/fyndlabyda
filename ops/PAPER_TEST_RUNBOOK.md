@@ -38,8 +38,9 @@ shared-feed comparison in `.env`:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
-PAPER_SIMULATION_VERSION=v22-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v22-oos-baseline
+PAPER_AUTOTRADE_START_UTC=2026-08-13T20:00:00Z
+PAPER_SIMULATION_VERSION=v23-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v23-oos-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -57,7 +58,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v22-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v23-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -68,22 +69,22 @@ funding payments, closed positions, fees, and the equity curve.
 
 ## Current VM acceptance gates
 
-The restart-safe, pre-market-filtered v22 canary starts with release
-`funding-pnl-v2-20260813-058`. Its clean evidence boundary is
-`2026-08-13T19:30:00Z`; use that exact timestamp as
-`<V22_DURABLE_START_UTC>` below. Run the read-only audit from the project
+The restart-safe, pre-market-filtered v23 canary starts with release
+`funding-pnl-v2-20260813-059`. Its clean evidence boundary and enforced
+autotrade boundary are both `2026-08-13T20:00:00Z`; use that exact timestamp as
+`<V23_DURABLE_START_UTC>` below. Run the read-only audit from the project
 directory after the relevant deadline:
 
 ```bash
-# Earliest useful run: 2026-08-16T19:30:00Z.
+# Earliest useful run: 2026-08-16T20:00:00Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V22_DURABLE_START_UTC> \
+  --start <V23_DURABLE_START_UTC> \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 2026-09-12T19:30:00Z.
+# Earliest useful run: 2026-09-12T20:00:00Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V22_DURABLE_START_UTC> \
+  --start <V23_DURABLE_START_UTC> \
   --gate acceptance \
   --timeout 45
 ```
@@ -152,6 +153,8 @@ be intentionally deleted.
 - `PAPER_MAX_OPEN_POSITIONS`: portfolio cap.
 - `PAPER_SIMULATION_VERSION`: durable ledger namespace; never reuse it for a
   materially different accounting model.
+- `PAPER_AUTOTRADE_START_UTC`: timezone-aware shared OOS boundary. Market data
+  warms before this time, but neither portfolio may open a position before it.
 - `PAPER_STRATEGY_PROFILE`: `candidate` for robust schedules/dynamic allocation
   or `baseline` for corrected fixed-size comparison.
 - `PAPER_COMPARISON_ENABLED`: run an isolated baseline ledger beside the

@@ -729,3 +729,22 @@ async def test_paper_autotrade_false_does_not_call_open(monkeypatch: pytest.Monk
     runner._open_confirmed.assert_not_awaited()  # type: ignore[attr-defined]
     for adapter in adapters.values():
         await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_paper_autotrade_waits_for_explicit_utc_boundary() -> None:
+    boundary = datetime(2026, 8, 13, 20, tzinfo=UTC)
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_autotrade=True,
+        paper_autotrade_start_utc=boundary,
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(settings, runtime, object())  # type: ignore[arg-type]
+
+    assert not runner._autotrade_enabled(boundary - timedelta(microseconds=1))
+    assert runner._autotrade_enabled(boundary)
+    for adapter in adapters.values():
+        await adapter.close()

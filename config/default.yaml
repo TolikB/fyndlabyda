@@ -52,6 +52,7 @@ paper_portfolio:
   legging_move_percent: 0.0002
   correlation_groups: BTC,ETH,SOL;DOGE,SHIB,PEPE,WIF,BONK,FLOKI,TUT
   autotrade: false
+  autotrade_start_utc: null
   loop_interval_seconds: 10
   confirmation_seconds: 30
   max_hold_seconds: 900
@@ -63,10 +64,10 @@ paper_portfolio:
   market_asset_limit: 12
   history_symbol_limit: 5
   market_persist_interval_seconds: 300
-  simulation_version: v22-oos-candidate
+  simulation_version: v23-oos-candidate
   strategy_profile: candidate
   comparison_enabled: false
-  baseline_simulation_version: v22-oos-baseline
+  baseline_simulation_version: v23-oos-baseline
   exit_edge_miss_cycles: 2
   funding_horizon_hours: 24
   entry_window_hours: 2

@@ -181,7 +181,36 @@ async def test_database_replay_loads_restart_safe_runtime_incident_count() -> No
     )
 
     assert dataset.runtime_incident_count == 2
-    assert dataset.dataset_version.endswith("-i2")
+    assert dataset.dataset_version.endswith("-i2-c0")
+
+
+@pytest.mark.asyncio
+async def test_database_replay_detects_position_carried_across_boundary() -> None:
+    start = datetime(2026, 8, 11, tzinfo=UTC)
+    snapshots = [
+        PortfolioSnapshotRecord(
+            timestamp=start,
+            simulation_version="candidate",
+            equity=Decimal("1000"),
+            cash=Decimal("1000"),
+            locked_capital=Decimal("0"),
+            total_pnl=Decimal("0"),
+            funding_pnl=Decimal("0"),
+            fees=Decimal("0"),
+            balances={},
+        )
+    ]
+    session = _ReplaySession(
+        [snapshots, []],
+        scalar_values=[None, 0, 1],
+    )
+
+    dataset = await DatabasePaperReplay().load(  # type: ignore[arg-type]
+        session, "candidate", start
+    )
+
+    assert dataset.carry_in_position_count == 1
+    assert dataset.dataset_version.endswith("-i0-c1")
 
 
 @pytest.mark.asyncio

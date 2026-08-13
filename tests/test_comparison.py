@@ -121,3 +121,22 @@ def test_durable_runtime_incident_invalidates_canary_and_acceptance_evidence() -
     assert result["checks"]["runtime_incidents_zero"] is False
     assert result["evidence_ready"] is False
     assert result["accepted"] is False
+
+
+def test_position_opened_before_boundary_invalidates_oos_evidence() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=31)
+    timestamps = (start, start + timedelta(seconds=30), end)
+    baseline = replace(
+        _observed_dataset("baseline", start, end, timestamps),
+        carry_in_position_count=1,
+    )
+    candidate = _observed_dataset("candidate", start, end, timestamps)
+
+    result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+
+    assert result["canary"]["checks"]["no_carry_in_positions"] is False
+    assert result["canary"]["ready"] is False
+    assert result["checks"]["no_carry_in_positions"] is False
+    assert result["evidence_ready"] is False
+    assert result["accepted"] is False

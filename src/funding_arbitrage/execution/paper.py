@@ -20,7 +20,7 @@ class PaperTradingExecutor:
         fee_rate: Decimal = Decimal("0"),
         fees: dict[str, Decimal] | None = None,
         stale_seconds: int = 30,
-        simulation_version: str = "v22-oos-candidate",
+        simulation_version: str = "v23-oos-candidate",
         legging_move_percent: Decimal = Decimal("0"),
     ) -> None:
         self.fee_rate = fee_rate

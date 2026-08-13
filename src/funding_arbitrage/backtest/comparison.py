@@ -103,6 +103,10 @@ def compare_paper_datasets(
         baseline.runtime_incident_count == 0
         and candidate.runtime_incident_count == 0
     )
+    no_carry_in_positions = (
+        baseline.carry_in_position_count == 0
+        and candidate.carry_in_position_count == 0
+    )
     has_snapshot_evidence = bool(
         baseline.snapshot_timestamps and candidate.snapshot_timestamps
     )
@@ -146,6 +150,7 @@ def compare_paper_datasets(
             has_snapshot_evidence and maximum_gap <= Decimal("300")
         ),
         "runtime_incidents_zero": runtime_incidents_zero,
+        "no_carry_in_positions": no_carry_in_positions,
     }
     checks = {
         "net_pnl_at_least_10_percent_better": ten_percent_better,
@@ -161,6 +166,7 @@ def compare_paper_datasets(
         "accounting_reconciled": accounting_reconciled,
         "exact_shared_timestamps": exact_shared_timestamps,
         "runtime_incidents_zero": runtime_incidents_zero,
+        "no_carry_in_positions": no_carry_in_positions,
     }
     return {
         "evidence_ready": (
@@ -168,6 +174,7 @@ def compare_paper_datasets(
             and checks["accounting_reconciled"]
             and checks["exact_shared_timestamps"]
             and checks["runtime_incidents_zero"]
+            and checks["no_carry_in_positions"]
         ),
         "accepted": all(checks.values()),
         "evidence_days": str(evidence_days),
@@ -199,6 +206,8 @@ def compare_paper_datasets(
             ),
             "baseline_runtime_incident_count": baseline.runtime_incident_count,
             "candidate_runtime_incident_count": candidate.runtime_incident_count,
+            "baseline_carry_in_position_count": baseline.carry_in_position_count,
+            "candidate_carry_in_position_count": candidate.carry_in_position_count,
         },
         "canary": {
             "ready": all(canary_checks.values()),

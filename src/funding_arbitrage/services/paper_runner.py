@@ -340,7 +340,7 @@ class PaperTestRunner:
         self._accrue_borrow(snapshot.captured_at)
         await self._settle_funding(snapshot)
         await self._close_expired(snapshot)
-        if self.settings.paper_autotrade:
+        if self._autotrade_enabled(snapshot.captured_at):
             await self._open_confirmed(opportunities, snapshot)
         paper_runner_stage_duration_seconds.labels("paper_execution").observe(
             time.monotonic() - stage_started
@@ -352,6 +352,10 @@ class PaperTestRunner:
         paper_runner_stage_duration_seconds.labels("portfolio_persist").observe(
             time.monotonic() - stage_started
         )
+
+    def _autotrade_enabled(self, now: datetime) -> bool:
+        start = self.settings.paper_autotrade_start_utc
+        return self.settings.paper_autotrade and (start is None or now >= start)
 
     async def _restore_positions(self) -> None:
         async with self.session_factory() as session:

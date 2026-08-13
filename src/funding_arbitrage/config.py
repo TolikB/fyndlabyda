@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -80,6 +81,9 @@ class Settings(BaseSettings):
         alias="PAPER_CORRELATION_GROUPS",
     )
     paper_autotrade: bool = Field(default=False, alias="PAPER_AUTOTRADE")
+    paper_autotrade_start_utc: datetime | None = Field(
+        default=None, alias="PAPER_AUTOTRADE_START_UTC"
+    )
     paper_loop_interval_seconds: float = Field(
         default=10.0, alias="PAPER_LOOP_INTERVAL_SECONDS"
     )
@@ -107,7 +111,7 @@ class Settings(BaseSettings):
         default=False, alias="PAPER_AUTO_INIT_DATABASE"
     )
     paper_simulation_version: str = Field(
-        default="v22-oos-candidate", alias="PAPER_SIMULATION_VERSION"
+        default="v23-oos-candidate", alias="PAPER_SIMULATION_VERSION"
     )
     paper_strategy_profile: Literal["baseline", "candidate"] = Field(
         default="candidate", alias="PAPER_STRATEGY_PROFILE"
@@ -116,7 +120,7 @@ class Settings(BaseSettings):
         default=False, alias="PAPER_COMPARISON_ENABLED"
     )
     paper_baseline_simulation_version: str = Field(
-        default="v22-oos-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
+        default="v23-oos-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
     )
     paper_exit_edge_miss_cycles: int = Field(
         default=2, alias="PAPER_EXIT_EDGE_MISS_CYCLES"
@@ -295,6 +299,7 @@ def get_settings() -> Settings:
             "legging_move_percent": "paper_legging_move_percent",
             "correlation_groups": "paper_correlation_groups",
             "autotrade": "paper_autotrade",
+            "autotrade_start_utc": "paper_autotrade_start_utc",
             "loop_interval_seconds": "paper_loop_interval_seconds",
             "confirmation_seconds": "paper_confirmation_seconds",
             "max_hold_seconds": "paper_max_hold_seconds",
@@ -343,6 +348,11 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError("paper_test requires mock or live_public market data")
     if settings.paper_loop_interval_seconds <= 0:
         raise ValueError("PAPER_LOOP_INTERVAL_SECONDS must be positive")
+    if (
+        settings.paper_autotrade_start_utc is not None
+        and settings.paper_autotrade_start_utc.utcoffset() is None
+    ):
+        raise ValueError("PAPER_AUTOTRADE_START_UTC must include a timezone")
     if settings.paper_settlement_interval_seconds <= 0:
         raise ValueError("PAPER_SETTLEMENT_INTERVAL_SECONDS must be positive")
     if settings.paper_max_hold_seconds <= 0:

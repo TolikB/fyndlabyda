@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.backtest.events import (
@@ -40,6 +40,7 @@ class PaperReplayDataset:
     max_accounting_invariant_error: Decimal = Decimal("0")
     snapshot_pnl_delta: Decimal | None = None
     runtime_incident_count: int = 0
+    carry_in_position_count: int = 0
 
 
 class DatabasePaperReplay:
@@ -76,6 +77,21 @@ class DatabasePaperReplay:
                 PaperRuntimeIncidentRecord.occurred_at < end
             )
         runtime_incident_count = int(await session.scalar(incident_statement) or 0)
+        carry_in_position_count = 0
+        if start is not None:
+            carry_in_position_count = int(
+                await session.scalar(
+                    select(func.count(PaperPositionRecord.id)).where(
+                        PaperPositionRecord.simulation_version == simulation_version,
+                        PaperPositionRecord.opened_at < start,
+                        or_(
+                            PaperPositionRecord.closed_at.is_(None),
+                            PaperPositionRecord.closed_at >= start,
+                        ),
+                    )
+                )
+                or 0
+            )
         snapshot_statement = (
             select(PortfolioSnapshotRecord)
             .where(PortfolioSnapshotRecord.simulation_version == simulation_version)
@@ -145,6 +161,7 @@ class DatabasePaperReplay:
                     0,
                     len(snapshots),
                     runtime_incident_count,
+                    carry_in_position_count,
                 ),
                 attribution={"strategy": {}, "exchange": {}, "asset": {}},
                 position_count=0,
@@ -155,6 +172,7 @@ class DatabasePaperReplay:
                 max_accounting_invariant_error=max_invariant_error,
                 snapshot_pnl_delta=snapshot_pnl_delta,
                 runtime_incident_count=runtime_incident_count,
+                carry_in_position_count=carry_in_position_count,
             )
 
         position_ids = tuple(positions)
@@ -355,6 +373,7 @@ class DatabasePaperReplay:
                 len(funding),
                 len(snapshots),
                 runtime_incident_count,
+                carry_in_position_count,
             ),
             attribution=attribution,
             position_count=len(rows),
@@ -365,6 +384,7 @@ class DatabasePaperReplay:
             max_accounting_invariant_error=max_invariant_error,
             snapshot_pnl_delta=snapshot_pnl_delta,
             runtime_incident_count=runtime_incident_count,
+            carry_in_position_count=carry_in_position_count,
         )
 
     @staticmethod
@@ -387,6 +407,7 @@ class DatabasePaperReplay:
         funding: int,
         snapshots: int,
         runtime_incidents: int,
+        carry_in_positions: int,
     ) -> str:
         return ":".join(
             (
@@ -396,7 +417,7 @@ class DatabasePaperReplay:
                 end.isoformat() if end else "latest",
                 (
                     f"p{positions}-f{fills}-u{funding}-s{snapshots}"
-                    f"-i{runtime_incidents}"
+                    f"-i{runtime_incidents}-c{carry_in_positions}"
                 ),
             )
         )
