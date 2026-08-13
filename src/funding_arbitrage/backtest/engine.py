@@ -42,9 +42,25 @@ class BacktestEngine:
         pnl_curve: list[Decimal] = []
         opened_at: dict[str, datetime] = {}
         durations: list[Decimal] = []
+        pending_entry_notional: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+        locked_by_position: dict[str, Decimal] = {}
+        locked_notional = Decimal("0")
+        capital_time_seconds = Decimal("0")
+        first_timestamp: datetime | None = None
+        last_timestamp: datetime | None = None
 
         def handle(event: BacktestEvent) -> None:
             nonlocal fees, funding, opportunities, slippage
+            nonlocal locked_notional, capital_time_seconds
+            nonlocal first_timestamp, last_timestamp
+            if first_timestamp is None:
+                first_timestamp = event.timestamp
+            if last_timestamp is not None:
+                elapsed = Decimal(
+                    str((event.timestamp - last_timestamp).total_seconds())
+                )
+                capital_time_seconds += locked_notional * max(Decimal("0"), elapsed)
+            last_timestamp = event.timestamp
             month = event.timestamp.strftime("%Y-%m")
             if isinstance(event, FundingEvent):
                 funding_pnl = event.pnl if event.pnl is not None else event.rate * event.notional
@@ -52,6 +68,8 @@ class BacktestEngine:
                 funding += funding_pnl
                 pnl_curve.append(funding_pnl)
             elif isinstance(event, FillEvent):
+                if event.position_id not in opened_at:
+                    pending_entry_notional[event.position_id] += event.notional
                 event_pnl = -event.fee
                 fees += event.fee
                 execution_cost = event.spread + event.slippage
@@ -66,13 +84,28 @@ class BacktestEngine:
                 pnl_curve.append(event.pnl)
                 if event.state.upper() == "OPEN":
                     opened_at[event.position_id] = event.timestamp
+                    position_notional = pending_entry_notional.pop(
+                        event.position_id, Decimal("0")
+                    )
+                    locked_by_position[event.position_id] = position_notional
+                    locked_notional += position_notional
                 elif event.state.upper() == "CLOSED" and event.position_id in opened_at:
                     start = opened_at.pop(event.position_id)
+                    locked_notional -= locked_by_position.pop(
+                        event.position_id, Decimal("0")
+                    )
                     durations.append(
                         Decimal(str((event.timestamp - start).total_seconds())) / Decimal("3600")
                     )
 
         EventReplay(events).run(handle)
+        observation_seconds = (
+            Decimal(str((last_timestamp - first_timestamp).total_seconds()))
+            if first_timestamp is not None
+            and last_timestamp is not None
+            and last_timestamp > first_timestamp
+            else Decimal("0")
+        )
         curve = list(monthly.items())
         metrics = calculate_metrics(
             curve,
@@ -84,6 +117,11 @@ class BacktestEngine:
             average_position_duration_hours=(
                 sum(durations, Decimal("0")) / Decimal(len(durations))
                 if durations
+                else Decimal("0")
+            ),
+            capital_utilization=(
+                capital_time_seconds / (initial_capital * observation_seconds)
+                if observation_seconds > 0
                 else Decimal("0")
             ),
             pnl_curve=pnl_curve,

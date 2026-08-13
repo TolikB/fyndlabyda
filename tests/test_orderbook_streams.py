@@ -1,14 +1,16 @@
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
+    FundingSnapshot,
     InstrumentType,
     OrderBook,
+    Ticker,
 )
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
@@ -209,5 +211,48 @@ async def test_collector_only_refetches_cached_history_when_forced() -> None:
     await collector.collect_once(include_history=True, force_history_refresh=False)
     assert adapter.history_calls == 1
 
-    await collector.collect_once(include_history=True, force_history_refresh=True)
+    await collector.collect_once(
+        include_history=True,
+        history_symbols={"bybit": ["BTCUSDT"]},
+        force_history_refresh=False,
+        force_history_symbols={"bybit": ["BTCUSDT"]},
+    )
     assert adapter.history_calls == 2
+
+    await collector.collect_once(include_history=True, force_history_refresh=True)
+    assert adapter.history_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_collector_refreshes_funding_before_it_becomes_stale() -> None:
+    class CountingFundingMock(MockExchangeAdapter):
+        def __init__(self) -> None:
+            super().__init__("bybit", sleep=0)
+            self.ticker_calls = 0
+            self.funding_calls = 0
+
+        async def get_tickers(self) -> list[Ticker]:
+            self.ticker_calls += 1
+            return await super().get_tickers()
+
+        async def get_funding_rates(self) -> list[FundingSnapshot]:
+            self.funding_calls += 1
+            return await super().get_funding_rates()
+
+    adapter = CountingFundingMock()
+    collector = MarketDataCollector(
+        [adapter],
+        enable_streams=True,
+        stale_after_seconds=30,
+        rest_validation_seconds=60,
+    )
+    await collector.collect_once()
+    first_rest_ticker_fetch = collector._last_rest_ticker_fetch[adapter.name]
+    collector._last_funding_fetch[adapter.name] = datetime.now(UTC) - timedelta(
+        seconds=31
+    )
+    await collector.collect_once()
+    await collector.close()
+
+    assert collector._last_rest_ticker_fetch[adapter.name] == first_rest_ticker_fetch
+    assert adapter.funding_calls == 2

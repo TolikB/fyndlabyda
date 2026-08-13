@@ -163,7 +163,16 @@ def _book(snapshot: MarketSnapshot, ticker: Ticker) -> OrderBook | None:
 
 
 def _funding(snapshot: MarketSnapshot, exchange: str, symbol: str) -> FundingSnapshot | None:
-    return snapshot.funding_rate(exchange, symbol)
+    funding = snapshot.funding_rate(exchange, symbol)
+    if funding is None or not _fresh_funding(snapshot, funding):
+        return None
+    return funding
+
+
+def _fresh_funding(snapshot: MarketSnapshot, funding: FundingSnapshot) -> bool:
+    return (
+        snapshot.captured_at - funding.timestamp
+    ).total_seconds() <= snapshot.stale_after_seconds
 
 
 def _funding_estimate(
@@ -486,6 +495,8 @@ def scan_cross_exchange_funding(
     latest_history: dict[tuple[str, str], FundingHistoryPoint | None] = {}
     grouped: dict[tuple[str, str], list[tuple[str, FundingSnapshot, Ticker]]] = defaultdict(list)
     for funding in snapshot.funding:
+        if not _fresh_funding(snapshot, funding):
+            continue
         ticker = _ticker(snapshot, funding.exchange, funding.symbol, InstrumentType.PERPETUAL)
         if ticker is None:
             continue

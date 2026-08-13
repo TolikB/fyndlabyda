@@ -65,6 +65,7 @@ class BinancePublicAdapter(ExchangeAdapter):
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
         burst: int = 8,
+        funding_metadata_ttl_seconds: float = 300.0,
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
@@ -77,6 +78,8 @@ class BinancePublicAdapter(ExchangeAdapter):
         self._http = http_client
         self._owns_http = http_client is None
         self._limiter = RateLimiter(requests_per_second, burst)
+        self._funding_metadata_ttl_seconds = funding_metadata_ttl_seconds
+        self._funding_metadata_refreshed_at: datetime | None = None
         self._sleep = sleep
         self.max_reconnects = max_reconnects
         self._funding_intervals_hours: dict[str, Decimal] = {}
@@ -117,6 +120,7 @@ class BinancePublicAdapter(ExchangeAdapter):
         ):
             raise InvalidResponseError("Binance exchangeInfo responses must be objects")
         self._update_funding_intervals(funding_info)
+        self._funding_metadata_refreshed_at = datetime.now(UTC)
         return [self._parse_instrument(row, False) for row in futures.get("symbols", [])] + [
             self._parse_instrument(row, True) for row in spot.get("symbols", [])
         ]
@@ -232,14 +236,9 @@ class BinancePublicAdapter(ExchangeAdapter):
 
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         payload = await self._request(self.futures_base_url, "/fapi/v1/premiumIndex", {})
-        funding_info = (
-            await self._request(self.futures_base_url, "/fapi/v1/fundingInfo", {})
-            if not self._funding_intervals_hours
-            else []
-        )
-        if not isinstance(payload, list) or not isinstance(funding_info, list):
+        await self._refresh_funding_intervals()
+        if not isinstance(payload, list):
             raise InvalidResponseError("Binance funding responses must be arrays")
-        self._update_funding_intervals(funding_info)
         return [
             FundingSnapshot(
                 exchange=self.name,
@@ -259,18 +258,35 @@ class BinancePublicAdapter(ExchangeAdapter):
             if isinstance(row, dict)
         ]
 
-    def _update_funding_intervals(self, rows: list[object]) -> None:
-        self._funding_intervals_hours.update(
-            {
-                str(row["symbol"]): decimal(
-                    row["fundingIntervalHours"], "fundingIntervalHours"
-                )
-                for row in rows
-                if isinstance(row, dict)
-                and row.get("symbol")
-                and row.get("fundingIntervalHours") is not None
-            }
+    async def _refresh_funding_intervals(self) -> None:
+        now = datetime.now(UTC)
+        if (
+            self._funding_metadata_refreshed_at is not None
+            and (now - self._funding_metadata_refreshed_at).total_seconds()
+            < self._funding_metadata_ttl_seconds
+        ):
+            return
+        funding_info = await self._request(
+            self.futures_base_url, "/fapi/v1/fundingInfo", {}
         )
+        if not isinstance(funding_info, list):
+            raise InvalidResponseError("Binance funding info response must be an array")
+        self._update_funding_intervals(funding_info)
+        self._funding_metadata_refreshed_at = now
+
+    def _update_funding_intervals(self, rows: list[object]) -> None:
+        # The endpoint only lists symbols whose funding configuration differs
+        # from the default. Replacing (rather than merging) removes symbols
+        # which have returned to Binance's standard eight-hour interval.
+        self._funding_intervals_hours = {
+            str(row["symbol"]): decimal(
+                row["fundingIntervalHours"], "fundingIntervalHours"
+            )
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("symbol")
+            and row.get("fundingIntervalHours") is not None
+        }
 
     async def get_funding_history(
         self, symbol: str, start: datetime, end: datetime

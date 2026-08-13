@@ -44,6 +44,7 @@ def calculate_metrics(
     funding_income: Decimal = Decimal("0"),
     opportunities: int = 0,
     average_position_duration_hours: Decimal = Decimal("0"),
+    capital_utilization: Decimal = Decimal("0"),
     pnl_curve: list[Decimal] | None = None,
 ) -> BacktestMetrics:
     if initial_capital <= 0:
@@ -94,6 +95,7 @@ def calculate_metrics(
         else Decimal("0"),
         profit_factor=gross_positive / gross_negative if gross_negative else Decimal("0"),
         number_of_opportunities=opportunities,
+        capital_utilization=capital_utilization,
         fee_drag=fees / initial_capital,
         slippage_drag=slippage / initial_capital,
         funding_income=funding_income,

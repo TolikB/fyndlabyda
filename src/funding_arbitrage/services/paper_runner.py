@@ -50,7 +50,7 @@ from funding_arbitrage.opportunity.models import Opportunity
 from funding_arbitrage.opportunity.settlement import (
     settlement_continuation_allowed,
     settlement_entry_allowed,
-    target_settlements,
+    target_settlement_events,
 )
 from funding_arbitrage.portfolio.allocator import CapitalAllocator
 from funding_arbitrage.portfolio.position import PaperPosition, PositionState
@@ -188,10 +188,13 @@ class PaperTestRunner:
         stage_started = time.monotonic()
         runners = (self, *peers)
         required_history: dict[str, set[str]] = {}
+        forced_history: dict[str, set[str]] = {}
         required_books: dict[str, set[tuple[str, InstrumentType]]] = {}
         for runner in runners:
             for venue, symbols in runner._required_funding_symbols().items():
                 required_history.setdefault(venue, set()).update(symbols)
+            for venue, symbols in runner._due_funding_symbols(now).items():
+                forced_history.setdefault(venue, set()).update(symbols)
             for venue, books in runner._required_orderbook_symbols().items():
                 required_books.setdefault(venue, set()).update(books)
         normalized_history = {
@@ -200,7 +203,7 @@ class PaperTestRunner:
         periodic_history_refresh = self._last_history_refresh is None or (
             now - self._last_history_refresh
         ).total_seconds() >= self.settings.paper_history_refresh_seconds
-        refresh_history = periodic_history_refresh or (
+        refresh_history = bool(forced_history) or periodic_history_refresh or (
             normalized_history != self._last_history_symbols
         )
         snapshot = await self.collector.collect_once(
@@ -211,6 +214,9 @@ class PaperTestRunner:
             include_history=refresh_history,
             history_symbols={venue: sorted(symbols) for venue, symbols in required_history.items()},
             force_history_refresh=periodic_history_refresh,
+            force_history_symbols={
+                venue: sorted(symbols) for venue, symbols in forced_history.items()
+            },
         )
         paper_runner_stage_duration_seconds.labels("collect").observe(
             time.monotonic() - stage_started
@@ -300,18 +306,28 @@ class PaperTestRunner:
             ).scalars()
             for row in rows:
                 position = PaperPosition.model_validate(row.payload)
-                durable_funding_pnl = await session.scalar(
-                    select(func.coalesce(func.sum(PaperFundingPaymentRecord.pnl), 0)).where(
-                        PaperFundingPaymentRecord.position_id == position.id
+                funding_payments = list(
+                    (
+                        await session.execute(
+                            select(PaperFundingPaymentRecord).where(
+                                PaperFundingPaymentRecord.position_id == position.id
+                            )
+                        )
                     )
+                    .scalars()
                 )
-                position.pnl.funding_pnl = Decimal(str(durable_funding_pnl or 0))
-                durable_funding_events = await session.scalar(
-                    select(func.count(PaperFundingPaymentRecord.id)).where(
-                        PaperFundingPaymentRecord.position_id == position.id
+                position.pnl.funding_pnl = sum(
+                    (Decimal(str(payment.pnl)) for payment in funding_payments),
+                    Decimal("0"),
+                )
+                position.funding_events = len(funding_payments)
+                for payment in funding_payments:
+                    self._mark_funding_settled(
+                        position,
+                        payment.exchange,
+                        payment.symbol,
+                        payment.funding_timestamp,
                     )
-                )
-                position.funding_events = int(durable_funding_events or 0)
                 if has_snapshot:
                     self.runtime.portfolio.add_position(position)
                 else:
@@ -482,13 +498,20 @@ class PaperTestRunner:
             if position.state is not PositionState.OPEN:
                 paper_trade_rejections_total.labels("execution").inc()
                 continue
-            position.target_settlements = (
-                (
-                    snapshot.captured_at
-                    + timedelta(seconds=self.settings.paper_settlement_interval_seconds),
+            if self.settings.market_data_mode == "mock":
+                due = snapshot.captured_at + timedelta(
+                    seconds=self.settings.paper_settlement_interval_seconds
                 )
-                if self.settings.market_data_mode == "mock"
-                else target_settlements(opportunity, snapshot, snapshot.captured_at)
+                position.target_funding_events = {
+                    self._funding_key(leg.exchange, leg.symbol): due
+                    for leg in self._funding_legs(position)
+                }
+            else:
+                position.target_funding_events = target_settlement_events(
+                    opportunity, snapshot, snapshot.captured_at
+                )
+            position.target_settlements = tuple(
+                sorted(set(position.target_funding_events.values()))
             )
             position.opportunity_key = key
             venues = (opportunity.venue_a, opportunity.venue_b or opportunity.venue_a)
@@ -596,6 +619,9 @@ class PaperTestRunner:
                 )
             )
             if existing is not None:
+                self._mark_funding_settled(
+                    position, funding.exchange, funding.symbol, funding.timestamp
+                )
                 return
             pnl = self.runtime.portfolio.calculate_funding_pnl(
                 leg.side, position.capital, funding.funding_rate
@@ -607,6 +633,51 @@ class PaperTestRunner:
                 position.id, funding, position.capital, leg.side
             )
             position.funding_events += 1
+            self._mark_funding_settled(
+                position, funding.exchange, funding.symbol, funding.timestamp
+            )
+
+    @staticmethod
+    def _funding_key(exchange: str, symbol: str) -> str:
+        return f"{exchange}|{symbol}"
+
+    @classmethod
+    def _mark_funding_settled(
+        cls,
+        position: PaperPosition,
+        exchange: str,
+        symbol: str,
+        timestamp: datetime,
+    ) -> None:
+        normalized = (
+            timestamp.replace(tzinfo=UTC)
+            if timestamp.tzinfo is None
+            else timestamp.astimezone(UTC)
+        )
+        key = cls._funding_key(exchange, symbol)
+        previous = position.settled_funding_at.get(key)
+        if previous is None or normalized > previous:
+            position.settled_funding_at[key] = normalized
+
+    def _due_funding_symbols(self, now: datetime) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {}
+        for position in self.runtime.portfolio.positions.values():
+            if position.state is not PositionState.OPEN:
+                continue
+            if position.target_funding_events:
+                for key, target in position.target_funding_events.items():
+                    settled = position.settled_funding_at.get(key)
+                    if target > now or (settled is not None and settled >= target):
+                        continue
+                    exchange, symbol = key.split("|", maxsplit=1)
+                    result.setdefault(exchange, []).append(symbol)
+                continue
+            if any(target <= now for target in position.target_settlements):
+                for leg in self._funding_legs(position):
+                    result.setdefault(leg.exchange, []).append(leg.symbol)
+        return {
+            venue: list(dict.fromkeys(symbols)) for venue, symbols in result.items()
+        }
 
     def _required_funding_symbols(self) -> dict[str, list[str]]:
         result: dict[str, list[str]] = {
@@ -686,8 +757,14 @@ class PaperTestRunner:
             funding_reversed = self._funding_reversed(position, snapshot)
             adverse_basis = self._adverse_basis(position, snapshot)
             market_degraded = self._execution_degraded(position, snapshot)
-            target_received = position.funding_events > 0 and any(
+            target_due = any(
                 target <= now for target in position.target_settlements
+            )
+            pending_target_funding = bool(
+                self._pending_target_funding(position, now)
+            )
+            target_received = target_due and not pending_target_funding and (
+                bool(position.target_funding_events) or position.funding_events > 0
             )
             continue_after_target = False
             if target_received and current is not None:
@@ -705,7 +782,12 @@ class PaperTestRunner:
                         self.settings.paper_min_settlement_cost_coverage,
                     )
                 if continue_after_target:
-                    position.target_settlements = target_settlements(current, snapshot, now)
+                    position.target_funding_events = target_settlement_events(
+                        current, snapshot, now
+                    )
+                    position.target_settlements = tuple(
+                        sorted(set(position.target_funding_events.values()))
+                    )
             target_exit = target_received and not continue_after_target
             optimized_exit = (
                 self.settings.paper_strategy_profile == "candidate"
@@ -717,7 +799,7 @@ class PaperTestRunner:
                     or target_exit
                 )
             )
-            if not (max_hold or optimized_exit):
+            if pending_target_funding or not (max_hold or optimized_exit):
                 continue
             await self.executor.close(position, snapshot)
             if position.state is not PositionState.CLOSED:
@@ -725,6 +807,22 @@ class PaperTestRunner:
             self.runtime.portfolio.close_position(position.id)
             if position.opportunity_key:
                 self._position_by_key.pop(position.opportunity_key, None)
+
+    @staticmethod
+    def _pending_target_funding(
+        position: PaperPosition, now: datetime
+    ) -> tuple[str, ...]:
+        if not position.target_funding_events:
+            return ()
+        return tuple(
+            key
+            for key, target in position.target_funding_events.items()
+            if target <= now
+            and (
+                position.settled_funding_at.get(key) is None
+                or position.settled_funding_at[key] < target
+            )
+        )
 
     @staticmethod
     def _execution_degraded(position: PaperPosition, snapshot: MarketSnapshot) -> bool:

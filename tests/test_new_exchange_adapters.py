@@ -87,6 +87,50 @@ async def test_binance_uses_adjusted_symbol_funding_interval() -> None:
 
 
 @pytest.mark.asyncio
+async def test_binance_refresh_removes_expired_interval_override() -> None:
+    funding_info_requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal funding_info_requests
+        if request.url.path.endswith("/premiumIndex"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "symbol": "BTCUSDT",
+                        "lastFundingRate": "0.001",
+                        "nextFundingTime": 1735718400000,
+                        "time": 1735689600000,
+                    }
+                ],
+            )
+        if request.url.path.endswith("/fundingInfo"):
+            funding_info_requests += 1
+            return httpx.Response(
+                200,
+                json=(
+                    [{"symbol": "BTCUSDT", "fundingIntervalHours": 4}]
+                    if funding_info_requests == 1
+                    else []
+                ),
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = BinancePublicAdapter(
+        futures_base_url="https://test.invalid",
+        http_client=client,
+        funding_metadata_ttl_seconds=0,
+    )
+    first = await adapter.get_funding_rates()
+    second = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert first[0].funding_interval_hours == Decimal("4")
+    assert second[0].funding_interval_hours == Decimal("8")
+
+
+@pytest.mark.asyncio
 async def test_okx_empty_spot_contract_value_is_normalized() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/public/instruments")

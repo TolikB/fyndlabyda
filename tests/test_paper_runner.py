@@ -610,6 +610,7 @@ async def test_candidate_closes_after_target_when_next_funding_cannot_cover_chur
         state=PositionState.OPEN,
         opened_at=now - timedelta(hours=1),
         target_settlements=(now - timedelta(seconds=1),),
+        target_funding_events={"gate|BTC_USDT": now - timedelta(seconds=1)},
         funding_events=1,
     )
     runtime.portfolio.allocate_position(position, ("gate", "gate"), Decimal("100"))
@@ -655,6 +656,12 @@ async def test_candidate_closes_after_target_when_next_funding_cannot_cover_chur
 
     assert not runner._execution_degraded(position, snapshot)
     assert not runner._funding_reversed(position, snapshot)
+    await runner._close_expired(snapshot)
+
+    assert position.state is PositionState.OPEN
+    assert runner._due_funding_symbols(now) == {"gate": ["BTC_USDT"]}
+
+    position.settled_funding_at["gate|BTC_USDT"] = now
     await runner._close_expired(snapshot)
 
     assert position.state is PositionState.CLOSED

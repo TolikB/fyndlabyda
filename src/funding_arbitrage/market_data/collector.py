@@ -131,6 +131,7 @@ class MarketDataCollector:
         self._rest_ticker_cache: dict[str, list[Ticker]] = {}
         self._funding_cache: dict[str, list[FundingSnapshot]] = {}
         self._last_rest_ticker_fetch: dict[str, datetime] = {}
+        self._last_funding_fetch: dict[str, datetime] = {}
         self._stream_ticker_cache: dict[tuple[str, str, InstrumentType], Ticker] = {}
         self._stream_tasks: dict[str, asyncio.Task[None]] = {}
         self._stream_ticker_requests: dict[
@@ -176,6 +177,7 @@ class MarketDataCollector:
         include_history: bool = False,
         history_symbols: dict[str, list[str]] | None = None,
         force_history_refresh: bool = True,
+        force_history_symbols: dict[str, list[str]] | None = None,
     ) -> MarketSnapshot:
         collections = await asyncio.gather(
             *(
@@ -185,6 +187,7 @@ class MarketDataCollector:
                     include_history,
                     (history_symbols or {}).get(adapter.name, []),
                     force_history_refresh,
+                    (force_history_symbols or {}).get(adapter.name, []),
                 )
                 for adapter in self.adapters
                 if self.health[adapter.name].can_attempt()
@@ -219,6 +222,7 @@ class MarketDataCollector:
         include_history: bool,
         required_history: list[str],
         force_history_refresh: bool,
+        forced_history: list[str],
     ) -> _VenueCollection:
         breaker = self.health[adapter.name]
         orderbooks: dict[tuple[str, str, InstrumentType], OrderBook] = {}
@@ -232,24 +236,40 @@ class MarketDataCollector:
             cached_tickers = self._rest_ticker_cache.get(adapter.name)
             last_ticker_fetch = self._last_rest_ticker_fetch.get(adapter.name)
             refresh_tickers = (
-                cached_tickers is None
+                not self.enable_streams
+                or cached_tickers is None
                 or last_ticker_fetch is None
                 or (now - last_ticker_fetch).total_seconds() >= self.rest_validation_seconds
             )
-            if refresh_tickers:
+            cached_funding = self._funding_cache.get(adapter.name)
+            last_funding_fetch = self._last_funding_fetch.get(adapter.name)
+            refresh_funding = (
+                cached_funding is None
+                or last_funding_fetch is None
+                or (now - last_funding_fetch).total_seconds()
+                >= self.stale_after_seconds
+            )
+            if refresh_tickers and refresh_funding:
                 venue_tickers, all_venue_funding = await asyncio.gather(
                     adapter.get_tickers(), adapter.get_funding_rates()
                 )
                 self._rest_ticker_cache[adapter.name] = venue_tickers
                 self._funding_cache[adapter.name] = all_venue_funding
                 self._last_rest_ticker_fetch[adapter.name] = now
+                self._last_funding_fetch[adapter.name] = now
+            elif refresh_tickers:
+                venue_tickers = await adapter.get_tickers()
+                all_venue_funding = cached_funding or []
+                self._rest_ticker_cache[adapter.name] = venue_tickers
+                self._last_rest_ticker_fetch[adapter.name] = now
+            elif refresh_funding:
+                venue_tickers = cached_tickers or []
+                all_venue_funding = await adapter.get_funding_rates()
+                self._funding_cache[adapter.name] = all_venue_funding
+                self._last_funding_fetch[adapter.name] = now
             else:
                 venue_tickers = cached_tickers or []
-                cached_funding = self._funding_cache.get(adapter.name)
-                if cached_funding is None:
-                    cached_funding = await adapter.get_funding_rates()
-                    self._funding_cache[adapter.name] = cached_funding
-                all_venue_funding = cached_funding
+                all_venue_funding = cached_funding or []
             venue_tickers = self._merge_stream_tickers(adapter.name, venue_tickers, now)
             valid_tickers = [item for item in venue_tickers if _is_valid_ticker(item)]
             dropped_tickers = len(venue_tickers) - len(valid_tickers)
@@ -338,6 +358,7 @@ class MarketDataCollector:
                     symbol
                     for symbol in selected
                     if force_history_refresh
+                    or symbol in forced_history
                     or (adapter.name, symbol) not in self._funding_history_cache
                 ]
                 history_results = await asyncio.gather(

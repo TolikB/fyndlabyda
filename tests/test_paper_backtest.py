@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from funding_arbitrage.backtest.engine import BacktestEngine
-from funding_arbitrage.backtest.events import FundingEvent, PositionEvent
+from funding_arbitrage.backtest.events import FillEvent, FundingEvent, PositionEvent
 from funding_arbitrage.database.models import BacktestResultRecord
 from funding_arbitrage.database.repositories.market_data import save_backtest_result
 from funding_arbitrage.exchanges.base.models import (
@@ -143,6 +143,44 @@ def test_backtest_drawdown_uses_event_curve_inside_a_profitable_month() -> None:
 
     assert result.metrics.net_profit_after_costs == Decimal("5")
     assert result.metrics.max_drawdown == Decimal("20") / Decimal("1010")
+
+
+def test_backtest_reports_time_weighted_capital_utilization() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    events = [
+        FillEvent(
+            event_id="entry-fill",
+            timestamp=timestamp,
+            position_id="p",
+            notional=Decimal("2000"),
+            fee=Decimal("0"),
+        ),
+        PositionEvent(
+            event_id="position-open",
+            timestamp=timestamp,
+            position_id="p",
+            state="OPEN",
+        ),
+        FundingEvent(
+            event_id="midpoint",
+            timestamp=timestamp + timedelta(hours=12),
+            exchange="gate",
+            symbol="BTC_USDT",
+            rate=Decimal("0"),
+            notional=Decimal("1000"),
+            pnl=Decimal("0"),
+        ),
+        PositionEvent(
+            event_id="position-close",
+            timestamp=timestamp + timedelta(hours=24),
+            position_id="p",
+            state="CLOSED",
+        ),
+    ]
+
+    result = BacktestEngine().run(events, Decimal("10000"), {}, "fixture")
+
+    assert result.metrics.capital_utilization == Decimal("0.2")
 
 
 @pytest.mark.asyncio

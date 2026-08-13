@@ -8,7 +8,7 @@ import hashlib
 import json
 from bisect import bisect_right
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -48,6 +48,7 @@ from funding_arbitrage.opportunity.models import FeeSchedule, Opportunity, SizeQ
 from funding_arbitrage.opportunity.settlement import (
     settlement_continuation_allowed,
     settlement_entry_allowed,
+    target_settlement_events,
     target_settlements,
 )
 from funding_arbitrage.risk.engine import RiskEngine, RiskLimits
@@ -71,6 +72,8 @@ class _ReplayPosition:
     entry_a: Decimal
     entry_b: Decimal
     target_settlements: tuple[datetime, ...]
+    target_funding_events: dict[str, datetime]
+    settled_funding_at: dict[str, datetime] = field(default_factory=dict)
     funding_events: int = 0
     edge_miss_count: int = 0
     funding_pnl: Decimal = Decimal("0")
@@ -314,6 +317,10 @@ class HistoricalMarketReplay:
                             continue
                         position.funding_events += 1
                         position.funding_pnl += pnl
+                        event_key = f"{point.exchange}|{point.symbol}"
+                        previous = position.settled_funding_at.get(event_key)
+                        if previous is None or funding_time > previous:
+                            position.settled_funding_at[event_key] = funding_time
                         realized += pnl
                         events.append(
                             FundingEvent(
@@ -345,8 +352,19 @@ class HistoricalMarketReplay:
                 edge_gone = (
                     position.edge_miss_count >= settings.paper_exit_edge_miss_cycles
                 )
-                target_received = position.funding_events > 0 and any(
+                target_due = any(
                     target <= timestamp for target in position.target_settlements
+                )
+                pending_target = any(
+                    target <= timestamp
+                    and (
+                        position.settled_funding_at.get(key) is None
+                        or position.settled_funding_at[key] < target
+                    )
+                    for key, target in position.target_funding_events.items()
+                )
+                target_received = target_due and not pending_target and (
+                    bool(position.target_funding_events) or position.funding_events > 0
                 )
                 adverse_basis = _current_market_pnl(position, last_prices) <= -(
                     position.capital * settings.paper_max_adverse_basis_percent
@@ -367,8 +385,11 @@ class HistoricalMarketReplay:
                             settings.paper_min_settlement_cost_coverage,
                         )
                     if continue_after_target:
-                        position.target_settlements = target_settlements(
+                        position.target_funding_events = target_settlement_events(
                             current, snapshot, timestamp
+                        )
+                        position.target_settlements = tuple(
+                            sorted(set(position.target_funding_events.values()))
                         )
                 target_exit = target_received and not continue_after_target
                 max_hold = age >= timedelta(seconds=settings.paper_max_hold_seconds)
@@ -426,7 +447,10 @@ class HistoricalMarketReplay:
                     continue
                 serial += 1
                 position_id = f"{profile}-{serial:08d}"
-                targets = _target_settlements(opportunity, snapshot, timestamp)
+                target_events = target_settlement_events(
+                    opportunity, snapshot, timestamp
+                )
+                targets = tuple(sorted(set(target_events.values())))
                 position = _ReplayPosition(
                     position_id=position_id,
                     opportunity=opportunity,
@@ -435,6 +459,7 @@ class HistoricalMarketReplay:
                     entry_a=opportunity.price_a,
                     entry_b=opportunity.price_b,
                     target_settlements=targets,
+                    target_funding_events=target_events,
                     entry_fees=quote.costs.entry_fees,
                     entry_spread=quote.costs.entry_spread,
                     entry_slippage=quote.costs.entry_slippage,

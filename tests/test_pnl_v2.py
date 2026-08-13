@@ -497,14 +497,44 @@ def test_cross_exchange_strategy_is_not_duplicated() -> None:
         )
         for venue, rate in (("bybit", Decimal("0.001")), ("gate", Decimal("-0.001")))
     ]
+    books = {
+        (venue, "BTCUSDT", InstrumentType.PERPETUAL): OrderBook(
+            exchange=venue,
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            bids=(OrderBookLevel(price=Decimal("99.99"), quantity=Decimal("100")),),
+            asks=(OrderBookLevel(price=Decimal("100.01"), quantity=Decimal("100")),),
+            timestamp=now,
+        )
+        for venue in ("bybit", "gate")
+    }
     opportunities = OpportunityEngine(
         filter_config=OpportunityFilterConfig(
             minimum_funding_samples=0, minimum_liquidity_score=0
         )
-    ).scan(MarketSnapshot(instruments, tickers, funding, {}, now))
+    ).scan(MarketSnapshot(instruments, tickers, funding, books, now))
 
     assert len(opportunities) == 1
     assert opportunities[0].strategy == StrategyName.CROSS_EXCHANGE_FUNDING
+
+    stale_funding = [
+        item.model_copy(update={"timestamp": now - timedelta(seconds=31)})
+        for item in funding
+    ]
+    assert not OpportunityEngine(
+        filter_config=OpportunityFilterConfig(
+            minimum_funding_samples=0, minimum_liquidity_score=0
+        )
+    ).scan(
+        MarketSnapshot(
+            instruments,
+            tickers,
+            stale_funding,
+            books,
+            now,
+            stale_after_seconds=30,
+        )
+    )
 
 
 @pytest.mark.parametrize(

@@ -117,12 +117,23 @@ def test_opportunity_engine_finds_cross_exchange_funding_spread() -> None:
             timestamp=timestamp,
         ),
     ]
+    books = {
+        (venue, "BTCUSDT", InstrumentType.PERPETUAL): OrderBook(
+            exchange=venue,
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            bids=(OrderBookLevel(price=Decimal("99.99"), quantity=Decimal("100")),),
+            asks=(OrderBookLevel(price=Decimal("100.01"), quantity=Decimal("100")),),
+            timestamp=timestamp,
+        )
+        for venue in ("bybit", "gate")
+    }
     opportunities = OpportunityEngine(
         filter_config=OpportunityFilterConfig(
             minimum_funding_samples=0, minimum_liquidity_score=0
         )
     ).scan(
-        MarketSnapshot(instruments, tickers, funding, {}, timestamp)
+        MarketSnapshot(instruments, tickers, funding, books, timestamp)
     )
     assert opportunities
     assert opportunities[0].strategy == "cross_exchange_funding"
@@ -220,6 +231,35 @@ def test_spread_cost_is_conservative_for_zero_market_quotes() -> None:
     )
 
     assert CostEngine._spread_cost(Decimal("250"), ticker) == Decimal("250")
+
+
+def test_missing_orderbook_is_not_zero_cost() -> None:
+    timestamp = datetime.now(UTC)
+    ticker = Ticker(
+        exchange="gate",
+        symbol="BTC_USDT",
+        instrument_type=InstrumentType.PERPETUAL,
+        last_price=Decimal("100"),
+        best_bid=None,
+        best_ask=None,
+        volume_24h=Decimal("1000000"),
+        timestamp=timestamp,
+    )
+
+    costs = CostEngine().estimate(
+        Decimal("250"),
+        "gate",
+        "bybit",
+        Decimal("8"),
+        ticker,
+        ticker.model_copy(update={"exchange": "bybit", "symbol": "BTCUSDT"}),
+        None,
+        None,
+    )
+
+    assert costs.entry_spread == Decimal("500")
+    assert costs.entry_slippage == Decimal("500")
+    assert costs.total == Decimal("2000")
 
 
 def test_opportunity_filter_reports_every_rejection_reason() -> None:

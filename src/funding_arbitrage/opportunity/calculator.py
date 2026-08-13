@@ -49,7 +49,9 @@ class CostEngine:
         fees_b = self.fee_for(venue_b).taker_fee
         entry_fees = notional * (fees_a + fees_b)
         exit_fees = entry_fees
-        entry_spread = self._spread_cost(notional, ticker_a) + self._spread_cost(notional, ticker_b)
+        entry_spread = self._spread_cost(
+            notional, ticker_a, orderbook_a
+        ) + self._spread_cost(notional, ticker_b, orderbook_b)
         exit_spread = entry_spread
         entry_slippage = self._slippage_cost(notional, ticker_a, orderbook_a, side_a)
         entry_slippage += self._slippage_cost(notional, ticker_b, orderbook_b, side_b)
@@ -72,15 +74,30 @@ class CostEngine:
         )
 
     @staticmethod
-    def _spread_cost(notional: Decimal, ticker: Ticker | None) -> Decimal:
-        if ticker is None or ticker.best_bid is None or ticker.best_ask is None:
-            return Decimal("0")
-        if ticker.best_bid <= 0 or ticker.best_ask <= 0 or ticker.best_bid > ticker.best_ask:
+    def _spread_cost(
+        notional: Decimal,
+        ticker: Ticker | None,
+        orderbook: OrderBook | None = None,
+    ) -> Decimal:
+        if ticker is None:
             return notional
-        midpoint = (ticker.best_bid + ticker.best_ask) / Decimal("2")
+        best_bid = ticker.best_bid
+        best_ask = ticker.best_ask
+        if (best_bid is None or best_ask is None) and orderbook is not None:
+            best_bid = orderbook.bids[0].price if orderbook.bids else None
+            best_ask = orderbook.asks[0].price if orderbook.asks else None
+        if (
+            best_bid is None
+            or best_ask is None
+            or best_bid <= 0
+            or best_ask <= 0
+            or best_bid > best_ask
+        ):
+            return notional
+        midpoint = (best_bid + best_ask) / Decimal("2")
         if midpoint <= 0:
             return notional
-        return notional * (ticker.best_ask - ticker.best_bid) / midpoint / Decimal("2")
+        return notional * (best_ask - best_bid) / midpoint / Decimal("2")
 
     @staticmethod
     def _slippage_cost(
@@ -90,6 +107,6 @@ class CostEngine:
         side: OrderSide,
     ) -> Decimal:
         if ticker is None or orderbook is None or ticker.last_price <= 0:
-            return Decimal("0")
+            return notional
         estimate = calculate_execution_price(orderbook, side, notional / ticker.last_price)
         return notional * estimate.slippage_percent

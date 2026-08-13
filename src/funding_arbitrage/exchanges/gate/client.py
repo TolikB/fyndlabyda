@@ -77,6 +77,7 @@ class GatePublicAdapter(ExchangeAdapter):
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
         burst: int = 8,
+        funding_metadata_ttl_seconds: float = 300.0,
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
@@ -91,6 +92,8 @@ class GatePublicAdapter(ExchangeAdapter):
         self._http = http_client
         self._owns_http = http_client is None
         self._limiter = RateLimiter(requests_per_second, burst)
+        self._funding_metadata_ttl_seconds = funding_metadata_ttl_seconds
+        self._funding_metadata_refreshed_at: datetime | None = None
         self._sleep = sleep
         self.max_reconnects = max_reconnects
         self._funding_intervals_hours: dict[str, Decimal] = {}
@@ -138,8 +141,44 @@ class GatePublicAdapter(ExchangeAdapter):
         if not isinstance(futures_payload, list) or not isinstance(spot_payload, list):
             raise InvalidResponseError("Gate instrument responses must be arrays")
         futures = [self._parse_future_instrument(row) for row in futures_payload]
+        self._funding_metadata_refreshed_at = datetime.now(UTC)
         spot = [self._parse_spot_instrument(row) for row in spot_payload]
         return futures + spot
+
+    def _remember_funding_schedule(self, row: dict[str, Any]) -> Decimal:
+        symbol = str(row["name"])
+        interval_seconds = int(row.get("funding_interval", 28_800))
+        if interval_seconds <= 0:
+            raise ValueError("funding interval must be positive")
+        interval_hours = Decimal(interval_seconds) / Decimal("3600")
+        self._funding_intervals_hours[symbol] = interval_hours
+        if row.get("funding_next_apply"):
+            self._next_funding_times[symbol] = _utc_from_seconds(
+                row["funding_next_apply"], "funding_next_apply"
+            )
+        else:
+            self._next_funding_times.pop(symbol, None)
+        return interval_hours
+
+    async def _refresh_funding_metadata(self) -> None:
+        now = datetime.now(UTC)
+        if (
+            self._funding_metadata_refreshed_at is not None
+            and (now - self._funding_metadata_refreshed_at).total_seconds()
+            < self._funding_metadata_ttl_seconds
+        ):
+            return
+        payload = await self._request(f"/futures/{self.settle}/contracts")
+        if not isinstance(payload, list):
+            raise InvalidResponseError("Gate futures contract response must be an array")
+        try:
+            for row in payload:
+                if not isinstance(row, dict):
+                    raise TypeError("contract row is not an object")
+                self._remember_funding_schedule(row)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidResponseError(f"invalid Gate funding metadata: {row!r}") from exc
+        self._funding_metadata_refreshed_at = now
 
     def _parse_future_instrument(self, row: object) -> NormalizedInstrument:
         if not isinstance(row, dict):
@@ -147,15 +186,7 @@ class GatePublicAdapter(ExchangeAdapter):
         try:
             symbol = str(row["name"])
             base, quote = symbol.split("_", 1)
-            interval_seconds = int(row.get("funding_interval", 28_800))
-            if interval_seconds <= 0:
-                raise ValueError("funding interval must be positive")
-            interval_hours = Decimal(interval_seconds) / Decimal("3600")
-            self._funding_intervals_hours[symbol] = interval_hours
-            if row.get("funding_next_apply"):
-                self._next_funding_times[symbol] = _utc_from_seconds(
-                    row["funding_next_apply"], "funding_next_apply"
-                )
+            interval_hours = self._remember_funding_schedule(row)
             return NormalizedInstrument(
                 exchange=self.name,
                 exchange_symbol=symbol,
@@ -245,8 +276,7 @@ class GatePublicAdapter(ExchangeAdapter):
         )
 
     async def get_funding_rates(self) -> list[FundingSnapshot]:
-        if not self._funding_intervals_hours:
-            await self.get_instruments()
+        await self._refresh_funding_metadata()
         payload = await self._request(f"/futures/{self.settle}/tickers")
         if not isinstance(payload, list):
             raise InvalidResponseError("Gate futures ticker response must be an array")
@@ -261,17 +291,25 @@ class GatePublicAdapter(ExchangeAdapter):
                 if row.get("t") is not None
                 else datetime.now(UTC)
             )
+            next_funding_time = (
+                _utc_from_seconds(row["funding_next_apply"], "funding_next_apply")
+                if row.get("funding_next_apply")
+                else self._next_funding_times.get(symbol)
+            )
+            if next_funding_time is not None and next_funding_time <= timestamp:
+                interval_seconds = float(interval_hours * Decimal("3600"))
+                periods = int(
+                    (timestamp - next_funding_time).total_seconds() // interval_seconds
+                ) + 1
+                next_funding_time += timedelta(seconds=interval_seconds * periods)
+                self._next_funding_times[symbol] = next_funding_time
             snapshots.append(
                 FundingSnapshot(
                     exchange=self.name,
                     symbol=symbol,
                     funding_rate=decimal(row["funding_rate"], "funding_rate"),
                     funding_interval_hours=interval_hours,
-                    next_funding_time=(
-                        _utc_from_seconds(row["funding_next_apply"], "funding_next_apply")
-                        if row.get("funding_next_apply")
-                        else self._next_funding_times.get(symbol)
-                    ),
+                    next_funding_time=next_funding_time,
                     mark_price=_optional_decimal(row.get("mark_price"), "mark_price"),
                     index_price=_optional_decimal(row.get("index_price"), "index_price"),
                     timestamp=timestamp,

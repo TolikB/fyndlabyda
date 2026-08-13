@@ -67,6 +67,8 @@ class PaperPosition(BaseModel):
     pnl: PnLBreakdown = Field(default_factory=PnLBreakdown)
     legging_risk: Decimal = Decimal("0")
     target_settlements: tuple[datetime, ...] = ()
+    target_funding_events: dict[str, datetime] = Field(default_factory=dict)
+    settled_funding_at: dict[str, datetime] = Field(default_factory=dict)
     funding_events: int = Field(default=0, ge=0)
     edge_miss_count: int = Field(default=0, ge=0)
     borrow_rate_daily: Decimal = Field(default=Decimal("0"), ge=0)

@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import httpx
@@ -143,3 +143,103 @@ async def test_gate_websocket_reconnects_after_disconnect() -> None:
     assert attempts >= 2
     assert ticker.symbol == "BTC_USDT"
     assert ticker.last_price == Decimal("100")
+
+
+@pytest.mark.asyncio
+async def test_gate_advances_cached_funding_time_past_ticker_timestamp() -> None:
+    stale_next = datetime(2025, 1, 1, 8, tzinfo=UTC)
+    ticker_time = datetime(2025, 1, 2, 1, tzinfo=UTC)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/futures/usdt/contracts"):
+            return response(
+                [
+                    {
+                        "name": "BTC_USDT",
+                        "funding_interval": 28_800,
+                        "funding_next_apply": int(stale_next.timestamp()),
+                    }
+                ]
+            )
+        if request.url.path.endswith("/futures/usdt/tickers"):
+            return response(
+                [
+                    {
+                        "contract": "BTC_USDT",
+                        "funding_rate": "0.001",
+                        "mark_price": "100",
+                        "index_price": "100",
+                        "t": int(ticker_time.timestamp() * 1000),
+                    }
+                ]
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid/api/v4"
+    )
+    adapter = GatePublicAdapter(base_url="https://test.invalid/api/v4", http_client=client)
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert funding[0].next_funding_time == datetime(2025, 1, 2, 8, tzinfo=UTC)
+    assert funding[0].next_funding_time > funding[0].timestamp
+
+
+@pytest.mark.asyncio
+async def test_gate_refreshes_dynamic_funding_interval_metadata() -> None:
+    contract_requests = 0
+    first_next = datetime(2025, 1, 1, 8, tzinfo=UTC)
+    refreshed_next = datetime(2025, 1, 1, 4, tzinfo=UTC)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal contract_requests
+        if request.url.path.endswith("/futures/usdt/contracts"):
+            contract_requests += 1
+            interval = 28_800 if contract_requests == 1 else 14_400
+            next_time = first_next if contract_requests == 1 else refreshed_next
+            return response(
+                [
+                    {
+                        "name": "BTC_USDT",
+                        "type": "direct",
+                        "quanto_multiplier": "0.0001",
+                        "order_price_round": "0.1",
+                        "order_size_min": "1",
+                        "funding_interval": interval,
+                        "funding_next_apply": int(next_time.timestamp()),
+                        "in_delisting": False,
+                    }
+                ]
+            )
+        if request.url.path.endswith("/spot/currency_pairs"):
+            return response([])
+        if request.url.path.endswith("/futures/usdt/tickers"):
+            return response(
+                [
+                    {
+                        "contract": "BTC_USDT",
+                        "funding_rate": "0.001",
+                        "mark_price": "100",
+                        "index_price": "100",
+                        "t": int((refreshed_next - timedelta(hours=1)).timestamp() * 1000),
+                    }
+                ]
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid/api/v4"
+    )
+    adapter = GatePublicAdapter(
+        base_url="https://test.invalid/api/v4",
+        http_client=client,
+        funding_metadata_ttl_seconds=0,
+    )
+    await adapter.get_instruments()
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert contract_requests == 2
+    assert funding[0].funding_interval_hours == Decimal("4")
+    assert funding[0].next_funding_time == refreshed_next

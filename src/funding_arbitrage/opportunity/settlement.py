@@ -16,7 +16,22 @@ def target_settlements(
     snapshot: MarketSnapshot,
     now: datetime,
 ) -> tuple[datetime, ...]:
-    return tuple(sorted(set(_funding_legs(opportunity, snapshot, now).values())))
+    return tuple(sorted(set(target_settlement_events(opportunity, snapshot, now).values())))
+
+
+def target_settlement_events(
+    opportunity: Opportunity,
+    snapshot: MarketSnapshot,
+    now: datetime,
+) -> dict[str, datetime]:
+    """Return the next exact funding event for every perpetual position leg."""
+
+    return {
+        f"{venue}|{symbol}": due
+        for (venue, symbol, _side), due in _funding_legs(
+            opportunity, snapshot, now
+        ).items()
+    }
 
 
 def settlement_entry_allowed(
