@@ -21,7 +21,7 @@ goal remains open until every row is proven, including the last two rows.
 
 | Requirement | Authoritative evidence | State |
 | --- | --- | --- |
-| No duplicate or reverse-route two-instrument exposure | Canonical persisted key in runtime/replay; restart/dedup tests; API and acceptance gate require complete unique keys for every open position | Proven locally |
+| No duplicate or reverse-route two-instrument exposure | Runtime/replay canonical key; restart/dedup tests; API independently derives each open key from both legs and gate requires complete, canonical, unique keys | Proven locally |
 | Venue-specific future funding events | Adapter schedule tests for 1/4/8-hour intervals and settlement engine tests | Proven |
 | Robust median/EWMA, persistence, sign changes, two-sided outliers | Funding statistics/forecast code and scanner tests | Proven |
 | Time-synchronized cross-venue differential | Historical-window projection and no-look-ahead replay tests | Proven |
@@ -50,7 +50,7 @@ goal remains open until every row is proven, including the last two rows.
 | Event-driven deterministic replay with costs and attribution | Historical replay tests and portable dataset digest | Proven |
 | Same dataset/config candidate versus baseline, no look-ahead | Dataset `market-db-sha256:0745b20ed8e77c0ba02a7472ab10f6d48264e25405ad9e5d81f83e7c5c0103dc`; deterministic candidate event SHA `53e9e263f2709bb84ef4466a522ed1766e53cdd6235b019b082e9a96742c9534` | Proven |
 | Historical candidate beats baseline acceptance checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; lower drawdown, higher median monthly PnL, 2/3 profitable windows | Historical evidence only |
-| Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260813-065`, `v26-oos-candidate`/`v26-oos-baseline`; healthy pre-boundary postflight, restart count 0, zero open-key defects | Proven running |
+| Paper-only shared-feed candidate/baseline on VM | Target release `funding-pnl-v2-20260813-066`; release 065 healthy pre-boundary, restart count 0 | Canonical-key audit redeploy pending |
 | Clean 72-hour canary | Boundary `2026-08-13T23:15:00Z`; earliest audit `2026-08-16T23:16:00Z` | Pending time gate |
 | 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-12T23:16:00Z` | Pending time gate |
 
@@ -70,6 +70,7 @@ goal remains open until every row is proven, including the last two rows.
 The `v25-oos-*` window beginning `2026-08-13T21:15:00Z` is excluded from all
 acceptance calculations. Its baseline opened the same Gate/Bybit COTI
 instrument pair in opposite directions, cancelling funding while paying fees
-twice. Release 065 prevents this with a canonical persisted exposure key and
-requires the acceptance audit to prove open-key completeness and uniqueness; v26
+twice. Release 066 prevents this with a canonical persisted exposure key and
+requires the acceptance audit to independently prove open-key completeness,
+canonical correctness, and uniqueness; v26
 must start from an empty namespace and a later boundary.

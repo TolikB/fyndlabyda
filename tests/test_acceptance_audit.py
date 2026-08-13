@@ -52,12 +52,16 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
             "simulation_version": "candidate",
             "snapshot_count": 10,
             "open_positions_missing_exposure_key_count": 0,
+            "open_positions_unverifiable_exposure_key_count": 0,
+            "open_positions_mismatched_exposure_key_count": 0,
             "duplicate_open_exposure_count": 0,
         },
         {
             "simulation_version": "baseline",
             "snapshot_count": 10,
             "open_positions_missing_exposure_key_count": 0,
+            "open_positions_unverifiable_exposure_key_count": 0,
+            "open_positions_mismatched_exposure_key_count": 0,
             "duplicate_open_exposure_count": 0,
         },
         {"raw_candidates": 5},
@@ -87,11 +91,15 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
     candidate = {
         "simulation_version": "candidate",
         "open_positions_missing_exposure_key_count": 1,
+        "open_positions_unverifiable_exposure_key_count": 1,
+        "open_positions_mismatched_exposure_key_count": 1,
         "duplicate_open_exposure_count": 1,
     }
     baseline = {
         "simulation_version": "baseline",
         "open_positions_missing_exposure_key_count": 0,
+        "open_positions_unverifiable_exposure_key_count": 0,
+        "open_positions_mismatched_exposure_key_count": 0,
         "duplicate_open_exposure_count": 0,
     }
     result = build_audit(
@@ -122,22 +130,44 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
     )
 
     assert result["runtime_checks"]["candidate_open_exposure_keys_complete"] is False
+    assert result["runtime_checks"]["candidate_open_exposure_keys_verifiable"] is False
+    assert result["runtime_checks"]["candidate_open_exposure_keys_canonical"] is False
     assert result["runtime_checks"]["candidate_duplicate_open_exposures_zero"] is False
     assert result["runtime_safe"] is False
     assert result["canary_ready"] is False
 
 
 def test_open_exposure_safety_counts_missing_and_excess_positions() -> None:
+    canonical = (
+        "exposure|COTI|bybit|COTIUSDT|PERPETUAL|gate|COTI_USDT|PERPETUAL"
+    )
+    valid_payload = {
+        "asset": "COTI",
+        "exposure_key": canonical,
+        "leg_a": {
+            "exchange": "gate",
+            "symbol": "COTI_USDT",
+            "instrument_type": "PERPETUAL",
+        },
+        "leg_b": {
+            "exchange": "bybit",
+            "symbol": "COTIUSDT",
+            "instrument_type": "PERPETUAL",
+        },
+    }
     rows = [
-        SimpleNamespace(payload={"exposure_key": "same-pair"}),
-        SimpleNamespace(payload={"exposure_key": "same-pair"}),
-        SimpleNamespace(payload={"exposure_key": "other-pair"}),
+        SimpleNamespace(payload=valid_payload),
+        SimpleNamespace(payload=valid_payload),
+        SimpleNamespace(payload={**valid_payload, "exposure_key": "directional"}),
+        SimpleNamespace(payload={"exposure_key": "unverifiable"}),
         SimpleNamespace(payload={}),
     ]
 
     assert _open_exposure_safety(rows) == {
-        "open_exposure_key_count": 2,
+        "open_exposure_key_count": 3,
         "open_positions_missing_exposure_key_count": 1,
+        "open_positions_unverifiable_exposure_key_count": 1,
+        "open_positions_mismatched_exposure_key_count": 1,
         "duplicate_open_exposure_count": 1,
     }
 

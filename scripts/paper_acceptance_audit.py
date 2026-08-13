@@ -152,6 +152,22 @@ def build_audit(
             "open_positions_missing_exposure_key_count"
         )
         == 0,
+        "candidate_open_exposure_keys_verifiable": candidate.get(
+            "open_positions_unverifiable_exposure_key_count"
+        )
+        == 0,
+        "baseline_open_exposure_keys_verifiable": baseline.get(
+            "open_positions_unverifiable_exposure_key_count"
+        )
+        == 0,
+        "candidate_open_exposure_keys_canonical": candidate.get(
+            "open_positions_mismatched_exposure_key_count"
+        )
+        == 0,
+        "baseline_open_exposure_keys_canonical": baseline.get(
+            "open_positions_mismatched_exposure_key_count"
+        )
+        == 0,
         "candidate_duplicate_open_exposures_zero": candidate.get(
             "duplicate_open_exposure_count"
         )
@@ -225,6 +241,12 @@ def build_audit(
             "missing_open_exposure_keys": candidate.get(
                 "open_positions_missing_exposure_key_count"
             ),
+            "unverifiable_open_exposure_keys": candidate.get(
+                "open_positions_unverifiable_exposure_key_count"
+            ),
+            "mismatched_open_exposure_keys": candidate.get(
+                "open_positions_mismatched_exposure_key_count"
+            ),
             "duplicate_open_exposures": candidate.get(
                 "duplicate_open_exposure_count"
             ),
@@ -239,6 +261,12 @@ def build_audit(
             "open_exposure_keys": baseline.get("open_exposure_key_count"),
             "missing_open_exposure_keys": baseline.get(
                 "open_positions_missing_exposure_key_count"
+            ),
+            "unverifiable_open_exposure_keys": baseline.get(
+                "open_positions_unverifiable_exposure_key_count"
+            ),
+            "mismatched_open_exposure_keys": baseline.get(
+                "open_positions_mismatched_exposure_key_count"
             ),
             "duplicate_open_exposures": baseline.get(
                 "duplicate_open_exposure_count"

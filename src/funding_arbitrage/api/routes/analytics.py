@@ -21,6 +21,7 @@ from funding_arbitrage.database.models import (
     PaperPositionRecord,
     PortfolioSnapshotRecord,
 )
+from funding_arbitrage.opportunity.debounce import canonical_exposure_key
 from funding_arbitrage.services.runtime import RuntimeState
 
 router = APIRouter()
@@ -33,15 +34,49 @@ def _open_exposure_safety(
 
     exposure_counts: Counter[str] = Counter()
     missing = 0
+    unverifiable = 0
+    mismatched = 0
     for row in rows:
         exposure_key = row.payload.get("exposure_key")
         if not isinstance(exposure_key, str) or not exposure_key:
             missing += 1
             continue
         exposure_counts[exposure_key] += 1
+        asset = row.payload.get("asset")
+        leg_a = row.payload.get("leg_a")
+        leg_b = row.payload.get("leg_b")
+        if (
+            not isinstance(asset, str)
+            or not isinstance(leg_a, dict)
+            or not isinstance(leg_b, dict)
+        ):
+            unverifiable += 1
+            continue
+        leg_a_type = row.payload.get("leg_a_type") or leg_a.get("instrument_type")
+        leg_b_type = row.payload.get("leg_b_type") or leg_b.get("instrument_type")
+        leg_values = (
+            leg_a.get("exchange"),
+            leg_a.get("symbol"),
+            leg_a_type,
+            leg_b.get("exchange"),
+            leg_b.get("symbol"),
+            leg_b_type,
+        )
+        if not all(isinstance(value, str) and value for value in leg_values):
+            unverifiable += 1
+            continue
+        canonical_key = canonical_exposure_key(
+            asset,
+            (str(leg_values[0]), str(leg_values[1]), str(leg_values[2])),
+            (str(leg_values[3]), str(leg_values[4]), str(leg_values[5])),
+        )
+        if exposure_key != canonical_key:
+            mismatched += 1
     return {
         "open_exposure_key_count": len(exposure_counts),
         "open_positions_missing_exposure_key_count": missing,
+        "open_positions_unverifiable_exposure_key_count": unverifiable,
+        "open_positions_mismatched_exposure_key_count": mismatched,
         "duplicate_open_exposure_count": sum(
             count - 1 for count in exposure_counts.values() if count > 1
         ),
