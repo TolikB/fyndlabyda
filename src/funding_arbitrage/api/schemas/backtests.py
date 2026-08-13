@@ -12,7 +12,7 @@ class BacktestRequest(BaseModel):
 
 class PaperReplayRequest(BaseModel):
     initial_capital: Decimal = Field(default=Decimal("6250"), gt=0)
-    simulation_version: str = "v23-oos-candidate"
+    simulation_version: str = "v24-oos-candidate"
     start: datetime | None = None
     end: datetime | None = None
 

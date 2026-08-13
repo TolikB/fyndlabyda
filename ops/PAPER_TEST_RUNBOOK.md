@@ -39,8 +39,8 @@ shared-feed comparison in `.env`:
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
 PAPER_AUTOTRADE_START_UTC=2026-08-13T20:00:00Z
-PAPER_SIMULATION_VERSION=v23-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v23-oos-baseline
+PAPER_SIMULATION_VERSION=v24-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v24-oos-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -58,7 +58,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v23-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v24-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -70,7 +70,7 @@ funding payments, closed positions, fees, and the equity curve.
 ## Current VM acceptance gates
 
 The restart-safe, pre-market-filtered v23 canary starts with release
-`funding-pnl-v2-20260813-061`. Its clean evidence boundary and enforced
+`funding-pnl-v2-20260813-062`. Its clean evidence boundary and enforced
 autotrade boundary are both `2026-08-13T20:30:00Z`; use that exact timestamp as
 `<V23_DURABLE_START_UTC>` below. Run the read-only audit from the project
 directory after the relevant deadline:
