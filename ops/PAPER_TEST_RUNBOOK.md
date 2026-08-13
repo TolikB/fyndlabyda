@@ -69,7 +69,7 @@ funding payments, closed positions, fees, and the equity curve.
 ## Current VM acceptance gates
 
 The Gate/Binance/Bybit schedule-corrected v18 canary starts when release
-`funding-pnl-v2-20260813-047` is activated. Record the first shared v18 snapshot
+`funding-pnl-v2-20260813-048` is activated. Record the first shared v18 snapshot
 timestamp and use it as `<V18_START_UTC>` below. Run the read-only audit from
 the project directory after the relevant deadline:
 
