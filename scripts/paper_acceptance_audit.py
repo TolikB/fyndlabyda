@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -111,13 +112,22 @@ def build_audit(
     operational_metrics: dict[str, Any],
     candidate_version: str,
     baseline_version: str,
+    expected_start: str | None = None,
 ) -> dict[str, Any]:
+    configured_start = health.get("paper_autotrade_start_utc")
+    expected_start_utc = _normalize_utc(expected_start) if expected_start else None
     runtime_checks = {
         "health_ok": health.get("status") == "ok",
         "ready": ready.get("status") == "ready",
         "paper_test_mode": health.get("run_mode") == "paper_test",
         "live_public_market_data": health.get("market_data_mode") == "live_public",
         "paper_execution_only": health.get("execution_mode") == "paper",
+        "paper_autotrade_enabled": health.get("paper_autotrade_enabled") is True,
+        "paper_autotrade_active": health.get("paper_autotrade_active") is True,
+        "autotrade_boundary_matches": (
+            expected_start_utc is None
+            or _normalize_utc(configured_start) == expected_start_utc
+        ),
         "comparison_enabled": ready.get("comparison_enabled") is True,
         "candidate_version": candidate.get("simulation_version") == candidate_version,
         "baseline_version": baseline.get("simulation_version") == baseline_version,
@@ -197,6 +207,15 @@ def build_audit(
     }
 
 
+def _normalize_utc(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -250,6 +269,7 @@ def main() -> int:
         operational_metrics,
         args.candidate_version,
         args.baseline_version,
+        args.start,
     )
     print(json.dumps(audit, indent=2, sort_keys=True))
     ready_for_gate = (

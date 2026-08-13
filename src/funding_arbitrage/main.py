@@ -126,13 +126,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/dashboard", StaticFiles(directory="dashboard", html=True), name="dashboard")
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
+    async def health() -> dict[str, object]:
+        autotrade_start = active_settings.paper_autotrade_start_utc
+        now = datetime.now(UTC)
         return {
             "status": "ok",
             "environment": active_settings.app_env,
             "run_mode": active_settings.run_mode,
             "market_data_mode": active_settings.market_data_mode,
             "execution_mode": active_settings.execution_mode,
+            "paper_autotrade_enabled": active_settings.paper_autotrade,
+            "paper_autotrade_start_utc": (
+                autotrade_start.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                if autotrade_start is not None
+                else None
+            ),
+            "paper_autotrade_active": active_settings.paper_autotrade
+            and (autotrade_start is None or now >= autotrade_start),
         }
 
     @app.get("/health/ready")

@@ -26,6 +26,9 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
             "run_mode": "paper_test",
             "market_data_mode": "live_public",
             "execution_mode": execution_mode,
+            "paper_autotrade_enabled": True,
+            "paper_autotrade_active": True,
+            "paper_autotrade_start_utc": "2026-01-01T00:00:00Z",
         },
         {
             "status": "ready",
@@ -63,6 +66,42 @@ def test_acceptance_audit_rejects_non_paper_execution() -> None:
     assert result["runtime_safe"] is False
     assert result["canary_ready"] is False
     assert result["acceptance_ready"] is False
+
+
+def test_acceptance_audit_rejects_wrong_or_inactive_autotrade_boundary() -> None:
+    result = build_audit(
+        {
+            "status": "ok",
+            "run_mode": "paper_test",
+            "market_data_mode": "live_public",
+            "execution_mode": "paper",
+            "paper_autotrade_enabled": True,
+            "paper_autotrade_active": False,
+            "paper_autotrade_start_utc": "2026-01-02T00:00:00Z",
+        },
+        {
+            "status": "ready",
+            "comparison_enabled": True,
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+        },
+        {
+            "canary": {"ready": True, "checks": {}},
+            "checks": {"minimum_30_days": True},
+            "evidence_ready": True,
+            "accepted": True,
+        },
+        {"simulation_version": "candidate"},
+        {"simulation_version": "baseline"},
+        {},
+        _operational(),
+        "candidate",
+        "baseline",
+        "2026-01-01T00:00:00Z",
+    )
+
+    assert result["runtime_checks"]["paper_autotrade_active"] is False
+    assert result["runtime_checks"]["autotrade_boundary_matches"] is False
+    assert result["runtime_safe"] is False
 
 
 def test_acceptance_audit_rejects_cycle_errors_or_incomplete_market_data() -> None:
