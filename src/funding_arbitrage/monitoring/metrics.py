@@ -79,7 +79,9 @@ paper_runner_stage_duration_seconds = Histogram(
     ["stage"],
 )
 paper_trade_rejections_total = Counter(
-    "funding_paper_trade_rejections_total", "Paper trade rejections", ["reason"]
+    "funding_paper_trade_rejections_total",
+    "Paper trade rejections",
+    ["profile", "reason"],
 )
 paper_runner_last_cycle_timestamp = Gauge(
     "funding_paper_runner_last_cycle_timestamp", "Unix timestamp of the last paper cycle"

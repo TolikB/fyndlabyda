@@ -561,19 +561,44 @@ class PaperTestRunner:
                     )
                 ]
                 if not settlement_quotes:
-                    paper_trade_rejections_total.labels("settlement_cost_coverage").inc()
+                    self._record_trade_rejection(
+                        "settlement_cost_coverage", opportunity
+                    )
                     continue
-                capital = self.allocator.allocate(
+                allocation = self.allocator.decide(
                     opportunity.model_copy(update={"size_quotes": settlement_quotes}),
                     self.runtime.portfolio,
-                    minimum_capital=self.settings.paper_position_size_usd,
+                    # The fixed configured size belongs to the baseline. The
+                    # candidate must be free to choose any profitable executable
+                    # quote from the configured depth grid, including $100 when
+                    # a larger quote loses its settlement edge to slippage.
+                    minimum_capital=Decimal("0"),
                 )
+                capital = allocation.capital
             if capital <= 0:
-                paper_trade_rejections_total.labels("allocation_or_risk").inc()
+                reason = (
+                    allocation.risk_reasons[0]
+                    if self.settings.paper_strategy_profile == "candidate"
+                    and allocation.risk_reasons
+                    else (
+                        allocation.reason
+                        if self.settings.paper_strategy_profile == "candidate"
+                        else "no_viable_size_quote"
+                    )
+                )
+                self._record_trade_rejection(
+                    reason or "allocation",
+                    opportunity,
+                    risk_reasons=(
+                        allocation.risk_reasons
+                        if self.settings.paper_strategy_profile == "candidate"
+                        else ()
+                    ),
+                )
                 continue
             position = await self.executor.open(opportunity, capital, snapshot)
             if position.state is not PositionState.OPEN:
-                paper_trade_rejections_total.labels("execution").inc()
+                self._record_trade_rejection("execution", opportunity)
                 continue
             if self.settings.market_data_mode == "mock":
                 due = snapshot.captured_at + timedelta(
@@ -595,10 +620,34 @@ class PaperTestRunner:
             try:
                 self.runtime.portfolio.allocate_position(position, venues, capital)
             except ValueError:
-                paper_trade_rejections_total.labels("venue_balance").inc()
+                self._record_trade_rejection("venue_balance", opportunity)
                 continue
             self._position_by_key[key] = position.id
             open_count += 1
+
+    def _record_trade_rejection(
+        self,
+        reason: str,
+        opportunity: Opportunity,
+        *,
+        risk_reasons: tuple[str, ...] = (),
+    ) -> None:
+        profile = self.settings.paper_strategy_profile
+        paper_trade_rejections_total.labels(profile, reason).inc()
+        logger.info(
+            "paper_trade_rejected",
+            extra={
+                "event": "paper_trade_rejected",
+                "profile": profile,
+                "reason": reason,
+                "risk_reasons": risk_reasons,
+                "asset": opportunity.asset,
+                "strategy": str(opportunity.strategy),
+                "venue_a": opportunity.venue_a,
+                "venue_b": opportunity.venue_b,
+                "opportunity_id": opportunity.id,
+            },
+        )
 
     async def _settle_funding(self, snapshot: MarketSnapshot) -> None:
         if self.settings.market_data_mode == "mock":

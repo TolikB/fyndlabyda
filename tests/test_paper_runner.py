@@ -211,6 +211,104 @@ async def test_paper_runner_opens_mock_position_without_live_orders(
 
 
 @pytest.mark.asyncio
+async def test_candidate_can_allocate_profitable_quote_below_baseline_fixed_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_autotrade=True,
+        paper_strategy_profile="candidate",
+        paper_position_size_usd=Decimal("250"),
+    )
+    baseline_settings = candidate_settings.model_copy(
+        update={"paper_strategy_profile": "baseline"}
+    )
+    adapters = create_public_adapters(candidate_settings)
+    factory = cast(async_sessionmaker[AsyncSession], EmptySessionFactory())
+    candidate_runtime = RuntimeState(candidate_settings, adapters)
+    baseline_runtime = RuntimeState(baseline_settings, adapters, emit_metrics=False)
+    candidate = PaperTestRunner(candidate_settings, candidate_runtime, factory)
+    baseline = PaperTestRunner(
+        baseline_settings,
+        baseline_runtime,
+        factory,
+        collector=candidate.collector,
+    )
+    opportunity = Opportunity(
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING,
+        asset="COTI",
+        venue_a="gate",
+        venue_b="bybit",
+        symbol_a="COTI_USDT",
+        symbol_b="COTIUSDT",
+        leg_a_type=InstrumentType.PERPETUAL,
+        leg_b_type=InstrumentType.PERPETUAL,
+        leg_a_side="SELL",
+        leg_b_side="BUY",
+        price_a=Decimal("0.011"),
+        price_b=Decimal("0.011"),
+        gross_edge=Decimal("0.01"),
+        net_edge=Decimal("0.002"),
+        expected_holding_hours=Decimal("8"),
+        net_apr=Decimal("0.2"),
+        available_liquidity=Decimal("1000"),
+        risk_score=Decimal("20"),
+        status="confirmed",
+        size_quotes=[
+            SizeQuote(
+                capital=Decimal("100"),
+                gross_profit=Decimal("1"),
+                net_profit=Decimal("0.25"),
+                net_return_percent=Decimal("0.0025"),
+                net_apr=Decimal("0.2"),
+                costs=CostBreakdown(
+                    entry_fees=Decimal("0.1"),
+                    exit_fees=Decimal("0.1"),
+                    entry_spread=Decimal("0.1"),
+                    exit_spread=Decimal("0.1"),
+                    entry_slippage=Decimal("0.1"),
+                    exit_slippage=Decimal("0.1"),
+                    borrowing_cost=Decimal("0"),
+                    network_cost=Decimal("0"),
+                ),
+            )
+        ],
+    )
+    snapshot = MarketSnapshot([], [], [], {}, datetime.now(UTC))
+
+    async def paper_open(
+        _opportunity: Opportunity,
+        capital: Decimal,
+        _snapshot: MarketSnapshot,
+    ) -> PaperPosition:
+        return PaperPosition(
+            opportunity_id=opportunity.id,
+            asset=opportunity.asset,
+            strategy=str(opportunity.strategy),
+            capital=capital,
+            state=PositionState.OPEN,
+        )
+
+    monkeypatch.setattr(candidate.executor, "open", paper_open)
+    monkeypatch.setattr(baseline.executor, "open", paper_open)
+
+    await candidate._open_confirmed([opportunity], snapshot)
+    await baseline._open_confirmed([opportunity], snapshot)
+
+    assert len(candidate_runtime.portfolio.positions) == 1
+    assert next(iter(candidate_runtime.portfolio.positions.values())).capital == Decimal(
+        "100"
+    )
+    assert not baseline_runtime.portfolio.positions
+
+    await candidate.close()
+    await baseline.close()
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
 async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

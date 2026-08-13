@@ -135,7 +135,7 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
 ) -> None:
     settings = Settings(
         paper_initial_balance_usd=6250,
-        paper_simulation_version="v24-oos-candidate",
+        paper_simulation_version="v25-oos-candidate",
         telegram_enabled=True,
         telegram_bot_token="test-token",
         telegram_chat_id="123",
@@ -182,4 +182,4 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
     assert await service.check_and_send(datetime(2026, 8, 11, 0, 1, tzinfo=UTC))
     assert "Net PnL: +$0.00" in sent[0]
     assert "No eligible paper trades during the day; equity was unchanged." in sent[0]
-    assert "simulator v24-oos-candidate" in sent[0]
+    assert "simulator v25-oos-candidate" in sent[0]

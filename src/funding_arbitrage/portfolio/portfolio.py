@@ -29,7 +29,7 @@ class PaperPortfolio:
         initial_balance: Decimal,
         venues: tuple[str, ...],
         reserve_percent: Decimal = Decimal("20"),
-        simulation_version: str = "v24-oos-candidate",
+        simulation_version: str = "v25-oos-candidate",
     ) -> None:
         if initial_balance <= 0:
             raise ValueError("initial balance must be positive")

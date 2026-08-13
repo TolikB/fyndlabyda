@@ -7,6 +7,7 @@ def _operational(**updates: object) -> dict[str, object]:
         "paper_runner_cycles": 10,
         "paper_runner_errors": 0,
         "market_cycles_skipped": {},
+        "trade_rejections": {},
         "last_cycle_age_seconds": 10,
         "history_coverage": {venue: 1.0 for venue in venues},
         "orderbook_coverage": {venue: 1.0 for venue in venues},
@@ -198,6 +199,7 @@ funding_paper_runner_cycles_total 4
 # TYPE funding_paper_runner_errors_total counter
 funding_paper_runner_errors_total 0
 funding_paper_market_cycles_skipped_total{reason="incomplete_venue"} 2
+funding_paper_trade_rejections_total{profile="candidate",reason="settlement_cost_coverage"} 3
 # TYPE funding_paper_runner_last_cycle_timestamp gauge
 funding_paper_runner_last_cycle_timestamp 1000
 funding_history_coverage_ratio{exchange="gate"} 1
@@ -213,6 +215,9 @@ funding_exchange_stream_last_message_timestamp{exchange="gate",stream="orderbook
         "paper_runner_cycles": 4.0,
         "paper_runner_errors": 0.0,
         "market_cycles_skipped": {"incomplete_venue": 2.0},
+        "trade_rejections": {
+            "candidate": {"settlement_cost_coverage": 3.0}
+        },
         "last_cycle_age_seconds": 10.0,
         "history_coverage": {"gate": 1.0},
         "orderbook_coverage": {"gate": 1.0},

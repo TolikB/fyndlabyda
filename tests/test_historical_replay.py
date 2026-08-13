@@ -12,6 +12,7 @@ from funding_arbitrage.backtest.historical_replay import (
     HistoricalDataset,
     HistoricalMarketReplay,
     _funding_points,
+    _select_quote,
 )
 from funding_arbitrage.config import Settings
 from funding_arbitrage.database.models import FundingHistoryRecord, MarketCandleRecord
@@ -30,10 +31,18 @@ from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
 from funding_arbitrage.exchanges.okx import OkxPublicAdapter
+from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.market_data.historical import (
     HistoricalBackfill,
     _rank_research_assets,
 )
+from funding_arbitrage.opportunity.models import (
+    CostBreakdown,
+    Opportunity,
+    SizeQuote,
+    StrategyName,
+)
+from funding_arbitrage.risk.engine import RiskEngine
 
 
 def test_candle_rejects_invalid_ohlc() -> None:
@@ -51,6 +60,64 @@ def test_candle_rejects_invalid_ohlc() -> None:
             close=Decimal("100"),
             volume=Decimal("1"),
         )
+
+
+def test_historical_baseline_does_not_fall_back_below_fixed_size() -> None:
+    timestamp = datetime(2026, 8, 1, tzinfo=UTC)
+    opportunity = Opportunity(
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING,
+        asset="COTI",
+        venue_a="gate",
+        venue_b="bybit",
+        symbol_a="COTI_USDT",
+        symbol_b="COTIUSDT",
+        leg_a_type=InstrumentType.PERPETUAL,
+        leg_b_type=InstrumentType.PERPETUAL,
+        leg_a_side="SELL",
+        leg_b_side="BUY",
+        price_a=Decimal("0.011"),
+        price_b=Decimal("0.011"),
+        gross_edge=Decimal("0.01"),
+        net_edge=Decimal("0.002"),
+        expected_holding_hours=Decimal("8"),
+        net_apr=Decimal("0.2"),
+        available_liquidity=Decimal("1000"),
+        risk_score=Decimal("20"),
+        size_quotes=[
+            SizeQuote(
+                capital=Decimal("100"),
+                gross_profit=Decimal("1"),
+                net_profit=Decimal("0.25"),
+                net_return_percent=Decimal("0.0025"),
+                net_apr=Decimal("0.2"),
+                costs=CostBreakdown(
+                    entry_fees=Decimal("0.1"),
+                    exit_fees=Decimal("0.1"),
+                    entry_spread=Decimal("0.1"),
+                    exit_spread=Decimal("0.1"),
+                    entry_slippage=Decimal("0.1"),
+                    exit_slippage=Decimal("0.1"),
+                    borrowing_cost=Decimal("0"),
+                    network_cost=Decimal("0"),
+                ),
+            )
+        ],
+    )
+
+    selected = _select_quote(
+        opportunity,
+        "baseline",
+        Decimal("15000"),
+        Decimal("15000"),
+        {},
+        MarketSnapshot([], [], [], {}, timestamp),
+        timestamp,
+        RiskEngine(),
+        Settings(paper_position_size_usd=Decimal("250")),
+        (),
+    )
+
+    assert selected is None
 
 
 def test_portable_replay_dataset_preserves_digest_and_types(tmp_path: Path) -> None:

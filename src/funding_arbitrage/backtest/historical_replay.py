@@ -768,7 +768,17 @@ def _select_quote(
         if quote.fully_filled and quote.net_profit > 0 and quote.capital <= available
     ]
     if profile == "baseline":
-        return min(viable, key=lambda quote: abs(quote.capital - Decimal("250")), default=None)
+        return next(
+            (
+                quote
+                for quote in opportunity.size_quotes
+                if quote.capital >= settings.paper_position_size_usd
+                and quote.net_profit > 0
+                and quote.fully_filled
+                and quote.capital <= available
+            ),
+            None,
+        )
     leg_venues = (opportunity.venue_a, opportunity.venue_b or opportunity.venue_a)
     venues = tuple(dict.fromkeys(leg_venues))
     asset_exposure = sum(

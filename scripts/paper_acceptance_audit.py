@@ -65,6 +65,16 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
             if "reason" in item["labels"]
         }
 
+    def profile_reasons(name: str) -> dict[str, dict[str, float]]:
+        result: dict[str, dict[str, float]] = {}
+        for item in samples.get(name, []):
+            profile = item["labels"].get("profile")
+            reason = item["labels"].get("reason")
+            if profile is None or reason is None:
+                continue
+            result.setdefault(str(profile), {})[str(reason)] = float(item["value"])
+        return result
+
     observed_at = time.time() if now is None else now
 
     def stream_ages(name: str) -> dict[str, dict[str, float | None]]:
@@ -87,6 +97,9 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
         "paper_runner_errors": scalar("funding_paper_runner_errors_total"),
         "market_cycles_skipped": reasons(
             "funding_paper_market_cycles_skipped_total"
+        ),
+        "trade_rejections": profile_reasons(
+            "funding_paper_trade_rejections_total"
         ),
         "last_cycle_age_seconds": (
             observed_at - last_cycle if last_cycle is not None else None
@@ -219,8 +232,8 @@ def _normalize_utc(value: object) -> str | None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--candidate-version", default="v24-oos-candidate")
-    parser.add_argument("--baseline-version", default="v24-oos-baseline")
+    parser.add_argument("--candidate-version", default="v25-oos-candidate")
+    parser.add_argument("--baseline-version", default="v25-oos-baseline")
     parser.add_argument("--start", help="Optional ISO-8601 start of the clean canary window")
     parser.add_argument("--gate", choices=("canary", "acceptance"), default="canary")
     parser.add_argument("--timeout", type=float, default=30)
