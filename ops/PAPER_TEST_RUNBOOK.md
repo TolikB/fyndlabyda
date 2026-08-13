@@ -38,8 +38,8 @@ shared-feed comparison in `.env`:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
-PAPER_SIMULATION_VERSION=v21-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v21-oos-baseline
+PAPER_SIMULATION_VERSION=v22-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v22-oos-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -57,7 +57,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v21-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v22-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -68,22 +68,22 @@ funding payments, closed positions, fees, and the equity curve.
 
 ## Current VM acceptance gates
 
-The restart-safe, pre-market-filtered v21 canary starts with release
-`funding-pnl-v2-20260813-057`. Its clean evidence boundary is
-`2026-08-13T19:00:00Z`; use that exact timestamp as
-`<V21_DURABLE_START_UTC>` below. Run the read-only audit from the project
+The restart-safe, pre-market-filtered v22 canary starts with release
+`funding-pnl-v2-20260813-058`. Its clean evidence boundary is
+`2026-08-13T19:30:00Z`; use that exact timestamp as
+`<V22_DURABLE_START_UTC>` below. Run the read-only audit from the project
 directory after the relevant deadline:
 
 ```bash
-# Earliest useful run: 2026-08-16T19:00:00Z.
+# Earliest useful run: 2026-08-16T19:30:00Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V21_DURABLE_START_UTC> \
+  --start <V22_DURABLE_START_UTC> \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 2026-09-12T19:00:00Z.
+# Earliest useful run: 2026-09-12T19:30:00Z.
 python3 scripts/paper_acceptance_audit.py \
-  --start <V21_DURABLE_START_UTC> \
+  --start <V22_DURABLE_START_UTC> \
   --gate acceptance \
   --timeout 45
 ```
@@ -168,7 +168,8 @@ be intentionally deleted.
   mark-to-market loss exceeds this fraction of per-leg capital.
 - Candidate positions also exit after the targeted funding event unless the next
   venue-specific settlement covers exit plus re-entry costs. A missing or shallow
-  close book is treated as degraded execution and retried without a partial close.
+  close book latches a restart-safe exit request and is retried without a fabricated
+  partial close once both legs have executable depth.
 - `PAPER_MARKET_ASSET_LIMIT`: liquid base-assets retained per venue; their
   available spot/perp pairs remain together.
 - `PAPER_HISTORY_SYMBOL_LIMIT`: funding-history queries per venue per refresh.

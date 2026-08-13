@@ -826,3 +826,221 @@ async def test_candidate_closes_after_target_when_next_funding_cannot_cover_chur
 
     for adapter in adapters.values():
         await adapter.close()
+
+
+def _exit_test_opportunity() -> Opportunity:
+    costs = CostBreakdown(
+        entry_fees=Decimal("0"),
+        exit_fees=Decimal("0"),
+        entry_spread=Decimal("0"),
+        exit_spread=Decimal("0"),
+        entry_slippage=Decimal("0"),
+        exit_slippage=Decimal("0"),
+        borrowing_cost=Decimal("0"),
+        network_cost=Decimal("0"),
+        legging_cost=Decimal("0"),
+    )
+    return Opportunity(
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING,
+        asset="BTC",
+        venue_a="bybit",
+        venue_b="gate",
+        symbol_a="BTCUSDT",
+        symbol_b="BTC_USDT",
+        leg_a_type="PERPETUAL",
+        leg_b_type="PERPETUAL",
+        leg_a_side="BUY",
+        leg_b_side="SELL",
+        price_a=Decimal("100"),
+        price_b=Decimal("100"),
+        funding_a=Decimal("0"),
+        funding_b=Decimal("0.001"),
+        gross_edge=Decimal("0.001"),
+        net_edge=Decimal("0.001"),
+        expected_holding_hours=Decimal("1"),
+        net_apr=Decimal("8.76"),
+        available_liquidity=Decimal("10000"),
+        risk_score=Decimal("10"),
+        status="confirmed",
+        size_quotes=[
+            SizeQuote(
+                capital=Decimal("100"),
+                gross_profit=Decimal("0.1"),
+                net_profit=Decimal("0.1"),
+                net_return_percent=Decimal("0.001"),
+                net_apr=Decimal("8.76"),
+                costs=costs,
+            )
+        ],
+    )
+
+
+def _exit_test_fill(
+    exchange: str,
+    symbol: str,
+    side: str,
+) -> PaperFill:
+    return PaperFill(
+        client_order_id=f"{exchange}-{side}",
+        exchange=exchange,
+        symbol=symbol,
+        instrument_type=InstrumentType.PERPETUAL,
+        side=side,
+        requested_quantity=Decimal("1"),
+        filled_quantity=Decimal("1"),
+        price=Decimal("100"),
+        reference_price=Decimal("100"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        status=FillStatus.FILLED,
+    )
+
+
+def _exit_test_snapshot(
+    now: datetime,
+    *,
+    adverse_basis: bool = False,
+    funding_reversed: bool = False,
+    degraded: bool = False,
+) -> MarketSnapshot:
+    bybit_price = Decimal("99") if adverse_basis else Decimal("100")
+    gate_price = Decimal("101") if adverse_basis else Decimal("100")
+    tickers = [
+        Ticker(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            last_price=bybit_price,
+            timestamp=now,
+        ),
+        Ticker(
+            exchange="gate",
+            symbol="BTC_USDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            last_price=gate_price,
+            timestamp=now,
+        ),
+    ]
+    funding = [
+        FundingSnapshot(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            funding_rate=Decimal("0.002") if funding_reversed else Decimal("0"),
+            funding_interval_hours=Decimal("1"),
+            next_funding_time=now + timedelta(hours=1),
+            timestamp=now,
+        ),
+        FundingSnapshot(
+            exchange="gate",
+            symbol="BTC_USDT",
+            funding_rate=Decimal("-0.001") if funding_reversed else Decimal("0.001"),
+            funding_interval_hours=Decimal("1"),
+            next_funding_time=now + timedelta(hours=1),
+            timestamp=now,
+        ),
+    ]
+    books = {
+        ("bybit", "BTCUSDT", InstrumentType.PERPETUAL): OrderBook(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            bids=(OrderBookLevel(price=bybit_price, quantity=Decimal("10")),),
+            asks=(OrderBookLevel(price=bybit_price, quantity=Decimal("10")),),
+            timestamp=now,
+        ),
+        ("gate", "BTC_USDT", InstrumentType.PERPETUAL): OrderBook(
+            exchange="gate",
+            symbol="BTC_USDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            bids=(
+                OrderBookLevel(
+                    price=gate_price,
+                    quantity=Decimal("10"),
+                ),
+            ),
+            asks=(
+                OrderBookLevel(
+                    price=gate_price,
+                    quantity=Decimal("0.5") if degraded else Decimal("10"),
+                ),
+            ),
+            timestamp=now,
+        ),
+    }
+    return MarketSnapshot([], tickers, funding, books, now)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("trigger", "expected_reason"),
+    [
+        ("edge", "edge_gone"),
+        ("funding", "funding_reversed"),
+        ("basis", "adverse_basis"),
+        ("liquidity", "market_degraded"),
+    ],
+)
+async def test_candidate_exit_request_is_latched_until_fill_is_possible(
+    trigger: str,
+    expected_reason: str,
+) -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_strategy_profile="candidate",
+        paper_max_hold_seconds=86400,
+        paper_exit_edge_miss_cycles=1,
+        paper_max_adverse_basis_percent=Decimal("0.005"),
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    now = datetime.now(UTC)
+    opportunity = _exit_test_opportunity()
+    key = OpportunityDebouncer.key(opportunity)
+    position = PaperPosition(
+        opportunity_id=opportunity.id,
+        opportunity_key=key,
+        asset="BTC",
+        capital=Decimal("100"),
+        strategy=str(opportunity.strategy),
+        leg_a=_exit_test_fill("bybit", "BTCUSDT", "BUY"),
+        leg_b=_exit_test_fill("gate", "BTC_USDT", "SELL"),
+        leg_a_type=InstrumentType.PERPETUAL,
+        leg_b_type=InstrumentType.PERPETUAL,
+        state=PositionState.OPEN,
+        opened_at=now - timedelta(minutes=5),
+        target_settlements=(now + timedelta(hours=1),),
+        target_funding_events={"gate|BTC_USDT": now + timedelta(hours=1)},
+    )
+    runtime.portfolio.allocate_position(position, ("bybit", "gate"), Decimal("100"))
+    runner._position_by_key[key] = position.id
+    runtime.opportunities = [] if trigger == "edge" else [opportunity]
+    snapshot = _exit_test_snapshot(
+        now,
+        adverse_basis=trigger == "basis",
+        funding_reversed=trigger == "funding",
+        degraded=trigger == "liquidity",
+    )
+
+    await runner._close_expired(snapshot)
+
+    assert position.exit_requested_at == now
+    assert position.exit_requested_reason == expected_reason
+    restored = PaperPosition.model_validate(position.model_dump(mode="json"))
+    assert restored.exit_requested_at == now
+    assert restored.exit_requested_reason == expected_reason
+    if trigger == "liquidity":
+        assert position.state is PositionState.OPEN
+        recovered = _exit_test_snapshot(now + timedelta(seconds=1))
+        assert not runner._execution_degraded(position, recovered)
+        await runner._close_expired(recovered)
+    assert position.state is PositionState.CLOSED
+    assert key not in runner._position_by_key
+
+    for adapter in adapters.values():
+        await adapter.close()

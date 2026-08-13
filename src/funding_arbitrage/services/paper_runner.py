@@ -862,17 +862,32 @@ class PaperTestRunner:
                         sorted(set(position.target_funding_events.values()))
                     )
             target_exit = target_received and not continue_after_target
-            optimized_exit = (
-                self.settings.paper_strategy_profile == "candidate"
-                and (
-                    edge_gone
-                    or funding_reversed
-                    or adverse_basis
-                    or market_degraded
-                    or target_exit
+            exit_reason: str | None = None
+            if max_hold:
+                exit_reason = "max_hold"
+            elif self.settings.paper_strategy_profile == "candidate":
+                exit_reason = next(
+                    (
+                        reason
+                        for reason, triggered in (
+                            ("edge_gone", edge_gone),
+                            ("funding_reversed", funding_reversed),
+                            ("adverse_basis", adverse_basis),
+                            ("market_degraded", market_degraded),
+                            ("target_settlement", target_exit),
+                        )
+                        if triggered
+                    ),
+                    None,
                 )
-            )
-            if pending_target_funding or not (max_hold or optimized_exit):
+            if exit_reason is not None and position.exit_requested_at is None:
+                # Latch the first risk/strategy exit request. A degraded book can
+                # make an immediate fill impossible; persisting this state makes
+                # the runner retry once executable liquidity returns, including
+                # after a process restart, without inventing a paper fill.
+                position.exit_requested_at = now
+                position.exit_requested_reason = exit_reason
+            if pending_target_funding or position.exit_requested_at is None:
                 continue
             await self.executor.close(position, snapshot)
             if position.state is not PositionState.CLOSED:

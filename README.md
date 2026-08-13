@@ -80,15 +80,15 @@ an SSH tunnel such as `ssh -L 8000:127.0.0.1:8000 user@vm`, then open
 
 ## PnL-correct comparison mode
 
-The clean shared-feed OOS candidate is versioned as `v21-oos-candidate`. It requires typed,
+The clean shared-feed OOS candidate is versioned as `v22-oos-candidate`. It requires typed,
 fresh order books for both legs, closes the exact opened quantity, applies the
 taker fee of each venue, and separates legacy results from the current equity
 curve. A deterministic adverse second-leg move is charged in signal sizing,
 paper fills, PnL, and replay attribution through `PAPER_LEGGING_MOVE_PERCENT`.
 Candidate positions are fill-or-kill at entry and close after their target settlement unless
 the next exact venue settlement is projected to cover exit, re-entry, legging, and incremental
-borrow costs. Missing or shallow close books keep the exit pending until both legs can be
-neutralized.
+borrow costs. Missing or shallow close books persist a restart-safe exit request until both
+legs can be neutralized; the executor never invents a fill while liquidity is unavailable.
 Ticker and typed spot/perpetual order-book WebSockets are the primary
 incremental source; REST is used for initial snapshots, periodic validation,
 recovery, and funding history.
@@ -112,7 +112,7 @@ profiles share PostgreSQL but restore and report only their own
 
 ```text
 GET  /analytics/compare
-GET  /analytics/attribution?simulation_version=v21-oos-candidate
+GET  /analytics/attribution?simulation_version=v22-oos-candidate
 POST /backtests/replay-paper
 POST /backtests/compare-market
 POST /backtests/compare-market/jobs

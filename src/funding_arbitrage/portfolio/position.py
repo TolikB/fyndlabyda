@@ -71,6 +71,8 @@ class PaperPosition(BaseModel):
     settled_funding_at: dict[str, datetime] = Field(default_factory=dict)
     funding_events: int = Field(default=0, ge=0)
     edge_miss_count: int = Field(default=0, ge=0)
+    exit_requested_at: datetime | None = None
+    exit_requested_reason: str | None = None
     borrow_rate_daily: Decimal = Field(default=Decimal("0"), ge=0)
     borrow_accrued_until: datetime | None = None
     opened_at: datetime | None = None
