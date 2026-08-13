@@ -12,16 +12,27 @@ from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 
 @pytest.mark.asyncio
 async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> None:
+    requested_symbols: list[str] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/public/instruments"):
             return httpx.Response(
                 200,
                 json={
                     "code": "0",
-                    "data": [{"instId": "ETH-USDT-SWAP"}],
+                    "data": [
+                        {"instId": "ETH-USDT-SWAP", "state": "live"},
+                        {
+                            "instId": "JP225-USDT-SWAP",
+                            "state": "preopen",
+                            "ctVal": "",
+                            "tickSz": "",
+                        },
+                    ],
                 },
             )
         if request.url.path.endswith("/public/funding-rate"):
+            requested_symbols.append(request.url.params["instId"])
             assert request.url.params["instId"] == "ETH-USDT-SWAP"
             return httpx.Response(
                 200,
@@ -51,6 +62,7 @@ async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> Non
     assert funding[0].funding_rate_daily == Decimal("0.006")
     assert funding[0].next_funding_time is not None
     assert funding[0].next_funding_time.hour == 4
+    assert requested_symbols == ["ETH-USDT-SWAP"]
 
 
 @pytest.mark.asyncio
@@ -153,7 +165,15 @@ async def test_okx_empty_spot_contract_value_is_normalized() -> None:
             200,
             json={
                 "code": "0",
-                "data": [{"instId": "BTC-USDT", "ctVal": "", "tickSz": "0.01"}],
+                "data": [
+                    {"instId": "BTC-USDT", "ctVal": "", "tickSz": "0.01"},
+                    {
+                        "instId": "XALAB-USDT",
+                        "state": "preopen",
+                        "ctVal": "",
+                        "tickSz": "",
+                    },
+                ],
             },
         )
 
@@ -166,6 +186,10 @@ async def test_okx_empty_spot_contract_value_is_normalized() -> None:
 
     spot = next(item for item in instruments if item.instrument_type is InstrumentType.SPOT)
     assert spot.contract_size == Decimal("1")
+    assert {item.exchange_symbol for item in instruments} == {
+        "BTC-USDT-SWAP",
+        "BTC-USDT",
+    }
 
 
 def test_binance_websocket_ticker_aliases_are_normalized() -> None:

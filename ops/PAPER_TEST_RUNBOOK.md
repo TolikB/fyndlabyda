@@ -38,8 +38,8 @@ shared-feed comparison in `.env`:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
-PAPER_SIMULATION_VERSION=v20-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v20-oos-baseline
+PAPER_SIMULATION_VERSION=v21-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v21-oos-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -57,7 +57,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v20-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v21-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```

@@ -104,6 +104,11 @@ class OkxPublicAdapter(ExchangeAdapter):
         for inst_type in ("SWAP", "SPOT"):
             rows = await self._request("/api/v5/public/instruments", {"instType": inst_type})
             for row in rows:
+                # Pre-open instruments can legitimately omit ctVal/tickSz until
+                # continuous trading starts. They are not executable yet, so do
+                # not treat their incomplete schema as an adapter failure.
+                if str(row.get("state", "live")) != "live":
+                    continue
                 try:
                     result.append(self._parse_instrument(row, inst_type))
                 except InvalidResponseError as exc:
@@ -177,6 +182,9 @@ class OkxPublicAdapter(ExchangeAdapter):
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         result: list[FundingSnapshot] = []
         instruments = await self._request("/api/v5/public/instruments", {"instType": "SWAP"})
+        instruments = [
+            item for item in instruments if str(item.get("state", "live")) == "live"
+        ]
         popular = ("BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP")
         instruments = sorted(
             instruments,

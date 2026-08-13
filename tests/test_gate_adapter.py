@@ -13,6 +13,23 @@ def response(payload: object) -> httpx.Response:
     return httpx.Response(200, json=payload)
 
 
+def test_gate_prelaunch_contract_is_not_tradable() -> None:
+    adapter = GatePublicAdapter()
+    instrument = adapter._parse_future_instrument(
+        {
+            "name": "KODEX200_USDT",
+            "quanto_multiplier": "0.0001",
+            "order_price_round": "0.01",
+            "order_size_min": "1",
+            "funding_interval": 28_800,
+            "status": "prelaunch",
+            "in_delisting": False,
+        }
+    )
+
+    assert instrument.is_active is False
+
+
 @pytest.mark.asyncio
 async def test_gate_rest_payloads_are_normalized() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -29,7 +46,16 @@ async def test_gate_rest_payloads_are_normalized() -> None:
                         "funding_interval": 28800,
                         "funding_next_apply": 1735718400,
                         "in_delisting": False,
-                    }
+                    },
+                    {
+                        "name": "KODEX200_USDT",
+                        "quanto_multiplier": "0.0001",
+                        "order_price_round": "0.01",
+                        "order_size_min": "1",
+                        "funding_interval": 28_800,
+                        "status": "prelaunch",
+                        "in_delisting": False,
+                    },
                 ]
             )
         if path.endswith("/spot/currency_pairs"):
@@ -58,7 +84,14 @@ async def test_gate_rest_payloads_are_normalized() -> None:
                         "volume_24h_settle": "12",
                         "total_size": "300",
                         "t": 1735689600000,
-                    }
+                    },
+                    {
+                        "contract": "KODEX200_USDT",
+                        "last": "0",
+                        "funding_rate": "0",
+                        "volume_24h_settle": "0",
+                        "t": 1735689600000,
+                    },
                 ]
             )
         if path.endswith("/spot/tickers"):
@@ -106,6 +139,8 @@ async def test_gate_rest_payloads_are_normalized() -> None:
     assert tickers[0].last_price == Decimal("100")
     assert funding[0].funding_rate_daily == Decimal("0.003")
     assert funding[0].next_funding_time == datetime(2025, 1, 1, 8, tzinfo=UTC)
+    assert "KODEX200_USDT" not in {item.symbol for item in tickers}
+    assert "KODEX200_USDT" not in {item.symbol for item in funding}
     assert history[0].funding_timestamp.year == 2025
     assert orderbook.sequence == 42
 

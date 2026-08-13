@@ -98,6 +98,7 @@ class GatePublicAdapter(ExchangeAdapter):
         self.max_reconnects = max_reconnects
         self._funding_intervals_hours: dict[str, Decimal] = {}
         self._next_funding_times: dict[str, datetime] = {}
+        self._active_futures_symbols: set[str] | None = None
 
     async def __aenter__(self) -> GatePublicAdapter:
         await self._ensure_http()
@@ -141,6 +142,9 @@ class GatePublicAdapter(ExchangeAdapter):
         if not isinstance(futures_payload, list) or not isinstance(spot_payload, list):
             raise InvalidResponseError("Gate instrument responses must be arrays")
         futures = [self._parse_future_instrument(row) for row in futures_payload]
+        self._active_futures_symbols = {
+            item.exchange_symbol for item in futures if item.is_active
+        }
         self._funding_metadata_refreshed_at = datetime.now(UTC)
         spot = [self._parse_spot_instrument(row) for row in spot_payload]
         return futures + spot
@@ -171,13 +175,20 @@ class GatePublicAdapter(ExchangeAdapter):
         payload = await self._request(f"/futures/{self.settle}/contracts")
         if not isinstance(payload, list):
             raise InvalidResponseError("Gate futures contract response must be an array")
+        active_symbols: set[str] = set()
         try:
             for row in payload:
                 if not isinstance(row, dict):
                     raise TypeError("contract row is not an object")
                 self._remember_funding_schedule(row)
+                if (
+                    str(row.get("status", "trading")) == "trading"
+                    and not bool(row.get("in_delisting", False))
+                ):
+                    active_symbols.add(str(row["name"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidResponseError(f"invalid Gate funding metadata: {row!r}") from exc
+        self._active_futures_symbols = active_symbols
         self._funding_metadata_refreshed_at = now
 
     def _parse_future_instrument(self, row: object) -> NormalizedInstrument:
@@ -187,6 +198,7 @@ class GatePublicAdapter(ExchangeAdapter):
             symbol = str(row["name"])
             base, quote = symbol.split("_", 1)
             interval_hours = self._remember_funding_schedule(row)
+            status = str(row.get("status", "trading"))
             return NormalizedInstrument(
                 exchange=self.name,
                 exchange_symbol=symbol,
@@ -199,7 +211,9 @@ class GatePublicAdapter(ExchangeAdapter):
                 step_size=Decimal("1"),
                 min_order_size=decimal(row.get("order_size_min", "1"), "order_size_min"),
                 funding_interval=int(interval_hours),
-                is_active=not bool(row.get("in_delisting", False)),
+                is_active=(
+                    status == "trading" and not bool(row.get("in_delisting", False))
+                ),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidResponseError(f"invalid Gate futures instrument: {row!r}") from exc
@@ -233,7 +247,16 @@ class GatePublicAdapter(ExchangeAdapter):
         if not isinstance(futures_payload, list) or not isinstance(spot_payload, list):
             raise InvalidResponseError("Gate ticker responses must be arrays")
         now = datetime.now(UTC)
-        return [self._parse_future_ticker(row) for row in futures_payload] + [
+        futures_rows = [
+            row
+            for row in futures_payload
+            if self._active_futures_symbols is None
+            or (
+                isinstance(row, dict)
+                and str(row.get("contract")) in self._active_futures_symbols
+            )
+        ]
+        return [self._parse_future_ticker(row) for row in futures_rows] + [
             self._parse_spot_ticker(row, now) for row in spot_payload
         ]
 
@@ -285,6 +308,11 @@ class GatePublicAdapter(ExchangeAdapter):
             if not isinstance(row, dict) or row.get("funding_rate") in (None, ""):
                 continue
             symbol = str(row["contract"])
+            if (
+                self._active_futures_symbols is not None
+                and symbol not in self._active_futures_symbols
+            ):
+                continue
             interval_hours = self._funding_intervals_hours.get(symbol, Decimal("8"))
             timestamp = (
                 _utc_from_milliseconds(row["t"], "ticker_timestamp")
