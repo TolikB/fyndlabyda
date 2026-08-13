@@ -232,8 +232,8 @@ def _normalize_utc(value: object) -> str | None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--candidate-version", default="v25-oos-candidate")
-    parser.add_argument("--baseline-version", default="v25-oos-baseline")
+    parser.add_argument("--candidate-version", default="v26-oos-candidate")
+    parser.add_argument("--baseline-version", default="v26-oos-baseline")
     parser.add_argument("--start", help="Optional ISO-8601 start of the clean canary window")
     parser.add_argument("--gate", choices=("canary", "acceptance"), default="canary")
     parser.add_argument("--timeout", type=float, default=30)

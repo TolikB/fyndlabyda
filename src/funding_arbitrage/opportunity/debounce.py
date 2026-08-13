@@ -50,3 +50,43 @@ class OpportunityDebouncer:
                 opportunity.leg_b_type,
             ]
         )
+
+    @staticmethod
+    def exposure_key(opportunity: Opportunity) -> str:
+        """Return an order- and side-independent key for the traded instruments."""
+
+        return canonical_exposure_key(
+            opportunity.asset,
+            (
+                opportunity.venue_a,
+                opportunity.symbol_a or "",
+                opportunity.leg_a_type,
+            ),
+            (
+                opportunity.venue_b or opportunity.venue_a,
+                opportunity.symbol_b or "",
+                opportunity.leg_b_type,
+            ),
+        )
+
+
+def canonical_exposure_key(
+    asset: str,
+    leg_a: tuple[str, str, str],
+    leg_b: tuple[str, str, str],
+) -> str:
+    """Identify the same two-instrument exposure regardless of route direction."""
+
+    legs = sorted(
+        (
+            tuple(str(value) for value in leg_a),
+            tuple(str(value) for value in leg_b),
+        )
+    )
+    return "|".join(
+        (
+            "exposure",
+            asset.upper(),
+            *(value for leg in legs for value in leg),
+        )
+    )

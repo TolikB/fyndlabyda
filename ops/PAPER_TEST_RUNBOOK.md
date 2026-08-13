@@ -38,9 +38,9 @@ shared-feed comparison in `.env`:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
-PAPER_AUTOTRADE_START_UTC=2026-08-13T21:15:00Z
-PAPER_SIMULATION_VERSION=v25-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v25-oos-baseline
+PAPER_AUTOTRADE_START_UTC=2026-08-13T23:15:00Z
+PAPER_SIMULATION_VERSION=v26-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v26-oos-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -58,7 +58,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v25-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v26-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -69,26 +69,26 @@ funding payments, closed positions, fees, and the equity curve.
 
 ## Current VM acceptance gates
 
-The restart-safe, pre-market-filtered v25 canary starts with release
-`funding-pnl-v2-20260813-063`. Its clean evidence boundary and enforced
-autotrade boundary are both `2026-08-13T21:15:00Z`; use that exact timestamp as
+The restart-safe, reverse-route-deduplicated v26 canary starts with release
+`funding-pnl-v2-20260813-064`. Its clean evidence boundary and enforced
+autotrade boundary are both `2026-08-13T23:15:00Z`; use that exact timestamp as
 the `--start` value below. Run the read-only audit inside the deployed
 application container after the relevant deadline:
 
 ```bash
-# Earliest useful run: 2026-08-16T21:16:00Z.
+# Earliest useful run: 2026-08-16T23:16:00Z.
 cd /opt/funding_arbitrage_paper
 docker compose -p funding_arbitrage_paper exec -T app \
   python scripts/paper_acceptance_audit.py \
-  --start 2026-08-13T21:15:00Z \
+  --start 2026-08-13T23:15:00Z \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 2026-09-12T21:16:00Z.
+# Earliest useful run: 2026-09-12T23:16:00Z.
 cd /opt/funding_arbitrage_paper
 docker compose -p funding_arbitrage_paper exec -T app \
   python scripts/paper_acceptance_audit.py \
-  --start 2026-08-13T21:15:00Z \
+  --start 2026-08-13T23:15:00Z \
   --gate acceptance \
   --timeout 45
 ```

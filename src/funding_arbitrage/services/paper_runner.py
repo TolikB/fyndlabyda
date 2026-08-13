@@ -47,7 +47,10 @@ from funding_arbitrage.monitoring.metrics import (
     paper_runner_stage_duration_seconds,
     paper_trade_rejections_total,
 )
-from funding_arbitrage.opportunity.debounce import OpportunityDebouncer
+from funding_arbitrage.opportunity.debounce import (
+    OpportunityDebouncer,
+    canonical_exposure_key,
+)
 from funding_arbitrage.opportunity.models import Opportunity
 from funding_arbitrage.opportunity.settlement import (
     settlement_continuation_allowed,
@@ -184,6 +187,7 @@ class PaperTestRunner:
         )
         self.stop_event = asyncio.Event()
         self._position_by_key: dict[str, str] = {}
+        self._position_ids_by_exposure_key: dict[str, set[str]] = {}
         self._next_funding_due: dict[tuple[str, str, str], datetime] = {}
         self._last_history_refresh: datetime | None = None
         self._history_persist_snapshot_at: datetime | None = None
@@ -357,6 +361,46 @@ class PaperTestRunner:
         start = self.settings.paper_autotrade_start_utc
         return self.settings.paper_autotrade and (start is None or now >= start)
 
+    @staticmethod
+    def _position_exposure_key(position: PaperPosition) -> str | None:
+        if position.exposure_key:
+            return position.exposure_key
+        if position.leg_a is None or position.leg_b is None:
+            return None
+        leg_a_type = position.leg_a_type or position.leg_a.instrument_type
+        leg_b_type = position.leg_b_type or position.leg_b.instrument_type
+        if leg_a_type is None or leg_b_type is None:
+            return None
+        return canonical_exposure_key(
+            position.asset,
+            (position.leg_a.exchange, position.leg_a.symbol, str(leg_a_type)),
+            (position.leg_b.exchange, position.leg_b.symbol, str(leg_b_type)),
+        )
+
+    def _register_open_position(self, position: PaperPosition) -> None:
+        if position.opportunity_key:
+            self._position_by_key[position.opportunity_key] = position.id
+        exposure_key = self._position_exposure_key(position)
+        if exposure_key is None:
+            return
+        position.exposure_key = exposure_key
+        self._position_ids_by_exposure_key.setdefault(exposure_key, set()).add(
+            position.id
+        )
+
+    def _unregister_open_position(self, position: PaperPosition) -> None:
+        if position.opportunity_key:
+            self._position_by_key.pop(position.opportunity_key, None)
+        exposure_key = self._position_exposure_key(position)
+        if exposure_key is None:
+            return
+        position_ids = self._position_ids_by_exposure_key.get(exposure_key)
+        if position_ids is None:
+            return
+        position_ids.discard(position.id)
+        if not position_ids:
+            self._position_ids_by_exposure_key.pop(exposure_key, None)
+
     async def _restore_positions(self) -> None:
         async with self.session_factory() as session:
             snapshot = await session.scalar(
@@ -418,8 +462,8 @@ class PaperTestRunner:
                             extra={"position_id": position.id},
                         )
                         continue
-                if position.state is PositionState.OPEN and position.opportunity_key:
-                    self._position_by_key[position.opportunity_key] = position.id
+                if position.state is PositionState.OPEN:
+                    self._register_open_position(position)
 
     async def _restore_funding_history(self) -> None:
         cutoff = datetime.now(UTC) - timedelta(days=30)
@@ -532,7 +576,12 @@ class PaperTestRunner:
             if opportunity.status != "confirmed":
                 continue
             key = OpportunityDebouncer.key(opportunity)
-            if key in self._position_by_key:
+            exposure_key = OpportunityDebouncer.exposure_key(opportunity)
+            if (
+                key in self._position_by_key
+                or exposure_key in self._position_ids_by_exposure_key
+            ):
+                self._record_trade_rejection("duplicate_exposure", opportunity)
                 continue
             if self.settings.paper_strategy_profile == "baseline":
                 quote = next(
@@ -616,13 +665,14 @@ class PaperTestRunner:
                 sorted(set(position.target_funding_events.values()))
             )
             position.opportunity_key = key
+            position.exposure_key = exposure_key
             venues = (opportunity.venue_a, opportunity.venue_b or opportunity.venue_a)
             try:
                 self.runtime.portfolio.allocate_position(position, venues, capital)
             except ValueError:
                 self._record_trade_rejection("venue_balance", opportunity)
                 continue
-            self._position_by_key[key] = position.id
+            self._register_open_position(position)
             open_count += 1
 
     def _record_trade_rejection(
@@ -946,8 +996,7 @@ class PaperTestRunner:
             if position.state is not PositionState.CLOSED:
                 continue
             self.runtime.portfolio.close_position(position.id)
-            if position.opportunity_key:
-                self._position_by_key.pop(position.opportunity_key, None)
+            self._unregister_open_position(position)
 
     @staticmethod
     def _pending_target_funding(

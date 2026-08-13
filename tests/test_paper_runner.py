@@ -309,6 +309,163 @@ async def test_candidate_can_allocate_profitable_quote_below_baseline_fixed_size
 
 
 @pytest.mark.asyncio
+async def test_open_confirmed_rejects_reverse_route_duplicate_exposure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_autotrade=True,
+        paper_strategy_profile="candidate",
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    costs = CostBreakdown(
+        entry_fees=Decimal("0"),
+        exit_fees=Decimal("0"),
+        entry_spread=Decimal("0"),
+        exit_spread=Decimal("0"),
+        entry_slippage=Decimal("0"),
+        exit_slippage=Decimal("0"),
+        borrowing_cost=Decimal("0"),
+        network_cost=Decimal("0"),
+    )
+    quote = SizeQuote(
+        capital=Decimal("100"),
+        gross_profit=Decimal("1"),
+        net_profit=Decimal("1"),
+        net_return_percent=Decimal("0.01"),
+        net_apr=Decimal("1"),
+        costs=costs,
+    )
+    gate_to_bybit = Opportunity(
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING,
+        asset="COTI",
+        venue_a="gate",
+        venue_b="bybit",
+        symbol_a="COTI_USDT",
+        symbol_b="COTIUSDT",
+        leg_a_type=InstrumentType.PERPETUAL,
+        leg_b_type=InstrumentType.PERPETUAL,
+        leg_a_side="SELL",
+        leg_b_side="BUY",
+        price_a=Decimal("0.01"),
+        price_b=Decimal("0.01"),
+        gross_edge=Decimal("0.01"),
+        net_edge=Decimal("0.01"),
+        expected_holding_hours=Decimal("1"),
+        net_apr=Decimal("1"),
+        available_liquidity=Decimal("1000"),
+        risk_score=Decimal("10"),
+        status="confirmed",
+        size_quotes=[quote],
+    )
+    bybit_to_gate = gate_to_bybit.model_copy(
+        update={
+            "id": "reverse-route",
+            "venue_a": "bybit",
+            "venue_b": "gate",
+            "symbol_a": "COTIUSDT",
+            "symbol_b": "COTI_USDT",
+            "leg_a_side": "SELL",
+            "leg_b_side": "BUY",
+        }
+    )
+    assert OpportunityDebouncer.key(gate_to_bybit) != OpportunityDebouncer.key(
+        bybit_to_gate
+    )
+    assert OpportunityDebouncer.exposure_key(
+        gate_to_bybit
+    ) == OpportunityDebouncer.exposure_key(bybit_to_gate)
+
+    open_calls = 0
+
+    async def paper_open(
+        opportunity: Opportunity,
+        capital: Decimal,
+        _snapshot: MarketSnapshot,
+    ) -> PaperPosition:
+        nonlocal open_calls
+        open_calls += 1
+        return PaperPosition(
+            opportunity_id=opportunity.id,
+            asset=opportunity.asset,
+            strategy=str(opportunity.strategy),
+            capital=capital,
+            state=PositionState.OPEN,
+        )
+
+    rejected: list[str] = []
+
+    def record_rejection(
+        reason: str,
+        _opportunity: Opportunity,
+        *,
+        risk_reasons: tuple[str, ...] = (),
+    ) -> None:
+        del risk_reasons
+        rejected.append(reason)
+
+    monkeypatch.setattr(runner.executor, "open", paper_open)
+    monkeypatch.setattr(runner, "_record_trade_rejection", record_rejection)
+    snapshot = MarketSnapshot([], [], [], {}, datetime.now(UTC))
+
+    await runner._open_confirmed([gate_to_bybit, bybit_to_gate], snapshot)
+
+    assert open_calls == 1
+    assert len(runtime.portfolio.positions) == 1
+    position = next(iter(runtime.portfolio.positions.values()))
+    assert position.exposure_key == OpportunityDebouncer.exposure_key(gate_to_bybit)
+    assert runner._position_ids_by_exposure_key[position.exposure_key] == {position.id}
+    assert rejected == ["duplicate_exposure"]
+
+    runner._unregister_open_position(position)
+    assert position.exposure_key not in runner._position_ids_by_exposure_key
+
+    await runner.close()
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_register_open_position_derives_legacy_exposure_key() -> None:
+    settings = Settings(run_mode="paper_test", market_data_mode="mock")
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    position = PaperPosition(
+        opportunity_id="restored",
+        opportunity_key="legacy-directional-key",
+        asset="COTI",
+        capital=Decimal("100"),
+        state=PositionState.OPEN,
+        leg_a=_exit_test_fill("gate", "COTI_USDT", "SELL"),
+        leg_b=_exit_test_fill("bybit", "COTIUSDT", "BUY"),
+        leg_a_type=InstrumentType.PERPETUAL,
+        leg_b_type=InstrumentType.PERPETUAL,
+    )
+
+    runner._register_open_position(position)
+
+    assert position.exposure_key is not None
+    assert runner._position_ids_by_exposure_key[position.exposure_key] == {position.id}
+    assert runner._position_by_key[position.opportunity_key] == position.id
+
+    await runner.close()
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
 async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

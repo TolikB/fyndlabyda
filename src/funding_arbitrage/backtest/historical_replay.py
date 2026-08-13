@@ -42,6 +42,7 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.opportunity.calculator import CostEngine
+from funding_arbitrage.opportunity.debounce import OpportunityDebouncer
 from funding_arbitrage.opportunity.engine import OpportunityEngine
 from funding_arbitrage.opportunity.filters import OpportunityFilterConfig
 from funding_arbitrage.opportunity.models import FeeSchedule, Opportunity, SizeQuote
@@ -414,11 +415,15 @@ class HistoricalMarketReplay:
                 for position in positions.values()
             )
             available = initial_capital + realized - locked
-            occupied_assets = {position.opportunity.asset for position in positions.values()}
+            occupied_exposures = {
+                OpportunityDebouncer.exposure_key(position.opportunity)
+                for position in positions.values()
+            }
             for opportunity in opportunities:
+                exposure_key = OpportunityDebouncer.exposure_key(opportunity)
                 if (
                     len(positions) >= settings.paper_max_open_positions
-                    or opportunity.asset in occupied_assets
+                    or exposure_key in occupied_exposures
                 ):
                     continue
                 quote = _select_quote(
@@ -466,7 +471,7 @@ class HistoricalMarketReplay:
                 )
                 key = _opportunity_key(opportunity)
                 positions[key] = position
-                occupied_assets.add(opportunity.asset)
+                occupied_exposures.add(exposure_key)
                 entry_cost = (
                     quote.costs.entry_fees
                     + quote.costs.entry_spread

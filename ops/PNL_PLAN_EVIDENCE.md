@@ -15,13 +15,13 @@ goal remains open until every row is proven, including the last two rows.
 | Reject missing, stale, shallow, or partial paper books | Executor tests in `tests/test_pnl_v2.py`; no fabricated partial close | Proven |
 | Ratio units for spread/slippage | Default `0.0015`/`0.0020` plus config tests | Proven |
 | Enforce `PAPER_AUTOTRADE` and a UTC start boundary | Runtime health fields and runner tests | Proven |
-| Exclude pre-fix data | Simulation-version namespaces; current clean namespace `v25-oos-*` | Proven |
+| Exclude pre-fix data | Invalidated v25 retained separately; clean namespace `v26-oos-*` | Prepared; VM redeploy pending |
 
 ## Signal, funding, borrow, and market data
 
 | Requirement | Authoritative evidence | State |
 | --- | --- | --- |
-| No duplicate cross-funding/perp-perp exposure | Main `OpportunityEngine` invokes one cross-exchange scanner; duplicate tests | Proven |
+| No duplicate or reverse-route two-instrument exposure | Canonical order/side-independent exposure key in runtime and replay; restart/dedup regression tests | Proven locally |
 | Venue-specific future funding events | Adapter schedule tests for 1/4/8-hour intervals and settlement engine tests | Proven |
 | Robust median/EWMA, persistence, sign changes, two-sided outliers | Funding statistics/forecast code and scanner tests | Proven |
 | Time-synchronized cross-venue differential | Historical-window projection and no-look-ahead replay tests | Proven |
@@ -48,11 +48,11 @@ goal remains open until every row is proven, including the last two rows.
 | Requirement | Authoritative evidence | State |
 | --- | --- | --- |
 | Event-driven deterministic replay with costs and attribution | Historical replay tests and portable dataset digest | Proven |
-| Same dataset/config candidate versus baseline, no look-ahead | Dataset `market-db-sha256:0745b20ed8e77c0ba02a7472ab10f6d48264e25405ad9e5d81f83e7c5c0103dc`; deterministic candidate event SHA `e37947bb623fba7408d363a6fac5b14646cf3c53389cc0bcdd62a982caffc161` | Proven |
-| Historical candidate beats baseline acceptance checks | Candidate `+$26.7265745810`; strict baseline `-$43.3339882660`; lower drawdown, higher median monthly PnL, 3/3 profitable windows | Historical evidence only |
-| Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260813-063`, `v25-oos-candidate`/`v25-oos-baseline`, exact shared timestamps | Proven running |
-| Clean 72-hour canary | Boundary `2026-08-13T21:15:00Z`; earliest audit `2026-08-16T21:16:00Z` | Pending time gate |
-| 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-12T21:16:00Z` | Pending time gate |
+| Same dataset/config candidate versus baseline, no look-ahead | Dataset `market-db-sha256:0745b20ed8e77c0ba02a7472ab10f6d48264e25405ad9e5d81f83e7c5c0103dc`; deterministic candidate event SHA `53e9e263f2709bb84ef4466a522ed1766e53cdd6235b019b082e9a96742c9534` | Proven |
+| Historical candidate beats baseline acceptance checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; lower drawdown, higher median monthly PnL, 2/3 profitable windows | Historical evidence only |
+| Paper-only shared-feed candidate/baseline on VM | Target release `funding-pnl-v2-20260813-064`, `v26-oos-candidate`/`v26-oos-baseline` | Redeploy pending |
+| Clean 72-hour canary | Boundary `2026-08-13T23:15:00Z`; earliest audit `2026-08-16T23:16:00Z` | Pending time gate |
+| 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-12T23:16:00Z` | Pending time gate |
 
 ## Current safety boundary
 
@@ -64,3 +64,11 @@ goal remains open until every row is proven, including the last two rows.
 - Do not restart or deploy after the clean boundary unless a material correctness
   defect is found; a restart is a persisted incident and invalidates the window.
 - Do not claim expected profitability from the historical replay alone.
+
+## Invalidated evidence window
+
+The `v25-oos-*` window beginning `2026-08-13T21:15:00Z` is excluded from all
+acceptance calculations. Its baseline opened the same Gate/Bybit COTI
+instrument pair in opposite directions, cancelling funding while paying fees
+twice. Release 064 prevents this with a canonical persisted exposure key; v26
+must start from an empty namespace and a later boundary.

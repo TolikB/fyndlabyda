@@ -79,6 +79,7 @@ class PaperPosition(BaseModel):
     closed_at: datetime | None = None
     allocated_venues: tuple[str, ...] = ()
     opportunity_key: str | None = None
+    exposure_key: str | None = None
 
     def transition(self, target: PositionState) -> None:
         allowed = {
