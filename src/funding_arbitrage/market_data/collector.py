@@ -260,10 +260,18 @@ class MarketDataCollector:
                 )
                 continue
             current = collections[index]
+            selected_keys = {
+                (item.exchange, item.symbol) for item in current.funding
+            }
+            normalized = [
+                item.model_copy(update={"timestamp": refreshed_at})
+                for item in value
+                if (item.exchange, item.symbol) in selected_keys
+            ]
             collections[index] = _VenueCollection(
                 current.instruments,
                 current.tickers,
-                value,
+                normalized,
                 current.orderbooks,
                 current.funding_history,
             )

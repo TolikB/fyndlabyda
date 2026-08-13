@@ -282,7 +282,9 @@ async def test_collector_refetches_funding_that_aged_during_collection() -> None
     await collector.close()
 
     assert adapter.funding_calls == 2
+    assert len(snapshot.funding) == 1
     assert all(
-        (snapshot.captured_at - row.timestamp).total_seconds() <= 30
+        snapshot.captured_at >= row.timestamp
+        and (snapshot.captured_at - row.timestamp).total_seconds() <= 1
         for row in snapshot.funding
     )
