@@ -161,8 +161,30 @@ class OkxPublicAdapter(ExchangeAdapter):
             ("SPOT", InstrumentType.SPOT),
         ):
             rows = await self._request("/api/v5/market/tickers", {"instType": inst_type})
-            result.extend(self._parse_ticker(row, normalized_type) for row in rows)
+            for row in rows:
+                ticker = self._parse_ticker_or_none(row, normalized_type)
+                if ticker is not None:
+                    result.append(ticker)
         return result
+
+    def _parse_ticker_or_none(
+        self, row: dict[str, Any], instrument_type: InstrumentType
+    ) -> Ticker | None:
+        """Drop one non-trading OKX instrument without losing the whole venue."""
+
+        try:
+            return self._parse_ticker(row, instrument_type)
+        except (InvalidResponseError, KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "okx_ticker_skipped",
+                extra={
+                    "exchange": self.name,
+                    "symbol": str(row.get("instId", "")),
+                    "instrument_type": instrument_type.value,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return None
 
     def _parse_ticker(self, row: dict[str, Any], instrument_type: InstrumentType) -> Ticker:
         return Ticker(
@@ -407,7 +429,11 @@ class OkxPublicAdapter(ExchangeAdapter):
                                 symbol = str(row.get("instId", ""))
                                 instrument_type = instrument_types.get(symbol)
                                 if instrument_type is not None:
-                                    yield self._parse_ticker(row, instrument_type)
+                                    ticker = self._parse_ticker_or_none(
+                                        row, instrument_type
+                                    )
+                                    if ticker is not None:
+                                        yield ticker
                 reconnects = 0
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
                 websocket_reconnects_total.labels(self.name).inc()

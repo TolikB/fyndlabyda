@@ -3,11 +3,19 @@ from decimal import Decimal
 
 import pytest
 
+from funding_arbitrage.config import Settings
 from funding_arbitrage.exchanges.base.models import (
     FundingSnapshot,
     InstrumentType,
     NormalizedInstrument,
 )
+
+
+def test_default_simulator_namespaces_match_current_canary() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.paper_simulation_version == "v30-oos-candidate"
+    assert settings.paper_baseline_simulation_version == "v30-oos-baseline"
 
 
 def test_canonical_instrument_id() -> None:

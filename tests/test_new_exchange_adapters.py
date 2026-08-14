@@ -192,6 +192,50 @@ async def test_okx_empty_spot_contract_value_is_normalized() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_okx_tickers_skip_blank_last_without_dropping_venue() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/market/tickers")
+        inst_type = request.url.params["instType"]
+        suffix = "-SWAP" if inst_type == "SWAP" else ""
+        return httpx.Response(
+            200,
+            json={
+                "code": "0",
+                "data": [
+                    {
+                        "instId": f"BTC-USDT{suffix}",
+                        "last": "100",
+                        "bidPx": "99",
+                        "askPx": "101",
+                        "volCcy24h": "12",
+                        "ts": "1735689600000",
+                    },
+                    {
+                        "instId": f"PREOPEN-USDT{suffix}",
+                        "last": "",
+                        "bidPx": "",
+                        "askPx": "",
+                        "volCcy24h": "0",
+                        "ts": "1735689600000",
+                    },
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    )
+    adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
+    tickers = await adapter.get_tickers()
+    await client.aclose()
+
+    assert {(ticker.symbol, ticker.instrument_type) for ticker in tickers} == {
+        ("BTC-USDT-SWAP", InstrumentType.PERPETUAL),
+        ("BTC-USDT", InstrumentType.SPOT),
+    }
+
+
 def test_binance_websocket_ticker_aliases_are_normalized() -> None:
     adapter = BinancePublicAdapter()
     ticker = adapter._parse_futures_ticker(

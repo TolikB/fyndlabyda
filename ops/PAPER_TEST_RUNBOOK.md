@@ -38,9 +38,9 @@ shared-feed comparison in `.env`:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
-PAPER_AUTOTRADE_START_UTC=2026-08-14T03:00:00Z
-PAPER_SIMULATION_VERSION=v29-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v29-oos-baseline
+PAPER_AUTOTRADE_START_UTC=2026-08-14T07:30:00Z
+PAPER_SIMULATION_VERSION=v30-oos-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v30-oos-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -58,7 +58,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v29-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v30-oos-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -70,33 +70,33 @@ funding payments, closed positions, fees, and the equity curve.
 ## Current VM acceptance gates
 
 The mark-to-market, pinned-open-market, evidence-aware, restart-safe,
-reverse-route-deduplicated v29 canary starts with release
-`funding-pnl-v2-20260814-070`. Its clean evidence boundary and enforced
-autotrade boundary are both `2026-08-14T03:00:00Z`; use
+reverse-route-deduplicated v30 canary starts with release
+`funding-pnl-v2-20260814-072`. Its clean evidence boundary and enforced
+autotrade boundary are both `2026-08-14T07:30:00Z`; use
 that exact timestamp as the `--start` value below. Run the read-only audit
 inside the deployed application container after the relevant deadline:
 
 ```bash
-# Earliest useful run: 2026-08-17T03:01:00Z.
+# Earliest useful run: 2026-08-17T07:31:00Z.
 cd /opt/funding_arbitrage_paper
 docker compose -p funding_arbitrage_paper exec -T app \
   python scripts/paper_acceptance_audit.py \
-  --start 2026-08-14T03:00:00Z \
+  --start 2026-08-14T07:30:00Z \
   --gate canary \
   --timeout 45
 
-# Earliest useful run: 2026-09-13T03:01:00Z.
+# Earliest useful run: 2026-09-13T07:31:00Z.
 cd /opt/funding_arbitrage_paper
 docker compose -p funding_arbitrage_paper exec -T app \
   python scripts/paper_acceptance_audit.py \
-  --start 2026-08-14T03:00:00Z \
+  --start 2026-08-14T07:30:00Z \
   --gate acceptance \
   --timeout 45
 
 # Run at both gates; require at least one real live-public payment as evidence.
 docker compose -p funding_arbitrage_paper exec -T app \
   python scripts/funding_payment_audit.py \
-  --start 2026-08-14T03:00:00Z \
+  --start 2026-08-14T07:30:00Z \
   --require-payments
 ```
 
