@@ -136,6 +136,15 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     assert "Legacy/pre-fix simulator data is excluded." in sent[0]
     assert len(session.added) == 1
 
+    session.values.append(session.added[0])
+    repeated = await service.check_and_send(
+        datetime(2026, 8, 10, 0, 2, tzinfo=UTC)
+    )
+
+    assert repeated is False
+    assert len(sent) == 1
+    assert len(session.added) == 1
+
 
 @pytest.mark.asyncio
 async def test_daily_report_explains_unchanged_equity_when_no_trades(
