@@ -118,6 +118,13 @@ of three rolling windows. It also independently reconstructs canonical exposure
 keys for every persisted position and rejects any overlapping holding intervals,
 including duplicates that opened and closed between audit runs.
 
+For every paper funding payment, the timed audit must also reconcile the exact
+`(exchange, symbol, funding_timestamp, funding_rate)` against durable raw
+`funding_history`, match the payment to the perpetual leg and its side, and
+recalculate signed PnL from notional and settled rate. A venue's actual event
+timestamp is authoritative and may differ by seconds from the predicted target;
+do not round it to a nominal wall-clock boundary.
+
 The release also requires the digest-pinned Python base image and exact
 `requirements.lock` dependency graph. Any dependency update is a new release
 and starts a new evidence window.

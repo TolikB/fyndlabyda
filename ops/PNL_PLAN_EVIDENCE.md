@@ -52,6 +52,7 @@ goal remains open until every row is proven, including the last two rows.
 | Historical candidate beats baseline acceptance checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; lower drawdown, higher median monthly PnL, 2/3 profitable windows | Historical evidence only |
 | Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260813-067`; healthy pre-boundary postflight, restart count 0, zero current and historical exposure defects | Proven running |
 | Initial post-boundary smoke | `runtime_safe=true`; 8 exact shared snapshot pairs from `23:15:15Z` to `23:18:38Z`; max gap `39.063369s`; incidents/accounting/exposure overlaps zero; baseline one canonical COTI position, candidate zero | Proven |
+| First live-public funding settlement | Baseline COTI: Bybit actual `00:00:00Z`, rate `-0.00049563`, short PnL `-$0.1239075`; Gate actual `00:00:03Z`, rate `-0.004256`, long PnL `+$1.064`; exact raw-history/side/notional matches, total `+$0.9400925`, max target delay `3s`, all reconciliation error counts zero | Proven |
 | Clean 72-hour canary | Boundary `2026-08-13T23:15:00Z`; earliest audit `2026-08-16T23:16:00Z` | Pending time gate |
 | 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-12T23:16:00Z` | Pending time gate |
 
