@@ -67,6 +67,12 @@ goal remains open until every row is proven, including the last two rows.
 - VM: Contabo `169.58.161.34` only.
 - Project directory: `/opt/funding_arbitrage_paper`.
 - Compose project: `funding_arbitrage_paper`.
+- Project-scoped container inspection proves enforced limits: app `0.70 CPU /
+  640 MiB`, PostgreSQL `0.25 CPU / 384 MiB`, and Redis `0.10 CPU / 96 MiB`.
+  The observed memory snapshot was approximately `292 MiB`, `179 MiB`, and
+  `5.4 MiB`, respectively; all restart counts were zero.
+- Only the app API is host-bound, on loopback `127.0.0.1:8000`; PostgreSQL and
+  Redis have no host port binding.
 - Runtime must remain `paper_test / live_public / paper` with no live execution
   module or private exchange credentials.
 - Do not restart or deploy after the clean boundary unless a material correctness
