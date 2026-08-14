@@ -17,13 +17,16 @@ def test_runtime_lock_exactly_pins_every_declared_dependency() -> None:
         _canonical_name(re.split(r"[\[<>=!~ ]", item, maxsplit=1)[0])
         for item in config["project"]["dependencies"]
     }
-    rows = [
-        line.strip()
-        for line in (ROOT / "requirements.lock").read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    content = (ROOT / "requirements.lock").read_text(encoding="utf-8")
+    rows = []
+    for block in re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content):
+        if not re.match(r"^[A-Za-z0-9_.-]+==", block):
+            continue
+        row = block.splitlines()[0]
+        assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", row)
+        assert re.search(r"--hash=sha256:[0-9a-f]{64}", block)
+        rows.append(row.removesuffix(" \\"))
 
-    assert all(row.count("==") == 1 for row in rows)
     locked = {_canonical_name(row.split("==", maxsplit=1)[0]) for row in rows}
     assert len(locked) == len(rows)
     assert declared <= locked
@@ -36,5 +39,8 @@ def test_docker_runtime_uses_immutable_base_and_lock_file() -> None:
         "FROM python:3.12-slim@sha256:"
         "229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
     ) in dockerfile
-    assert "pip install --no-cache-dir --requirement requirements.lock" in dockerfile
+    assert (
+        "pip install --no-cache-dir --require-hashes --requirement requirements.lock"
+        in dockerfile
+    )
     assert "config['project']['dependencies']" not in dockerfile

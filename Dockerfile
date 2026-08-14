@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY pyproject.toml README.md requirements.lock ./
-RUN pip install --no-cache-dir --requirement requirements.lock
+RUN pip install --no-cache-dir --require-hashes --requirement requirements.lock
 
 COPY src ./src
 COPY config ./config

@@ -5,6 +5,7 @@ import yaml
 
 COMPOSE_PATH = Path(__file__).resolve().parents[1] / "docker-compose.yml"
 DOCKERFILE_PATH = Path(__file__).resolve().parents[1] / "Dockerfile"
+REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements.lock"
 FORBIDDEN_HOST_PORTS = {5432, 9108, 9109}
 
 
@@ -90,3 +91,27 @@ def test_app_container_is_unprivileged_and_filesystem_locked_down() -> None:
 
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
     assert "USER 10001:10001" in dockerfile
+
+
+def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    assert (
+        "pip install --no-cache-dir --require-hashes --requirement requirements.lock"
+        in dockerfile
+    )
+
+    content = REQUIREMENTS_LOCK_PATH.read_text(encoding="utf-8")
+    blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
+    requirements = []
+    for block in blocks:
+        if not re.match(r"^[A-Za-z0-9_.-]+==", block):
+            continue
+        first_line = block.splitlines()[0]
+        assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", first_line)
+        hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", block)
+        assert hashes, first_line
+        assert len(hashes) == len(set(hashes)), first_line
+        requirements.append(first_line.removesuffix(" \\"))
+
+    assert len(requirements) == 34
+    assert len(requirements) == len(set(requirements))

@@ -88,13 +88,14 @@ goal remains open until every row is proven, including the last two rows.
   files, preventing a long canary from consuming the VM disk through unbounded
   container logs. This remains locally proven until the release-074 smoke and
   deployment checks observe the rendered Compose configuration.
-- The complete 35-package exact runtime dependency set in `requirements.lock`
-  passed `pip-audit 2.10.1` on `2026-08-14` with no known vulnerabilities. The
-  audit used `--no-deps` because the file already contains the full captured
-  dependency closure. The lock remains exact-version rather than hash-locked:
-  hash generation exceeded its bounded network timeout and produced no
-  candidate file, so no cryptographic package-hash claim is made for release
-  074.
+- The complete 34-package exact runtime dependency closure in
+  `requirements.lock` passed `pip-audit 2.10.1` on `2026-08-14` with no known
+  vulnerabilities. Every package is pinned by version and by the official
+  SHA-256 values of its PyPI artifacts (793 unique hashes in total), and the
+  Docker build enforces `pip --require-hashes`. The package/version set is
+  exactly unchanged from the previously installed release. The hash file and
+  audit are proven locally; Linux wheel installation remains fail-closed in the
+  release-074 isolated build smoke.
 - Do not restart or deploy after the clean boundary unless a material correctness
   defect is found; a restart is a persisted incident and invalidates the window.
 - Do not claim expected profitability from the historical replay alone.
