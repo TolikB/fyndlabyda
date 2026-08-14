@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 
 COMPOSE_PATH = Path(__file__).resolve().parents[1] / "docker-compose.yml"
+DOCKERFILE_PATH = Path(__file__).resolve().parents[1] / "Dockerfile"
 FORBIDDEN_HOST_PORTS = {5432, 9108, 9109}
 
 
@@ -43,3 +44,21 @@ def test_datastores_publish_no_host_ports() -> None:
         service = services[name]
         assert isinstance(service, dict)
         assert not service.get("ports")
+
+
+def test_app_container_is_unprivileged_and_filesystem_locked_down() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    app = services["app"]
+    assert isinstance(app, dict)
+
+    assert app.get("user") == "10001:10001"
+    assert app.get("init") is True
+    assert app.get("read_only") is True
+    assert app.get("pids_limit") == 256
+    assert app.get("cap_drop") == ["ALL"]
+    assert "no-new-privileges:true" in app.get("security_opt", [])
+    assert "/tmp:size=64m,mode=1777" in app.get("tmpfs", [])
+
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    assert "USER 10001:10001" in dockerfile

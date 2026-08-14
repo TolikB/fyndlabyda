@@ -1,6 +1,16 @@
 services:
   app: &paper-app
     build: .
+    user: "10001:10001"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
     env_file: .env
     depends_on:
       postgres:
