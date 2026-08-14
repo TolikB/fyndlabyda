@@ -8,6 +8,9 @@ from typing import Any
 import httpx
 import pytest
 
+import funding_arbitrage.backtest.historical_replay as historical_replay_module
+from funding_arbitrage.backtest.comparison import compare_paper_datasets
+from funding_arbitrage.backtest.engine import BacktestEngine
 from funding_arbitrage.backtest.historical_replay import (
     HistoricalDataset,
     HistoricalMarketReplay,
@@ -489,6 +492,18 @@ def test_historical_strategy_replay_is_deterministic_and_no_lookahead() -> None:
     ]
     assert first.observation_start == start
     assert first.observation_end == start + timedelta(hours=35)
+    assert first.snapshot_timestamps == tuple(
+        start + timedelta(hours=hour) for hour in range(36)
+    )
+    assert first.snapshot_pnl_curve == second.snapshot_pnl_curve
+    assert first.max_snapshot_gap_seconds == Decimal("3600")
+    replay_result = BacktestEngine().run(
+        first.events,
+        Decimal("15000"),
+        {"profile": "candidate"},
+        first.dataset_version,
+    )
+    assert first.snapshot_pnl_delta == replay_result.metrics.net_profit_after_costs
     first_open = next(event for event in first.events if event.event_type == "position")
     assert first_open.timestamp >= start
 
@@ -515,3 +530,133 @@ def test_historical_strategy_replay_is_deterministic_and_no_lookahead() -> None:
         for event in future_changed.events
         if event.timestamp < cutoff
     ]
+
+
+def test_historical_snapshots_mark_open_positions_and_reconcile_final_pnl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    costs = CostBreakdown(
+        entry_fees=Decimal("1"),
+        exit_fees=Decimal("1"),
+        entry_spread=Decimal("0"),
+        exit_spread=Decimal("0"),
+        entry_slippage=Decimal("0"),
+        exit_slippage=Decimal("0"),
+        borrowing_cost=Decimal("12"),
+        network_cost=Decimal("0"),
+    )
+    opportunity = Opportunity(
+        strategy=StrategyName.SPOT_PERP,
+        asset="BTC",
+        venue_a="bybit",
+        venue_b="bybit",
+        symbol_a="BTCUSDT",
+        symbol_b="BTCUSDT",
+        leg_a_type=InstrumentType.SPOT,
+        leg_b_type=InstrumentType.PERPETUAL,
+        leg_a_side="SELL",
+        leg_b_side="BUY",
+        price_a=Decimal("100"),
+        price_b=Decimal("100"),
+        gross_edge=Decimal("0.02"),
+        net_edge=Decimal("0.01"),
+        expected_holding_hours=Decimal("1"),
+        net_apr=Decimal("100"),
+        available_liquidity=Decimal("100000"),
+        risk_score=Decimal("1"),
+        size_quotes=[
+            SizeQuote(
+                capital=Decimal("250"),
+                gross_profit=Decimal("5"),
+                net_profit=Decimal("3"),
+                net_return_percent=Decimal("0.012"),
+                net_apr=Decimal("100"),
+                costs=costs,
+            )
+        ],
+    )
+
+    class FixedEngine:
+        def scan(self, snapshot: MarketSnapshot) -> list[Opportunity]:
+            return [opportunity] if snapshot.captured_at == start else []
+
+    monkeypatch.setattr(
+        historical_replay_module,
+        "_opportunity_engine",
+        lambda _settings, _profile: FixedEngine(),
+    )
+    instruments = [
+        NormalizedInstrument(
+            exchange="bybit",
+            exchange_symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            instrument_type=instrument_type,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_order_size=Decimal("0.001"),
+        )
+        for instrument_type in (InstrumentType.SPOT, InstrumentType.PERPETUAL)
+    ]
+    candles: list[MarketCandleRecord] = []
+    for index, spot_price in enumerate((Decimal("100"), Decimal("90"), Decimal("80"))):
+        timestamp = start + timedelta(minutes=5 * index)
+        for instrument_type, price in (
+            (InstrumentType.SPOT, spot_price),
+            (InstrumentType.PERPETUAL, Decimal("100")),
+        ):
+            candles.append(
+                MarketCandleRecord(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    instrument_type=instrument_type.value,
+                    interval_minutes=5,
+                    open_time=timestamp - timedelta(minutes=5),
+                    close_time=timestamp,
+                    open=price,
+                    high=price,
+                    low=price,
+                    close=price,
+                    volume=Decimal("10000"),
+                    is_closed=True,
+                )
+            )
+    dataset = HistoricalDataset(
+        instruments=instruments,
+        candles=candles,
+        funding=[],
+        dataset_version="m2m-fixture-v1",
+        coverage={},
+    )
+
+    replay = HistoricalMarketReplay().simulate(
+        dataset,
+        "baseline",
+        Decimal("1000"),
+        Settings(PAPER_POSITION_SIZE_USD="250"),
+    )
+    event_result = BacktestEngine().run(
+        replay.events,
+        Decimal("1000"),
+        {"profile": "baseline"},
+        replay.dataset_version,
+    )
+
+    assert replay.snapshot_timestamps == tuple(
+        start + timedelta(minutes=5 * index) for index in range(3)
+    )
+    assert replay.snapshot_pnl_curve[0][1] == Decimal("-1")
+    # The interim mark includes +$25 price PnL and $1 of accrued borrow.
+    assert replay.snapshot_pnl_curve[1][1] == Decimal("23")
+    assert replay.snapshot_pnl_curve[-1][1] == Decimal("46")
+    assert replay.snapshot_pnl_delta == event_result.metrics.net_profit_after_costs
+    assert replay.max_snapshot_gap_seconds == Decimal("300")
+
+    comparison = compare_paper_datasets(replay, replay, Decimal("1000"))
+    assert comparison["snapshot_risk"]["source"] == "portfolio_snapshots"  # type: ignore[index]
+    checks = comparison["checks"]
+    assert isinstance(checks, dict)
+    assert checks["snapshot_evidence_present"] is True
+    assert checks["exact_shared_timestamps"] is True
+    assert checks["maximum_gap_within_5_minutes"] is True

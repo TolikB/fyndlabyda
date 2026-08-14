@@ -48,9 +48,10 @@ goal remains open until every row is proven, including the last two rows.
 
 | Requirement | Authoritative evidence | State |
 | --- | --- | --- |
-| Event-driven deterministic replay with costs and attribution | Historical replay tests and portable dataset digest | Proven |
+| Event-driven deterministic replay with costs, attribution, and open-position M2M | Historical replay tests; canonical candle snapshots include unrealized two-leg PnL and accrued borrow, and the final forced-close snapshot reconciles to the event ledger | Proven |
 | Same dataset/config candidate versus baseline, no look-ahead | Dataset `market-db-sha256:0745b20ed8e77c0ba02a7472ab10f6d48264e25405ad9e5d81f83e7c5c0103dc`; deterministic candidate event SHA `53e9e263f2709bb84ef4466a522ed1766e53cdd6235b019b082e9a96742c9534` | Proven |
-| Historical candidate beats baseline acceptance checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; lower drawdown, higher median monthly PnL, 2/3 profitable windows | Historical evidence only |
+| Historical candidate passes the economic comparison checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; snapshot max drawdown `0.102224%` versus `2.000771%`; higher median monthly PnL; 2/3 profitable snapshot windows; 721 exact shared timestamps; event/snapshot PnL error below `$0.01` | Proven historical economics only |
+| Historical telemetry satisfies the runtime five-minute cadence gate | The source dataset is hourly and reports its real `3600s` maximum snapshot gap. No synthetic interpolation is used, so full historical `accepted` and `evidence_ready` correctly remain false on the `300s` cadence check | Not claimed; authoritative timed VM gate pending |
 | Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260814-069`; healthy pre-boundary postflight, restart count 0, `v28-oos-*` namespaces empty, all five venues ready | Proven running |
 | Initial post-boundary smoke | `runtime_safe=true`; 7 exact shared snapshot pairs from `02:00:24Z` to `02:03:20Z`; max gap `36.346767s`; snapshot risk and all validation windows sourced from `portfolio_snapshots`; carry-in, incidents, accounting/replay errors, and exposure defects zero; all venue/coverage/two-sample WS checks true | Proven |
 | First live-public funding settlement | Exact venue event audit is ready; obtain a fresh `v28` payment after the clean boundary | Pending live event |

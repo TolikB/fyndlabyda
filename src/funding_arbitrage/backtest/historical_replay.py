@@ -286,6 +286,7 @@ class HistoricalMarketReplay:
         positions: dict[str, _ReplayPosition] = {}
         last_prices: dict[tuple[str, str, str], Decimal] = {}
         realized = Decimal("0")
+        snapshot_pnl_curve: list[tuple[datetime, Decimal]] = []
         serial = 0
         for timestamp in sorted(candles_by_time):
             current_candles = candles_by_time[timestamp]
@@ -508,24 +509,44 @@ class HistoricalMarketReplay:
                         ),
                     ]
                 )
+            snapshot_pnl_curve.append(
+                (
+                    timestamp,
+                    _portfolio_pnl(realized, positions, last_prices, timestamp),
+                )
+            )
         if candles_by_time:
             end_at = max(candles_by_time)
-            for position in positions.values():
-                _close_position(position, end_at, last_prices, events, attribution)
+            for key, position in list(positions.items()):
+                realized += _close_position(
+                    position, end_at, last_prices, events, attribution
+                )
+                positions.pop(key)
+            # The final snapshot represents the forced-close state, matching the
+            # event ledger and avoiding a dangling unrealized mark at dataset end.
+            snapshot_pnl_curve[-1] = (end_at, realized)
+        snapshot_timestamps = tuple(timestamp for timestamp, _ in snapshot_pnl_curve)
+        max_snapshot_gap = max(
+            (
+                Decimal(str((current - previous).total_seconds()))
+                for previous, current in zip(
+                    snapshot_timestamps, snapshot_timestamps[1:], strict=False
+                )
+            ),
+            default=Decimal("0"),
+        )
         return PaperReplayDataset(
             events=events,
             dataset_version=f"{dataset.dataset_version}:{profile}",
             attribution=attribution,
             position_count=serial,
-            observation_start=(
-                min(_candle_timestamp(item) for item in dataset.candles)
-                if dataset.candles
-                else None
-            ),
-            observation_end=(
-                max(_candle_timestamp(item) for item in dataset.candles)
-                if dataset.candles
-                else None
+            observation_start=(snapshot_timestamps[0] if snapshot_timestamps else None),
+            observation_end=(snapshot_timestamps[-1] if snapshot_timestamps else None),
+            snapshot_timestamps=snapshot_timestamps,
+            snapshot_pnl_curve=tuple(snapshot_pnl_curve),
+            max_snapshot_gap_seconds=max_snapshot_gap,
+            snapshot_pnl_delta=(
+                snapshot_pnl_curve[-1][1] if snapshot_pnl_curve else Decimal("0")
             ),
         )
 
@@ -911,15 +932,7 @@ def _close_position(
         opportunity.size_quotes,
         key=lambda value: abs(value.capital - position.capital),
     )
-    holding_hours = max(
-        Decimal("0"),
-        Decimal(str((timestamp - position.opened_at).total_seconds())) / Decimal("3600"),
-    )
-    borrow_cost = (
-        quote.costs.borrowing_cost
-        * holding_hours
-        / opportunity.expected_holding_hours
-    )
+    borrow_cost = _accrued_borrow_cost(position, timestamp)
     market_pnl = pnl_a + pnl_b
     basis_pnl = (
         market_pnl
@@ -1027,6 +1040,42 @@ def _current_market_pnl(
     return _leg_pnl(
         position.capital, position.entry_a, exit_a, opportunity.leg_a_side
     ) + _leg_pnl(position.capital, position.entry_b, exit_b, opportunity.leg_b_side)
+
+
+def _accrued_borrow_cost(position: _ReplayPosition, timestamp: datetime) -> Decimal:
+    quote = min(
+        position.opportunity.size_quotes,
+        key=lambda value: abs(value.capital - position.capital),
+    )
+    holding_hours = max(
+        Decimal("0"),
+        Decimal(str((timestamp - position.opened_at).total_seconds()))
+        / Decimal("3600"),
+    )
+    return (
+        quote.costs.borrowing_cost
+        * holding_hours
+        / position.opportunity.expected_holding_hours
+    )
+
+
+def _portfolio_pnl(
+    realized: Decimal,
+    positions: dict[str, _ReplayPosition],
+    prices: dict[tuple[str, str, str], Decimal],
+    timestamp: datetime,
+) -> Decimal:
+    """Return cumulative net PnL including fresh marks on every open leg."""
+
+    unrealized = sum(
+        (
+            _current_market_pnl(position, prices)
+            - _accrued_borrow_cost(position, timestamp)
+            for position in positions.values()
+        ),
+        Decimal("0"),
+    )
+    return realized + unrealized
 
 
 def _opportunity_key(opportunity: Opportunity) -> str:

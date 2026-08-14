@@ -105,6 +105,13 @@ is not ready yet (for example, fewer than 72 hours or 30 days have elapsed, or
 an acceptance condition is still false). Any connection or malformed-response
 failure exits with another non-zero code and should be investigated.
 
+Historical replay snapshots are emitted only at canonical source-candle
+timestamps. They include unrealized two-leg PnL and accrued borrow, and their
+final point reconciles to the forced-close event ledger. Do not interpolate an
+hourly dataset into synthetic five-minute observations: its real `3600s` gap
+must remain visible, so the historical comparison can support economic and risk
+analysis but cannot substitute for the live `300s` telemetry gate.
+
 For an evidence window already running on an older immutable release, stream
 the tracked current script to `python -` inside that same app container instead
 of rebuilding it. This applies correctness fixes to the read-only operator gate
