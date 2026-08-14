@@ -52,9 +52,10 @@ Live startup additionally refuses any configuration that is not
 `APP_ENV=production`, PostgreSQL through `postgresql+asyncpg`, isolated margin,
 dedicated accounts, enabled Telegram alerts, and the official HTTPS Telegram
 endpoint. All enabled exchange REST/WebSocket endpoints must exactly match the
-code allowlist. MEXC uses separate official REST origins for spot
-(`https://api.mexc.com`) and contracts (`https://contract.mexc.com`). These are
-code-enforced boundaries, not optional operator conventions.
+code allowlist. MEXC spot and futures REST APIs both use the official
+`https://api.mexc.com` origin; the futures WebSocket remains
+`wss://contract.mexc.com/edge`. These are code-enforced boundaries, not
+optional operator conventions.
 
 Only release an immutable commit whose GitHub **Release gate** passed. The gate
 uses the hash-locked development environment, runs compile/Ruff/mypy/pytest and

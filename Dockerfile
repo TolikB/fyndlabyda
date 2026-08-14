@@ -3,8 +3,8 @@ FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
-COPY pyproject.toml README.md requirements.lock ./
-RUN pip install --no-cache-dir --require-hashes --requirement requirements.lock
+COPY pyproject.toml README.md requirements-linux.lock ./
+RUN pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock
 
 COPY src ./src
 COPY config ./config

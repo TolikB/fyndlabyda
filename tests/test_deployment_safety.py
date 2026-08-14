@@ -6,8 +6,14 @@ import yaml
 COMPOSE_PATH = Path(__file__).resolve().parents[1] / "docker-compose.yml"
 DOCKERFILE_PATH = Path(__file__).resolve().parents[1] / "Dockerfile"
 REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements.lock"
+LINUX_REQUIREMENTS_LOCK_PATH = (
+    Path(__file__).resolve().parents[1] / "requirements-linux.lock"
+)
 DEV_REQUIREMENTS_LOCK_PATH = (
     Path(__file__).resolve().parents[1] / "requirements-dev.lock"
+)
+LINUX_DEV_REQUIREMENTS_LOCK_PATH = (
+    Path(__file__).resolve().parents[1] / "requirements-dev-linux.lock"
 )
 DOCKERIGNORE_PATH = Path(__file__).resolve().parents[1] / ".dockerignore"
 LIVE_RUNBOOK_PATH = (
@@ -116,48 +122,63 @@ def test_app_container_is_unprivileged_and_filesystem_locked_down() -> None:
 def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
     assert (
-        "pip install --no-cache-dir --require-hashes --requirement requirements.lock"
+        "pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock"
         in dockerfile
     )
 
-    content = REQUIREMENTS_LOCK_PATH.read_text(encoding="utf-8")
-    blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
-    requirements = []
-    for block in blocks:
-        if not re.match(r"^[A-Za-z0-9_.-]+==", block):
-            continue
-        first_line = block.splitlines()[0]
-        assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", first_line)
-        hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", block)
-        assert hashes, first_line
-        assert len(hashes) == len(set(hashes)), first_line
-        requirements.append(first_line.removesuffix(" \\"))
+    for path, event_loop in (
+        (REQUIREMENTS_LOCK_PATH, "winloop"),
+        (LINUX_REQUIREMENTS_LOCK_PATH, "uvloop"),
+    ):
+        content = path.read_text(encoding="utf-8")
+        blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
+        requirements = []
+        for block in blocks:
+            if not re.match(r"^[A-Za-z0-9_.-]+==", block):
+                continue
+            first_line = block.splitlines()[0]
+            assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", first_line)
+            hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", block)
+            assert hashes, first_line
+            assert len(hashes) == len(set(hashes)), first_line
+            requirements.append(first_line.removesuffix(" \\"))
 
-    assert len(requirements) == 53
-    assert len(requirements) == len(set(requirements))
-    assert "ccxt==4.5.73" in requirements
+        assert len(requirements) == 53
+        assert len(requirements) == len(set(requirements))
+        assert "ccxt==4.5.73" in requirements
+        assert any(item.startswith(event_loop + "==") for item in requirements)
 
 
 def test_development_dependency_lock_is_hash_enforced() -> None:
-    content = DEV_REQUIREMENTS_LOCK_PATH.read_text(encoding="utf-8")
-    blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
-    requirements: set[str] = set()
-    for block in blocks:
-        if not re.match(r"^[A-Za-z0-9_.-]+==", block):
-            continue
-        first_line = block.splitlines()[0]
-        assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", first_line)
-        assert re.search(r"--hash=sha256:[0-9a-f]{64}", block), first_line
-        requirements.add(first_line.split("==", 1)[0].lower())
+    for dev_path, runtime_path, event_loop in (
+        (DEV_REQUIREMENTS_LOCK_PATH, REQUIREMENTS_LOCK_PATH, "winloop"),
+        (
+            LINUX_DEV_REQUIREMENTS_LOCK_PATH,
+            LINUX_REQUIREMENTS_LOCK_PATH,
+            "uvloop",
+        ),
+    ):
+        content = dev_path.read_text(encoding="utf-8")
+        blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
+        requirements: set[str] = set()
+        for block in blocks:
+            if not re.match(r"^[A-Za-z0-9_.-]+==", block):
+                continue
+            first_line = block.splitlines()[0]
+            assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", first_line)
+            assert re.search(r"--hash=sha256:[0-9a-f]{64}", block), first_line
+            requirements.add(first_line.split("==", 1)[0].lower())
 
-    assert {"mypy", "pip-audit", "pytest", "ruff"}.issubset(requirements)
-    runtime_versions = _locked_versions(REQUIREMENTS_LOCK_PATH)
-    development_versions = _locked_versions(DEV_REQUIREMENTS_LOCK_PATH)
-    assert runtime_versions
-    assert all(
-        development_versions.get(name) == version
-        for name, version in runtime_versions.items()
-    )
+        assert {"mypy", "pip-audit", "pytest", "ruff", event_loop}.issubset(
+            requirements
+        )
+        runtime_versions = _locked_versions(runtime_path)
+        development_versions = _locked_versions(dev_path)
+        assert runtime_versions
+        assert all(
+            development_versions.get(name) == version
+            for name, version in runtime_versions.items()
+        )
 
 
 def test_docker_context_excludes_local_secrets_and_runtime_state() -> None:
@@ -206,3 +227,18 @@ def test_live_example_requires_operator_to_enable_autotrade_after_preflight() ->
     )
 
     assert values["LIVE_AUTOTRADE"] == "false"
+
+
+def test_live_example_uses_current_official_mexc_endpoints() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    assert values["MEXC_BASE_URL"] == "https://api.mexc.com"
+    assert values["MEXC_FUTURES_BASE_URL"] == "https://api.mexc.com"
+    assert values["MEXC_FUTURES_WS_URL"] == "wss://contract.mexc.com/edge"
+    assert "https://contract.mexc.com` origin" not in LIVE_RUNBOOK_PATH.read_text(
+        encoding="utf-8"
+    )

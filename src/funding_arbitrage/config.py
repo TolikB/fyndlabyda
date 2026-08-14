@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     )
     mexc_base_url: str = Field(default="https://api.mexc.com", alias="MEXC_BASE_URL")
     mexc_futures_base_url: str = Field(
-        default="https://contract.mexc.com", alias="MEXC_FUTURES_BASE_URL"
+        default="https://api.mexc.com", alias="MEXC_FUTURES_BASE_URL"
     )
     mexc_futures_ws_url: str = Field(
         default="wss://contract.mexc.com/edge", alias="MEXC_FUTURES_WS_URL"
@@ -655,7 +655,7 @@ def _validate_safe_values(settings: Settings) -> None:
                 (settings.mexc_base_url, "https://api.mexc.com", "MEXC_BASE_URL"),
                 (
                     settings.mexc_futures_base_url,
-                    "https://contract.mexc.com",
+                    "https://api.mexc.com",
                     "MEXC_FUTURES_BASE_URL",
                 ),
                 (

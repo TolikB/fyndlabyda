@@ -40,7 +40,7 @@ def test_docker_runtime_uses_immutable_base_and_lock_file() -> None:
         "229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
     ) in dockerfile
     assert (
-        "pip install --no-cache-dir --require-hashes --requirement requirements.lock"
+        "pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock"
         in dockerfile
     )
     assert "config['project']['dependencies']" not in dockerfile

@@ -70,7 +70,7 @@ class MexcPublicAdapter(ExchangeAdapter):
     def __init__(
         self,
         spot_base_url: str = "https://api.mexc.com",
-        futures_base_url: str = "https://contract.mexc.com",
+        futures_base_url: str = "https://api.mexc.com",
         futures_websocket_url: str = "wss://contract.mexc.com/edge",
         spot_websocket_url: str = "wss://wbs-api.mexc.com/ws",
         timeout_seconds: float = 15.0,
@@ -160,7 +160,7 @@ class MexcPublicAdapter(ExchangeAdapter):
 
     async def get_instruments(self) -> list[NormalizedInstrument]:
         futures_payload, spot_payload = await asyncio.gather(
-            self._futures("/api/v1/contract/detail"),
+            self._futures("/api/v1/contract/detail/country"),
             self._request("/api/v3/exchangeInfo"),
         )
         futures = [

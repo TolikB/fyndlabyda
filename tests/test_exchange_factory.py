@@ -19,7 +19,7 @@ def test_public_exchange_registry_contains_bybit_and_gate() -> None:
     assert isinstance(adapters["hyperliquid"], HyperliquidPublicAdapter)
     assert isinstance(adapters["mexc"], MexcPublicAdapter)
     assert adapters["mexc"].spot_base_url == "https://api.mexc.com"
-    assert adapters["mexc"].futures_base_url == "https://contract.mexc.com"
+    assert adapters["mexc"].futures_base_url == "https://api.mexc.com"
 
 
 def test_paper_test_registry_is_mock_only() -> None:

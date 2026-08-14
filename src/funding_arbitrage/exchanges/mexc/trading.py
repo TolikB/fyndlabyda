@@ -68,7 +68,7 @@ class MexcTradingAdapter(TradingAdapter):
         api_key: str,
         api_secret: str,
         spot_base_url: str = "https://api.mexc.com",
-        futures_base_url: str = "https://contract.mexc.com",
+        futures_base_url: str = "https://api.mexc.com",
         timeout_seconds: float = 15.0,
         margin_mode: str = "isolated",
         leverage: int = 1,
@@ -89,7 +89,10 @@ class MexcTradingAdapter(TradingAdapter):
         self.timeout_seconds = timeout_seconds
         self.margin_mode = margin_mode
         self.leverage = leverage
+        if not 1 <= recv_window_ms <= 30_000:
+            raise ValueError("MEXC recv_window_ms must be between 1 and 30000")
         self.recv_window_ms = recv_window_ms
+        self._futures_recv_window_seconds = max(1, (recv_window_ms + 999) // 1000)
         self._spot_http = http_client
         self._futures_http = http_client
         self._owns_http = http_client is None
@@ -182,11 +185,13 @@ class MexcTradingAdapter(TradingAdapter):
         self,
         method: str,
         endpoint: str,
-        parameters: dict[str, object] | None = None,
+        parameters: dict[str, object] | list[dict[str, object]] | None = None,
     ) -> Any:
         timestamp = self._timestamp()
-        parameters = parameters or {}
+        parameters = {} if parameters is None else parameters
         if method in {"GET", "DELETE"}:
+            if not isinstance(parameters, dict):
+                raise ValueError("MEXC futures query parameters must be an object")
             sorted_parameters = sorted((key, str(value)) for key, value in parameters.items())
             parameter_string = "&".join(f"{key}={value}" for key, value in sorted_parameters)
         else:
@@ -194,7 +199,7 @@ class MexcTradingAdapter(TradingAdapter):
         headers = {
             "ApiKey": self.api_key,
             "Request-Time": str(timestamp),
-            "Recv-Window": str(self.recv_window_ms),
+            "Recv-Window": str(self._futures_recv_window_seconds),
             "Signature": sign_mexc_futures(
                 self.api_key, self.api_secret, timestamp, parameter_string
             ),
@@ -203,12 +208,8 @@ class MexcTradingAdapter(TradingAdapter):
         client = await self._ensure_http(futures=True)
         try:
             if method in {"GET", "DELETE"}:
-                query: list[tuple[str, str | int | float | bool | None]] = list(
-                    sorted_parameters
-                )
-                response = await client.request(
-                    method, endpoint, headers=headers, params=query
-                )
+                query: list[tuple[str, str | int | float | bool | None]] = list(sorted_parameters)
+                response = await client.request(method, endpoint, headers=headers, params=query)
             else:
                 response = await client.request(
                     method, endpoint, headers=headers, content=parameter_string.encode()
@@ -246,9 +247,7 @@ class MexcTradingAdapter(TradingAdapter):
             "0",
             "200",
         ):
-            raise MexcPrivateError(
-                f"MEXC spot rejected: {_safe_message(payload)}", definitive=True
-            )
+            raise MexcPrivateError(f"MEXC spot rejected: {_safe_message(payload)}", definitive=True)
         return payload
 
     async def preflight(self) -> dict[str, object]:
@@ -315,9 +314,7 @@ class MexcTradingAdapter(TradingAdapter):
         for row in future_rows:
             currency = str(row.get("currency") or "").upper()
             available = _decimal(row.get("availableBalance"))
-            reserved = _decimal(row.get("positionMargin")) + _decimal(
-                row.get("frozenBalance")
-            )
+            reserved = _decimal(row.get("positionMargin")) + _decimal(row.get("frozenBalance"))
             cash_balance = _decimal(row.get("cashBalance"))
             if currency:
                 free[currency] = free.get(currency, Decimal("0")) + available
@@ -333,7 +330,8 @@ class MexcTradingAdapter(TradingAdapter):
             total=total,
             spot_free=spot_free,
             equity_usd=None,
-            free_collateral_usd=derivative_free + sum(
+            free_collateral_usd=derivative_free
+            + sum(
                 (spot_free.get(asset, Decimal("0")) for asset in ("USD", "USDT", "USDC")),
                 Decimal("0"),
             ),
@@ -342,9 +340,7 @@ class MexcTradingAdapter(TradingAdapter):
         )
 
     async def fetch_positions(self) -> list[VenuePosition]:
-        payload = await self._futures_request(
-            "GET", "/api/v1/private/position/open_positions"
-        )
+        payload = await self._futures_request("GET", "/api/v1/private/position/open_positions")
         result: list[VenuePosition] = []
         for row in _object_rows(payload):
             symbol = str(row.get("symbol") or "")
@@ -376,15 +372,11 @@ class MexcTradingAdapter(TradingAdapter):
             ),
         )
         results = [self._parse_spot_order(row) for row in _object_rows(spot)]
-        future_rows = (
-            futures.get("resultList", []) if isinstance(futures, dict) else futures
-        )
+        future_rows = futures.get("resultList", []) if isinstance(futures, dict) else futures
         results.extend(self._parse_futures_order(row) for row in _object_rows(future_rows))
         return results
 
-    async def fetch_funding_payments(
-        self, since: datetime
-    ) -> list[VenueFundingPayment]:
+    async def fetch_funding_payments(self, since: datetime) -> list[VenueFundingPayment]:
         payload = await self._futures_request(
             "GET",
             "/api/v1/private/position/funding_records",
@@ -401,9 +393,12 @@ class MexcTradingAdapter(TradingAdapter):
             timestamp = _utc_from_ms(row.get("settleTime"))
             symbol = str(row.get("symbol") or "UNKNOWN")
             amount = _decimal(row.get("funding"))
-            external_id = str(row.get("id") or "") or hashlib.sha256(
-                f"mexc:{symbol}:{timestamp.isoformat()}:{amount}".encode()
-            ).hexdigest()
+            external_id = (
+                str(row.get("id") or "")
+                or hashlib.sha256(
+                    f"mexc:{symbol}:{timestamp.isoformat()}:{amount}".encode()
+                ).hexdigest()
+            )
             result.append(
                 VenueFundingPayment(
                     exchange=self.name,
@@ -428,7 +423,7 @@ class MexcTradingAdapter(TradingAdapter):
         else:
             payload = await self._futures_request(
                 "GET",
-                "/api/v1/private/account/tiered_fee_rate",
+                "/api/v1/private/account/tiered_fee_rate/v2",
                 {"symbol": exchange_symbol},
             )
             if isinstance(payload, dict) and payload.get("realTakerFee") is not None:
@@ -519,7 +514,7 @@ class MexcTradingAdapter(TradingAdapter):
         side = _futures_side(request.side, request.reduce_only)
         await self._futures_request(
             "POST",
-            "/api/v1/private/order/submit",
+            "/api/v1/private/order/create",
             {
                 "symbol": request.exchange_symbol,
                 "price": _format_decimal(request.limit_price),
@@ -533,9 +528,7 @@ class MexcTradingAdapter(TradingAdapter):
             },
         )
 
-    async def _recover_order(
-        self, request: TradingOrderRequest
-    ) -> TradingOrderResult | None:
+    async def _recover_order(self, request: TradingOrderRequest) -> TradingOrderResult | None:
         try:
             if request.instrument_type is InstrumentType.SPOT:
                 row = await self._spot_request(
@@ -581,15 +574,16 @@ class MexcTradingAdapter(TradingAdapter):
             await self._futures_request(
                 "POST",
                 "/api/v1/private/order/cancel_with_external",
-                {
-                    "symbol": order.exchange_symbol,
-                    "externalOid": order.client_order_id,
-                },
+                [
+                    {
+                        "symbol": order.exchange_symbol,
+                        "externalOid": order.client_order_id,
+                    }
+                ],
             )
             row = await self._futures_request(
                 "GET",
-                f"/api/v1/private/order/external/{order.exchange_symbol}/"
-                f"{order.client_order_id}",
+                f"/api/v1/private/order/external/{order.exchange_symbol}/{order.client_order_id}",
             )
             return self._parse_futures_order(row)
         except MexcPrivateError:
@@ -714,9 +708,7 @@ class MexcTradingAdapter(TradingAdapter):
             raw={"error_type": error_type} if error_type else {},
         )
 
-    def _instrument(
-        self, symbol: str, instrument_type: InstrumentType
-    ) -> NormalizedInstrument:
+    def _instrument(self, symbol: str, instrument_type: InstrumentType) -> NormalizedInstrument:
         try:
             return self._instruments[(symbol, instrument_type)]
         except KeyError as exc:
@@ -790,9 +782,7 @@ def _futures_side(side: str, reduce_only: bool) -> int:
     return 1 if normalized == "BUY" else 3
 
 
-def _spot_status(
-    status: str, filled: Decimal, requested: Decimal
-) -> LiveOrderStatus:
+def _spot_status(status: str, filled: Decimal, requested: Decimal) -> LiveOrderStatus:
     normalized = status.upper()
     if normalized == "FILLED":
         return LiveOrderStatus.FILLED
@@ -805,9 +795,7 @@ def _spot_status(
     return LiveOrderStatus.UNKNOWN
 
 
-def _futures_status(
-    state: int, filled: Decimal, requested: Decimal
-) -> LiveOrderStatus:
+def _futures_status(state: int, filled: Decimal, requested: Decimal) -> LiveOrderStatus:
     if state == 3:
         return LiveOrderStatus.FILLED if filled >= requested else LiveOrderStatus.PARTIAL
     if state == 4:

@@ -46,11 +46,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            requirements.lock
-            requirements-dev.lock
+            requirements-linux.lock
+            requirements-dev-linux.lock
 
       - name: Install hash-locked development dependencies
-        run: python -m pip install --require-hashes --requirement requirements-dev.lock
+        run: python -m pip install --require-hashes --requirement requirements-dev-linux.lock
 
       - name: Static and unit verification
         env:
@@ -62,7 +62,7 @@ jobs:
           python -m pytest -q
 
       - name: Audit production dependencies
-        run: python -m pip_audit --requirement requirements.lock --disable-pip
+        run: python -m pip_audit --requirement requirements-linux.lock --disable-pip
 
       - name: Verify complete PostgreSQL migration chain
         env:
