@@ -13,9 +13,10 @@ goal remains open until every row is proven, including the last two rows.
 | Cross-venue locked capital and equity invariant | `PaperPortfolio.locked_capital`, `tests/test_pnl_v2.py`, DB replay reconciliation | Proven |
 | Venue/leg-specific fees | `CostEngine` fee schedules and cross-venue fee test | Proven |
 | Reject missing, stale, shallow, or partial paper books | Executor tests in `tests/test_pnl_v2.py`; no fabricated partial close | Proven |
+| Mark open positions to market without close-time double count | Typed fresh tickers, `PaperTradingExecutor.mark_to_market`, open/close equity regressions, and DB replay reconciliation | Proven locally and deployed |
 | Ratio units for spread/slippage | Default `0.0015`/`0.0020` plus config tests | Proven |
 | Enforce `PAPER_AUTOTRADE` and a UTC start boundary | Runtime health fields and runner tests | Proven |
-| Exclude pre-fix data | Invalidated v25 retained separately; clean namespace `v26-oos-*` started with zero position rows | Proven running |
+| Exclude pre-fix data | Invalidated v25/v26 retained separately; clean namespace `v27-oos-*` started with zero position rows | Proven running |
 
 ## Signal, funding, borrow, and market data
 
@@ -50,15 +51,15 @@ goal remains open until every row is proven, including the last two rows.
 | Event-driven deterministic replay with costs and attribution | Historical replay tests and portable dataset digest | Proven |
 | Same dataset/config candidate versus baseline, no look-ahead | Dataset `market-db-sha256:0745b20ed8e77c0ba02a7472ab10f6d48264e25405ad9e5d81f83e7c5c0103dc`; deterministic candidate event SHA `53e9e263f2709bb84ef4466a522ed1766e53cdd6235b019b082e9a96742c9534` | Proven |
 | Historical candidate beats baseline acceptance checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; lower drawdown, higher median monthly PnL, 2/3 profitable windows | Historical evidence only |
-| Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260813-067`; healthy pre-boundary postflight, restart count 0, zero current and historical exposure defects | Proven running |
-| Initial post-boundary smoke | `runtime_safe=true`; 8 exact shared snapshot pairs from `23:15:15Z` to `23:18:38Z`; max gap `39.063369s`; incidents/accounting/exposure overlaps zero; baseline one canonical COTI position, candidate zero | Proven |
-| First live-public funding settlement | Baseline COTI: Bybit actual `00:00:00Z`, rate `-0.00049563`, short PnL `-$0.1239075`; Gate actual `00:00:03Z`, rate `-0.004256`, long PnL `+$1.064`; exact raw-history/side/notional matches, total `+$0.9400925`, max target delay `3s`, all reconciliation error counts zero | Proven |
-| Telegram preview reconciles to active ledger | Read-only `2026-08-14` preview reports candidate equity `$6250.00`, zero fills/positions and unchanged day/total PnL; same-time API ledger agrees exactly. Baseline is an unsent comparator: 2 open positions, 4 fills, funding `+$0.9400925`, total net PnL `-$0.7668037188` after all modeled costs | Proven |
-| Candidate inactivity is an economic decision, not a runner fault | Live funnel after 181 completed cycles: 0 runner errors and 0 restarts; only 2 prior candidate rejections, both `settlement_cost_coverage`. Latest scan had 32 raw candidates and no eligible trade because every candidate had negative net APR after costs; best `$100` quote still expected `-$0.1922674` | Proven snapshot; continue OOS |
-| Funding reconciliation is durable and replayable at timed gates | Tracked `scripts/funding_payment_audit.py` verifies every payment and every raw event inside each holding interval, exact venue timestamp/rate, perpetual leg/side, notional, signed PnL, target grace, uniqueness, settlement markers/event count, and position total. Initial live v26 run: 2 payments, 2 positions, all checks true, max target delay `3s` | Proven tooling and initial run |
-| Final acceptance cannot pass without continuous shared telemetry | Core comparison and tracked operator audit both fail closed when either comparable snapshot series is empty or max gap exceeds `300s`. Live release-067 streamed audit: 167 exact candidate/baseline snapshots, max gap `69.481479s`, both integrity checks true | Proven tooling and live compatibility |
-| Clean 72-hour canary | Boundary `2026-08-13T23:15:00Z`; earliest audit `2026-08-16T23:16:00Z` | Pending time gate |
-| 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-12T23:16:00Z` | Pending time gate |
+| Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260814-068`; healthy pre-boundary postflight, restart count 0, `v27-oos-*` namespaces empty, all five venues ready | Proven running |
+| Initial post-boundary smoke | `runtime_safe=true`; 11 exact shared snapshot pairs from `01:15:00Z` to `01:19:59Z`; max gap `35.489569s`; snapshot risk and all three validation windows sourced from `portfolio_snapshots`; incidents, accounting/replay errors, carry-in, and exposure defects zero; all venue/coverage/WS checks true | Proven |
+| First live-public funding settlement | Exact venue event audit is ready; obtain a fresh `v27` payment after the clean boundary | Pending live event |
+| Telegram preview reconciles to active ledger | Recheck day and total PnL against the `v27` mark-to-market ledger after the first position/event | Pending live activity |
+| Candidate inactivity is an economic decision, not a runner fault | Initial v27 funnel: 32 raw candidates, all rejected on negative net APR after costs; best raw net APR `-0.717387%` and best `$100` quote expected `-$0.196544`; runner errors and persisted incidents zero | Proven initial snapshot; continue OOS |
+| Funding reconciliation is durable and replayable at timed gates | Tracked `scripts/funding_payment_audit.py` verifies every payment and every raw event inside each holding interval, exact venue timestamp/rate, perpetual leg/side, notional, signed PnL, target grace, uniqueness, settlement markers/event count, and position total. Initial v27 no-payment smoke returned `ok=true` with all 17 checks true and every mismatch count zero; a real v27 event is still required. The prior v26 diagnostic checked 2 payments and 2 positions with all checks true and max target delay `3s` | Proven tooling; v27 event pending |
+| Final acceptance cannot pass without continuous shared telemetry | Core comparison and tracked operator audit fail closed when either comparable snapshot series is empty, max gap exceeds `300s`, or snapshot-derived risk/window sources are absent. Initial v27 live audit proved all integrity conditions with 11 exact pairs and `35.489569s` max gap | Proven live compatibility; timed window pending |
+| Clean 72-hour canary | Boundary `2026-08-14T01:15:00Z`; earliest audit `2026-08-17T01:16:00Z` | Pending time gate |
+| 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-13T01:16:00Z` | Pending time gate |
 
 ## Current safety boundary
 
@@ -76,7 +77,12 @@ goal remains open until every row is proven, including the last two rows.
 The `v25-oos-*` window beginning `2026-08-13T21:15:00Z` is excluded from all
 acceptance calculations. Its baseline opened the same Gate/Bybit COTI
 instrument pair in opposite directions, cancelling funding while paying fees
-twice. Release 067 prevents this with a canonical persisted exposure key and
-requires the acceptance audit to independently prove open-key completeness,
-canonical correctness, uniqueness, and zero historical interval overlaps; v26
-must start from an empty namespace and a later boundary.
+twice. Release 067 prevented this with a canonical persisted exposure key.
+
+The `v26-oos-*` window beginning `2026-08-13T23:15:00Z` is also excluded from
+acceptance calculations. Its exact funding-event evidence remains useful as a
+diagnostic, but open positions were not marked to market, so equity, drawdown,
+and rolling validation PnL understated intra-position price and basis risk.
+Release 068 adds fresh typed-ticker mark-to-market, close-time no-double-count
+accounting, DB replay reconciliation, and snapshot-derived risk/window metrics.
+The `v27-oos-*` ledgers therefore start empty at the later clean boundary.
