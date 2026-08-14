@@ -109,6 +109,11 @@ For an evidence window already running on an older immutable release, stream
 the tracked current script to `python -` inside that same app container instead
 of rebuilding it. This applies correctness fixes to the read-only operator gate
 without changing the service process, restart count, database, or clean boundary.
+By default the operator gate samples WebSocket receipt metrics twice, two seconds
+apart. It keeps error counters, coverage, stale-book counts, and cycle age from
+the latest sample, while accepting a fresh ticker/orderbook heartbeat observed
+in either sample. This prevents a task-resubscription heartbeat reset from
+creating a false negative without allowing a genuinely stale stream to pass.
 
 Both gates require a paper-only runtime, distinct candidate and baseline
 simulation versions, exact shared snapshot timestamps, no accounting invariant

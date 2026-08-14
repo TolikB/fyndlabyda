@@ -1,7 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from scripts.paper_acceptance_audit import build_audit, parse_operational_metrics
+from scripts.paper_acceptance_audit import (
+    build_audit,
+    merge_stream_observations,
+    parse_operational_metrics,
+)
 
 from funding_arbitrage.api.routes.analytics import (
     _historical_exposure_safety,
@@ -493,4 +497,30 @@ funding_exchange_stream_last_message_timestamp{exchange="gate",stream="orderbook
         "stream_message_ages": {
             "gate": {"ticker": 2.0, "orderbook": 3.0}
         },
+    }
+
+
+def test_stream_observations_ignore_transient_zero_but_keep_latest_counters() -> None:
+    earlier = _operational(paper_runner_errors=0)
+    earlier_ages = dict(earlier["stream_message_ages"])
+    earlier_ages["gate"] = {"ticker": 0.2, "orderbook": 0.3}
+    earlier["stream_message_ages"] = earlier_ages
+
+    latest = _operational(paper_runner_errors=1)
+    latest_ages = dict(latest["stream_message_ages"])
+    latest_ages["gate"] = {"ticker": None, "orderbook": 0.1}
+    latest_ages["hyperliquid"] = {"ticker": 0.4, "orderbook": None}
+    latest["stream_message_ages"] = latest_ages
+
+    merged = merge_stream_observations(earlier, latest)
+
+    assert merged["paper_runner_errors"] == 1
+    assert merged["stream_observation_samples"] == 2
+    assert merged["stream_message_ages"]["gate"] == {
+        "ticker": 0.2,
+        "orderbook": 0.1,
+    }
+    assert merged["stream_message_ages"]["hyperliquid"] == {
+        "ticker": 0.4,
+        "orderbook": 5.0,
     }

@@ -116,6 +116,40 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
     }
 
 
+def merge_stream_observations(
+    earlier: dict[str, Any], latest: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep the latest counters while retaining any fresh WS receipt in the sample window.
+
+    The collector deliberately replaces a WebSocket task when its selected symbol
+    universe changes. Prometheus can therefore expose a zero heartbeat for the few
+    milliseconds between task replacement and the first normalized message. Two
+    close observations distinguish that transition from a genuinely stale stream
+    without hiding errors or stale market-data coverage from the latest sample.
+    """
+
+    merged = dict(latest)
+    stream_ages: dict[str, dict[str, float | None]] = {}
+    for observation in (earlier, latest):
+        for venue, streams in (
+            observation.get("stream_message_ages") or {}
+        ).items():
+            if not isinstance(streams, dict):
+                continue
+            venue_ages = stream_ages.setdefault(str(venue), {})
+            for stream, age in streams.items():
+                current = venue_ages.get(str(stream))
+                if isinstance(age, (int, float)) and (
+                    not isinstance(current, (int, float)) or age < current
+                ):
+                    venue_ages[str(stream)] = float(age)
+                elif str(stream) not in venue_ages:
+                    venue_ages[str(stream)] = None
+    merged["stream_message_ages"] = stream_ages
+    merged["stream_observation_samples"] = 2
+    return merged
+
+
 def build_audit(
     health: dict[str, Any],
     ready: dict[str, Any],
@@ -408,6 +442,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--start", help="Optional ISO-8601 start of the clean canary window")
     parser.add_argument("--gate", choices=("canary", "acceptance"), default="canary")
     parser.add_argument("--timeout", type=float, default=30)
+    parser.add_argument(
+        "--stream-sample-seconds",
+        type=float,
+        default=2,
+        help="Delay between two WS heartbeat samples; use 0 for one sample",
+    )
     return parser.parse_args()
 
 
@@ -443,6 +483,14 @@ def main() -> int:
     operational_metrics = parse_operational_metrics(
         _fetch_text(args.base_url, "/metrics/", timeout=args.timeout)
     )
+    if args.stream_sample_seconds > 0:
+        time.sleep(args.stream_sample_seconds)
+        latest_operational_metrics = parse_operational_metrics(
+            _fetch_text(args.base_url, "/metrics/", timeout=args.timeout)
+        )
+        operational_metrics = merge_stream_observations(
+            operational_metrics, latest_operational_metrics
+        )
     audit = build_audit(
         health,
         ready,
