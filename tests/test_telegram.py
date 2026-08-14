@@ -199,6 +199,96 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
     assert "simulator v26-oos-candidate" in sent[0]
 
 
+@pytest.mark.asyncio
+async def test_daily_report_includes_isolated_baseline_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        paper_initial_balance_usd=6250,
+        paper_simulation_version="v29-oos-candidate",
+        paper_comparison_enabled=True,
+        paper_baseline_simulation_version="v29-oos-baseline",
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="UTC",
+    )
+    timestamp = datetime(2026, 8, 14, 4, 14, tzinfo=UTC)
+    candidate = type(
+        "Snapshot",
+        (),
+        {
+            "equity": Decimal("6250"),
+            "total_pnl": Decimal("0"),
+            "funding_pnl": Decimal("0"),
+            "fees": Decimal("0"),
+            "timestamp": timestamp,
+        },
+    )()
+    baseline = type(
+        "Snapshot",
+        (),
+        {
+            "equity": Decimal("6249.635031950949948783"),
+            "total_pnl": Decimal("-0.364968049050051217"),
+            "funding_pnl": Decimal("0.372430000000000000"),
+            "fees": Decimal("0.262500245296606355"),
+            "timestamp": timestamp,
+        },
+    )()
+    session = ReportSession()
+    session.values = [
+        None,
+        None,
+        candidate,
+        candidate,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        0,
+        0,
+        0,
+        33,
+        0,
+        100,
+        0,
+        1,
+        None,
+        baseline,
+        baseline,
+        Decimal("0.372430000000000000"),
+        Decimal("0.262500245296606355"),
+        Decimal("0"),
+        Decimal("0"),
+        2,
+        1,
+        0,
+        100,
+        0,
+        1,
+    ]
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(session)),
+    )
+    sent: list[str] = []
+
+    async def send(message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(service.notifier, "send_message", send)
+
+    assert await service.check_and_send(datetime(2026, 8, 15, 0, 1, tzinfo=UTC))
+    assert "Portfolio: candidate | simulator v29-oos-candidate" in sent[0]
+    assert "Portfolio: baseline | simulator v29-oos-baseline" in sent[0]
+    assert "Equity: $6249.64" in sent[0]
+    assert "Net PnL: -$0.36" in sent[0]
+    assert "Funding: +$0.37" in sent[0]
+    assert "Fees: -$0.26" in sent[0]
+    assert "Candidate and baseline are separate virtual portfolios" in sent[0]
+
+
 def test_daily_report_distinguishes_unconfirmed_signals_from_no_edge() -> None:
     note = _no_fill_note(
         fills=0,
