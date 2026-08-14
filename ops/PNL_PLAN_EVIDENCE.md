@@ -84,6 +84,13 @@ goal remains open until every row is proven, including the last two rows.
   SHA-256 digest rather than mutable tags. Do not claim these boundaries as
   running until an actual image build and non-root migration/health smoke
   succeed after the pending `12:00Z` funding settlements are reconciled.
+- The complete 35-package exact runtime dependency set in `requirements.lock`
+  passed `pip-audit 2.10.1` on `2026-08-14` with no known vulnerabilities. The
+  audit used `--no-deps` because the file already contains the full captured
+  dependency closure. The lock remains exact-version rather than hash-locked:
+  hash generation exceeded its bounded network timeout and produced no
+  candidate file, so no cryptographic package-hash claim is made for release
+  074.
 - Do not restart or deploy after the clean boundary unless a material correctness
   defect is found; a restart is a persisted incident and invalidates the window.
 - Do not claim expected profitability from the historical replay alone.
