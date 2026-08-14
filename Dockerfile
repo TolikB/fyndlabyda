@@ -1,9 +1,9 @@
 FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
 WORKDIR /app
 
-COPY pyproject.toml README.md requirements-linux.lock ./
+COPY requirements-linux.lock ./
 RUN pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock
 
 COPY src ./src
@@ -12,7 +12,6 @@ COPY dashboard ./dashboard
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN pip install --no-cache-dir --no-deps --no-build-isolation .
 COPY scripts ./scripts
 
 # The API, paper runner, and Alembic migrations require no root privileges at

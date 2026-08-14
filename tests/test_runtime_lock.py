@@ -44,3 +44,5 @@ def test_docker_runtime_uses_immutable_base_and_lock_file() -> None:
         in dockerfile
     )
     assert "config['project']['dependencies']" not in dockerfile
+    assert "PYTHONPATH=/app/src" in dockerfile
+    assert "pip install --no-cache-dir --no-deps --no-build-isolation ." not in dockerfile
