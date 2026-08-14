@@ -22,6 +22,7 @@ from funding_arbitrage.database.models import (
     PortfolioSnapshotRecord,
 )
 from funding_arbitrage.database.repositories.market_data import (
+    save_funding_history,
     save_market_snapshot,
     save_opportunities,
     save_paper_funding_payment,
@@ -789,7 +790,12 @@ class PaperTestRunner:
                         mark_price=event.mark_price,
                         timestamp=event.funding_timestamp,
                     )
-                    await self._apply_funding_event(position, leg, event_funding)
+                    await self._apply_funding_event(
+                        position,
+                        leg,
+                        event_funding,
+                        history_event=event,
+                    )
 
     async def _settle_mock_funding(self, snapshot: MarketSnapshot) -> None:
         now = snapshot.captured_at
@@ -818,7 +824,12 @@ class PaperTestRunner:
                 )
 
     async def _apply_funding_event(
-        self, position: PaperPosition, leg: PaperFill, funding: FundingSnapshot
+        self,
+        position: PaperPosition,
+        leg: PaperFill,
+        funding: FundingSnapshot,
+        *,
+        history_event: FundingHistoryPoint | None = None,
     ) -> None:
         async with self.session_factory() as session:
             existing = await session.scalar(
@@ -830,6 +841,10 @@ class PaperTestRunner:
                 )
             )
             if existing is not None:
+                # Repair ledgers written by an older simulator build where the
+                # payment could commit between periodic market-history writes.
+                if history_event is not None:
+                    await save_funding_history(session, [history_event])
                 self._mark_funding_settled(
                     position, funding.exchange, funding.symbol, funding.timestamp
                 )
@@ -838,7 +853,12 @@ class PaperTestRunner:
                 leg.side, position.capital, funding.funding_rate
             )
             await save_paper_funding_payment(
-                session, position.id, funding, position.capital, pnl
+                session,
+                position.id,
+                funding,
+                position.capital,
+                pnl,
+                history_event=history_event,
             )
             self.runtime.portfolio.settle_funding(
                 position.id, funding, position.capital, leg.side

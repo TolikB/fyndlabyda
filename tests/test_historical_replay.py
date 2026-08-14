@@ -18,8 +18,15 @@ from funding_arbitrage.backtest.historical_replay import (
     _select_quote,
 )
 from funding_arbitrage.config import Settings
-from funding_arbitrage.database.models import FundingHistoryRecord, MarketCandleRecord
-from funding_arbitrage.database.repositories.market_data import save_funding_history
+from funding_arbitrage.database.models import (
+    FundingHistoryRecord,
+    MarketCandleRecord,
+    PaperFundingPaymentRecord,
+)
+from funding_arbitrage.database.repositories.market_data import (
+    save_funding_history,
+    save_paper_funding_payment,
+)
 from funding_arbitrage.exchanges.base.exceptions import RateLimitError
 from funding_arbitrage.exchanges.base.models import (
     Candle,
@@ -393,6 +400,55 @@ async def test_funding_history_batch_deduplicates_before_flush() -> None:
 
     assert session.scalar_calls == 1
     assert len(session.added) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_funding_payment_commits_raw_event_in_same_transaction() -> None:
+    class FakeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.commits = 0
+
+        def get_bind(self) -> Any:
+            return type("Bind", (), {"dialect": type("Dialect", (), {"name": "sqlite"})()})()
+
+        async def scalar(self, _statement: object) -> None:
+            return None
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+    event = FundingHistoryPoint(
+        exchange="bybit",
+        symbol="COTIUSDT",
+        funding_rate=Decimal("-0.00186723"),
+        funding_timestamp=datetime(2026, 8, 14, 8, tzinfo=UTC),
+    )
+    funding = FundingSnapshot(
+        exchange=event.exchange,
+        symbol=event.symbol,
+        funding_rate=event.funding_rate,
+        funding_interval_hours=Decimal("8"),
+        timestamp=event.funding_timestamp,
+    )
+    session = FakeSession()
+
+    await save_paper_funding_payment(
+        session,  # type: ignore[arg-type]
+        "position-id",
+        funding,
+        Decimal("250"),
+        Decimal("-0.4668075"),
+        history_event=event,
+    )
+
+    assert len(session.added) == 2
+    assert isinstance(session.added[0], FundingHistoryRecord)
+    assert isinstance(session.added[1], PaperFundingPaymentRecord)
+    assert session.commits == 1
 
 
 def test_replay_dataset_excludes_funding_outside_candle_universe() -> None:

@@ -919,8 +919,13 @@ async def test_live_funding_uses_exact_perpetual_leg_symbol_and_event_time(
     applied: list[tuple[str, str, datetime]] = []
 
     async def capture(
-        _position: PaperPosition, leg: PaperFill, funding: FundingSnapshot
+        _position: PaperPosition,
+        leg: PaperFill,
+        funding: FundingSnapshot,
+        *,
+        history_event: FundingHistoryPoint | None = None,
     ) -> None:
+        assert history_event is exact_event
         applied.append((leg.symbol, funding.symbol, funding.timestamp))
 
     monkeypatch.setattr(runner, "_apply_funding_event", capture)
@@ -932,6 +937,97 @@ async def test_live_funding_uses_exact_perpetual_leg_symbol_and_event_time(
         position.id, snapshot.funding[0], position.capital, "BUY"
     )
     assert pnl == Decimal("0.250")
+
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_existing_live_payment_repairs_missing_raw_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExistingPaymentSession(EmptySession):
+        async def scalar(self, _statement: object) -> object:
+            return object()
+
+    class ExistingPaymentSessionFactory:
+        def __call__(self) -> ExistingPaymentSession:
+            return ExistingPaymentSession()
+
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_autotrade=True,
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        cast(async_sessionmaker[AsyncSession], ExistingPaymentSessionFactory()),
+    )
+    timestamp = datetime(2026, 8, 14, 8, tzinfo=UTC)
+    event = FundingHistoryPoint(
+        exchange="gate",
+        symbol="COTI_USDT",
+        funding_rate=Decimal("-0.004494"),
+        funding_timestamp=timestamp,
+    )
+    funding = FundingSnapshot(
+        exchange=event.exchange,
+        symbol=event.symbol,
+        funding_rate=event.funding_rate,
+        funding_interval_hours=Decimal("8"),
+        timestamp=event.funding_timestamp,
+    )
+    fill = PaperFill(
+        client_order_id="gate-long",
+        exchange="gate",
+        symbol="COTI_USDT",
+        side="BUY",
+        requested_quantity=Decimal("1"),
+        filled_quantity=Decimal("1"),
+        price=Decimal("1"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        status=FillStatus.FILLED,
+        instrument_type=InstrumentType.PERPETUAL,
+    )
+    position = PaperPosition(
+        opportunity_id="existing-payment",
+        asset="COTI",
+        capital=Decimal("250"),
+        simulation_version=settings.paper_simulation_version,
+        state=PositionState.OPEN,
+        leg_a=fill,
+        leg_a_type=InstrumentType.PERPETUAL,
+        opened_at=timestamp - timedelta(minutes=30),
+    )
+    persisted: list[FundingHistoryPoint] = []
+
+    async def capture_history(
+        _session: object, points: list[FundingHistoryPoint]
+    ) -> None:
+        persisted.extend(points)
+
+    async def unexpected_payment(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("an existing payment must not be inserted again")
+
+    monkeypatch.setattr(paper_runner_module, "save_funding_history", capture_history)
+    monkeypatch.setattr(
+        paper_runner_module, "save_paper_funding_payment", unexpected_payment
+    )
+
+    await runner._apply_funding_event(
+        position,
+        fill,
+        funding,
+        history_event=event,
+    )
+
+    assert persisted == [event]
+    assert position.settled_funding_at["gate|COTI_USDT"] == timestamp
+    assert position.funding_events == 0
 
     for adapter in adapters.values():
         await adapter.close()

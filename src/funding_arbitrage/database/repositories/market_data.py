@@ -117,7 +117,9 @@ async def save_funding_snapshots(session: AsyncSession, snapshots: list[FundingS
     await session.commit()
 
 
-async def save_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
+async def _upsert_funding_history(
+    session: AsyncSession, points: list[FundingHistoryPoint]
+) -> None:
     deduplicated = {
         (item.exchange, item.symbol, item.funding_timestamp): item for item in points
     }
@@ -159,6 +161,10 @@ async def save_funding_history(session: AsyncSession, points: list[FundingHistor
             else:
                 record.funding_rate = row["funding_rate"]
                 record.mark_price = row["mark_price"]
+
+
+async def save_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
+    await _upsert_funding_history(session, points)
     await session.commit()
 
 
@@ -444,7 +450,14 @@ async def save_paper_funding_payment(
     funding: FundingSnapshot,
     notional: Decimal,
     pnl: Decimal,
+    *,
+    history_event: FundingHistoryPoint | None = None,
 ) -> None:
+    # A live paper payment must never exist without its authoritative raw
+    # exchange event. Upsert both in the same transaction; mock settlements do
+    # not pass a history event and therefore cannot pollute the public ledger.
+    if history_event is not None:
+        await _upsert_funding_history(session, [history_event])
     session.add(
         PaperFundingPaymentRecord(
             position_id=position_id,
