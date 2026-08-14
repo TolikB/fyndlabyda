@@ -104,6 +104,108 @@ def test_rolling_window_boundary_event_is_counted_only_once() -> None:
     assert result["profitable_candidate_windows"] == 1
 
 
+def test_negative_baseline_does_not_allow_merely_less_negative_candidate() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=30)
+    timestamps = (start, end)
+    baseline = _observed_dataset("baseline", start, end, timestamps)
+    candidate = _observed_dataset("candidate", start, end, timestamps)
+    baseline.events.append(
+        FundingEvent(
+            event_id="baseline-loss",
+            timestamp=start + timedelta(days=1),
+            exchange="gate",
+            symbol="BTC_USDT",
+            rate=Decimal("-1"),
+            notional=Decimal("100"),
+            pnl=Decimal("-100"),
+        )
+    )
+    candidate.events.append(
+        FundingEvent(
+            event_id="candidate-smaller-loss",
+            timestamp=start + timedelta(days=1),
+            exchange="gate",
+            symbol="BTC_USDT",
+            rate=Decimal("-0.8"),
+            notional=Decimal("100"),
+            pnl=Decimal("-80"),
+        )
+    )
+
+    result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+
+    assert result["checks"]["net_pnl_at_least_10_percent_better"] is False
+
+
+def test_nonpositive_baseline_requires_positive_candidate_net_pnl() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=30)
+    timestamps = (start, end)
+    baseline = _observed_dataset("baseline", start, end, timestamps)
+    candidate = _observed_dataset("candidate", start, end, timestamps)
+    candidate.events.append(
+        FundingEvent(
+            event_id="candidate-profit",
+            timestamp=start + timedelta(days=1),
+            exchange="gate",
+            symbol="BTC_USDT",
+            rate=Decimal("0.01"),
+            notional=Decimal("100"),
+            pnl=Decimal("1"),
+        )
+    )
+
+    result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+
+    assert result["checks"]["net_pnl_at_least_10_percent_better"] is True
+
+
+def test_positive_baseline_requires_full_ten_percent_net_pnl_improvement() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=30)
+    timestamps = (start, end)
+    baseline = _observed_dataset("baseline", start, end, timestamps)
+    candidate = _observed_dataset("candidate", start, end, timestamps)
+    baseline.events.append(
+        FundingEvent(
+            event_id="baseline-profit",
+            timestamp=start + timedelta(days=1),
+            exchange="gate",
+            symbol="BTC_USDT",
+            rate=Decimal("1"),
+            notional=Decimal("100"),
+            pnl=Decimal("100"),
+        )
+    )
+    candidate.events.append(
+        FundingEvent(
+            event_id="candidate-under-threshold",
+            timestamp=start + timedelta(days=1),
+            exchange="gate",
+            symbol="BTC_USDT",
+            rate=Decimal("1.0999"),
+            notional=Decimal("100"),
+            pnl=Decimal("109.99"),
+        )
+    )
+
+    below = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+    candidate.events[0] = FundingEvent(
+        event_id="candidate-at-threshold",
+        timestamp=start + timedelta(days=1),
+        exchange="gate",
+        symbol="BTC_USDT",
+        rate=Decimal("1.10"),
+        notional=Decimal("100"),
+        pnl=Decimal("110"),
+    )
+    exact = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+
+    assert below["checks"]["net_pnl_at_least_10_percent_better"] is False
+    assert exact["checks"]["net_pnl_at_least_10_percent_better"] is True
+
+
 def test_durable_runtime_incident_invalidates_canary_and_acceptance_evidence() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=31)
