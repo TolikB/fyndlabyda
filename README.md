@@ -1,10 +1,11 @@
 # Funding Arbitrage Research Bot
 
-Read-only, market-neutral funding/basis research system. It normalizes public
-market data from Bybit, Gate.io, OKX, Binance, and Hyperliquid; ranks funding,
-spot/perpetual, perp/perp, and dated-futures opportunities; and keeps all
-execution strictly in `PaperTradingExecutor`. No API keys or live orders are
-used in v1.
+Market-neutral funding/basis arbitrage system for Bybit, Gate.io, OKX,
+Binance, Hyperliquid, and MEXC. It normalizes public REST/WebSocket data, exact
+venue funding cycles, spot/perpetual, perp/perp, and dated-futures
+opportunities. Paper mode is the default. A separately interlocked live mode
+uses authenticated account reconciliation, durable order intents,
+idempotent client IDs, bounded IOC orders, and persistent kill switches.
 
 ## Local setup
 
@@ -56,7 +57,7 @@ docker compose up -d --build
 ```
 
 This starts the production-shaped paper-test deployment: real public market
-data from Bybit, Gate, OKX, Binance, and Hyperliquid, automatic paper
+data from Bybit, Gate, OKX, Binance, Hyperliquid, and MEXC, automatic paper
 execution, funding settlement, PostgreSQL persistence, Prometheus, and
 Grafana support. The default lightweight profile starts only app, PostgreSQL,
 and Redis; add `--profile observability` when the host has enough resources for
@@ -72,6 +73,7 @@ without writing data or placing orders with:
 
 ```powershell
 docker compose exec app python scripts/paper_scan_probe.py
+docker compose exec app python scripts/mexc_public_probe.py
 ```
 
 Port 8000 is bound to VM localhost by default. Reach the dashboard safely with
@@ -143,6 +145,22 @@ and largest gaps, position counts, costs, drawdown, rolling-window checks, and
 persisted baseline/candidate run IDs. If historical order books are unavailable,
 replay explicitly uses a conservative synthetic spread/depth model; it never
 silently assumes zero slippage.
+
+## Guarded live mode
+
+Live execution is disabled unless `RUN_MODE=live`, `EXECUTION_MODE=live`,
+`LIVE_ARMED=true`, and the exact confirmation phrase in `.env.live.example`
+are all present. Copy that example only after completing the checklist in
+`ops/LIVE_TRADING_RUNBOOK.md`. Never reuse a paper `.env` or grant withdrawal
+or transfer permissions.
+
+MEXC paper mode uses the same public spot/futures feeds and exact settlement
+timestamps as production. MEXC live mode uses native spot V3 and futures V1
+signing, converts futures contracts to base quantity, configures Hedge Mode,
+recovers ambiguous submissions by `externalOid`, and treats unresolved order
+outcomes as `UNKNOWN` so the second leg cannot proceed. MEXC has no separate
+live sandbox in this service; use `paper_test` with `live_public` data for the
+test phase.
 
 Run long replays in a dedicated `RUN_MODE=api`, `PAPER_AUTOTRADE=false` worker.
 This keeps paper market polling responsive and prevents an HTTP client timeout

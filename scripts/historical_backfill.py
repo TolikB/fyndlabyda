@@ -67,7 +67,7 @@ def main() -> None:
     parser.add_argument("--assets", default="auto")
     parser.add_argument("--asset-limit", type=int, default=12)
     parser.add_argument(
-        "--venues", default="bybit,gate,okx,binance,hyperliquid"
+        "--venues", default="bybit,gate,okx,binance,hyperliquid,mexc"
     )
     parser.add_argument("--interval-minutes", type=int, default=60)
     args = parser.parse_args()

@@ -8,6 +8,7 @@ from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
+from funding_arbitrage.exchanges.mexc import MexcPublicAdapter
 from funding_arbitrage.exchanges.mock import MockExchangeAdapter
 from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 
@@ -16,7 +17,7 @@ def create_public_adapters(settings: Settings) -> dict[str, ExchangeAdapter]:
     if settings.market_data_mode == "mock":
         return {
             name: MockExchangeAdapter(name)
-            for name in ("bybit", "gate", "okx", "binance", "hyperliquid")
+            for name in ("bybit", "gate", "okx", "binance", "hyperliquid", "mexc")
         }
     return {
         "bybit": BybitPublicAdapter(
@@ -54,6 +55,14 @@ def create_public_adapters(settings: Settings) -> dict[str, ExchangeAdapter]:
         "hyperliquid": HyperliquidPublicAdapter(
             base_url=settings.hyperliquid_base_url,
             websocket_url=settings.hyperliquid_ws_url,
+            timeout_seconds=settings.request_timeout_seconds,
+            requests_per_second=settings.rate_limit_requests_per_second,
+            burst=settings.rate_limit_burst,
+        ),
+        "mexc": MexcPublicAdapter(
+            base_url=settings.mexc_base_url,
+            futures_websocket_url=settings.mexc_futures_ws_url,
+            spot_websocket_url=settings.mexc_spot_ws_url,
             timeout_seconds=settings.request_timeout_seconds,
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,

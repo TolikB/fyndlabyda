@@ -130,7 +130,7 @@ class DailyReportService:
             )
             self.timezone = UTC
         self.notifier = TelegramNotifier(
-            settings.telegram_bot_token,
+            settings.telegram_bot_token.get_secret_value(),
             settings.telegram_chat_id,
             settings.telegram_api_base_url,
             settings.request_timeout_seconds,

@@ -47,7 +47,7 @@ def test_operator_gate_requires_clean_boundary_and_exact_versions() -> None:
 
 
 def _operational(**updates: object) -> dict[str, object]:
-    venues = ("binance", "bybit", "gate", "hyperliquid", "okx")
+    venues = ("binance", "bybit", "gate", "hyperliquid", "mexc", "okx")
     values: dict[str, object] = {
         "paper_runner_cycles": 10,
         "paper_runner_errors": 0,
@@ -107,7 +107,7 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -191,7 +191,7 @@ def test_acceptance_audit_fails_closed_without_continuous_snapshot_evidence() ->
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -294,7 +294,7 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
         },
         {
             "canary": {"ready": True},
@@ -416,7 +416,7 @@ def test_acceptance_audit_rejects_wrong_or_inactive_autotrade_boundary() -> None
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -449,7 +449,7 @@ def test_acceptance_audit_rejects_cycle_errors_or_incomplete_market_data() -> No
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -501,6 +501,7 @@ def test_acceptance_audit_rejects_missing_or_stale_websocket_stream() -> None:
                 "bybit",
                 "gate",
                 "hyperliquid",
+                "mexc",
                 "okx",
             ],
         },

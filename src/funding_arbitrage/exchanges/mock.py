@@ -33,6 +33,7 @@ class MockExchangeAdapter(ExchangeAdapter):
             "okx": Decimal("0.0015"),
             "binance": Decimal("-0.0008"),
             "hyperliquid": Decimal("0.0010"),
+            "mexc": Decimal("0.0012"),
         }
 
     async def close(self) -> None:

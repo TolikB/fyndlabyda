@@ -16,6 +16,7 @@ PREFERRED_BTC_SYMBOLS = {
     "bybit": "BTCUSDT",
     "gate": "BTC_USDT",
     "hyperliquid": "BTC",
+    "mexc": "BTC_USDT",
     "okx": "BTC-USDT-SWAP",
 }
 SCHEDULE_TOLERANCE_SECONDS = 5.0

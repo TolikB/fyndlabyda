@@ -15,7 +15,9 @@ from urllib.request import urlopen
 
 from prometheus_client.parser import text_string_to_metric_families
 
-EXPECTED_VENUES = frozenset({"binance", "bybit", "gate", "hyperliquid", "okx"})
+EXPECTED_VENUES = frozenset(
+    {"binance", "bybit", "gate", "hyperliquid", "mexc", "okx"}
+)
 
 
 def _fetch_json(

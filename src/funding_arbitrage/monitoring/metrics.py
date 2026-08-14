@@ -83,6 +83,36 @@ paper_trade_rejections_total = Counter(
     "Paper trade rejections",
     ["profile", "reason"],
 )
+live_runner_cycles_total = Counter(
+    "funding_live_runner_cycles_total", "Completed live runner cycles"
+)
+live_runner_errors_total = Counter(
+    "funding_live_runner_errors_total", "Live runner errors", ["stage"]
+)
+live_runner_last_cycle_timestamp = Gauge(
+    "funding_live_runner_last_cycle_timestamp", "Unix timestamp of the last live cycle"
+)
+live_orders_total = Counter(
+    "funding_live_orders_total", "Authenticated order outcomes", ["exchange", "status"]
+)
+live_trade_rejections_total = Counter(
+    "funding_live_trade_rejections_total", "Live entries rejected before exposure", ["reason"]
+)
+live_positions_open = Gauge("funding_live_positions_open", "Open real-money positions")
+live_equity = Gauge("funding_live_equity_usd", "Authenticated aggregate account equity")
+live_pnl = Gauge("funding_live_pnl_usd", "Equity delta since this live process started")
+live_reconciliation_failures_total = Counter(
+    "funding_live_reconciliation_failures_total", "Failed private-state reconciliations"
+)
+live_funding_payments_total = Counter(
+    "funding_live_funding_payments_total", "New actual funding cashflows", ["exchange"]
+)
+live_funding_poll_errors_total = Counter(
+    "funding_live_funding_poll_errors_total", "Private funding-history poll errors", ["exchange"]
+)
+live_trading_paused = Gauge(
+    "funding_live_trading_paused", "Whether the persistent live entry interlock is active"
+)
 paper_runner_last_cycle_timestamp = Gauge(
     "funding_paper_runner_last_cycle_timestamp", "Unix timestamp of the last paper cycle"
 )

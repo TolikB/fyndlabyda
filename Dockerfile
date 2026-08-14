@@ -20,7 +20,9 @@ COPY scripts ./scripts
 # even if a future base-image default changes.
 RUN groupadd --system --gid 10001 funding \
     && useradd --system --uid 10001 --gid funding --home-dir /app \
-        --shell /usr/sbin/nologin funding
+        --shell /usr/sbin/nologin funding \
+    && mkdir -p /app/.runtime \
+    && chown funding:funding /app/.runtime
 USER 10001:10001
 
 EXPOSE 8000

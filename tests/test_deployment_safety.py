@@ -88,9 +88,11 @@ def test_app_container_is_unprivileged_and_filesystem_locked_down() -> None:
     assert app.get("cap_drop") == ["ALL"]
     assert "no-new-privileges:true" in app.get("security_opt", [])
     assert "/tmp:size=64m,mode=1777" in app.get("tmpfs", [])
+    assert "runtime_state:/app/.runtime" in app.get("volumes", [])
 
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
     assert "USER 10001:10001" in dockerfile
+    assert "chown funding:funding /app/.runtime" in dockerfile
 
 
 def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
@@ -113,5 +115,6 @@ def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
         assert len(hashes) == len(set(hashes)), first_line
         requirements.append(first_line.removesuffix(" \\"))
 
-    assert len(requirements) == 34
+    assert len(requirements) == 53
     assert len(requirements) == len(set(requirements))
+    assert "ccxt==4.5.73" in requirements
