@@ -55,7 +55,7 @@ services:
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     cpus: "0.10"
     mem_limit: 192m
     restart: unless-stopped
@@ -66,7 +66,7 @@ services:
     depends_on:
       - prometheus
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     cpus: "0.20"
     mem_limit: 256m
     restart: unless-stopped
