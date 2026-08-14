@@ -80,6 +80,7 @@ class RuntimeState:
             simulation_version=settings.paper_simulation_version,
         )
         self.latest_snapshot: MarketSnapshot | None = None
+        self.last_completed_snapshot: MarketSnapshot | None = None
         self.opportunities: list[Opportunity] = []
         self.backtests: dict[str, BacktestResult] = {}
         self.market_replay_jobs: dict[str, dict[str, object]] = {}

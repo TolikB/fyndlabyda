@@ -64,10 +64,10 @@ paper_portfolio:
   market_asset_limit: 12
   history_symbol_limit: 5
   market_persist_interval_seconds: 300
-  simulation_version: v28-oos-candidate
+  simulation_version: v29-oos-candidate
   strategy_profile: candidate
   comparison_enabled: false
-  baseline_simulation_version: v28-oos-baseline
+  baseline_simulation_version: v29-oos-baseline
   exit_edge_miss_cycles: 2
   funding_horizon_hours: 24
   entry_window_hours: 2

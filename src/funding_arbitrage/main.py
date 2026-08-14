@@ -147,7 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health/ready")
     async def ready() -> dict[str, object]:
-        snapshot = runtime.latest_snapshot
+        snapshot = runtime.last_completed_snapshot
         if active_settings.run_mode == "paper_test":
             if snapshot is None:
                 raise HTTPException(
@@ -171,7 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             comparison_runtime = getattr(app.state, "baseline_runtime", None)
             if (
                 comparison_runtime is not None
-                and comparison_runtime.latest_snapshot is not snapshot
+                and comparison_runtime.last_completed_snapshot is not snapshot
             ):
                 raise HTTPException(
                     status_code=503,

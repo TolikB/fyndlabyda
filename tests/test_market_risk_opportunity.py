@@ -424,6 +424,61 @@ def test_market_universe_limit_preserves_spot_perp_pair() -> None:
     assert {item.symbol for item in selected_tickers} == {"BTCUSDT", "BTCUSDT-PERP"}
 
 
+def test_market_universe_limit_pins_required_open_position_market() -> None:
+    timestamp = datetime.now(UTC)
+    instruments = [
+        NormalizedInstrument(
+            exchange="test",
+            exchange_symbol=f"{asset}USDT",
+            base_asset=asset,
+            quote_asset="USDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            tick_size=Decimal("0.01"),
+            step_size=Decimal("0.001"),
+            min_order_size=Decimal("0.001"),
+        )
+        for asset in ("BTC", "COTI")
+    ]
+    tickers = [
+        Ticker(
+            exchange="test",
+            symbol=item.exchange_symbol,
+            instrument_type=item.instrument_type,
+            last_price=Decimal("1"),
+            volume_24h=(
+                Decimal("1000000") if item.base_asset == "BTC" else Decimal("1")
+            ),
+            timestamp=timestamp,
+        )
+        for item in instruments
+    ]
+    funding = [
+        FundingSnapshot(
+            exchange="test",
+            symbol=item.exchange_symbol,
+            funding_rate=Decimal("0.001"),
+            funding_interval_hours=Decimal("8"),
+            timestamp=timestamp,
+        )
+        for item in instruments
+    ]
+
+    selected_instruments, selected_tickers, selected_funding = _limit_venue_universe(
+        instruments,
+        tickers,
+        funding,
+        1,
+        required_markets={("COTIUSDT", InstrumentType.PERPETUAL)},
+    )
+
+    assert {item.exchange_symbol for item in selected_instruments} == {
+        "BTCUSDT",
+        "COTIUSDT",
+    }
+    assert {item.symbol for item in selected_tickers} == {"BTCUSDT", "COTIUSDT"}
+    assert {item.symbol for item in selected_funding} == {"BTCUSDT", "COTIUSDT"}
+
+
 def test_history_symbols_prioritize_core_assets_before_alphabetical_order() -> None:
     timestamp = datetime.now(UTC)
     instruments = [

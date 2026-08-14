@@ -531,6 +531,8 @@ async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
     assert candidate.collector is baseline.collector
     assert candidate_runtime.latest_snapshot is snapshot
     assert baseline_runtime.latest_snapshot is snapshot
+    assert candidate_runtime.last_completed_snapshot is snapshot
+    assert baseline_runtime.last_completed_snapshot is snapshot
     assert candidate_runtime.portfolio.simulation_version == "candidate-shared-test"
     assert baseline_runtime.portfolio.simulation_version == "baseline-shared-test"
     assert candidate_runtime.portfolio.positions
@@ -542,6 +544,79 @@ async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
     assert len(portfolio_snapshots) == 2
     assert {item.timestamp for item in portfolio_snapshots} == {snapshot.captured_at}
 
+    await candidate.close()
+    await baseline.close()
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_collection_rejects_missing_open_position_mark_before_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_simulation_version="candidate-mark-test",
+        paper_strategy_profile="candidate",
+        paper_comparison_enabled=True,
+        paper_baseline_simulation_version="baseline-mark-test",
+    )
+    baseline_settings = candidate_settings.model_copy(
+        update={
+            "paper_strategy_profile": "baseline",
+            "paper_simulation_version": "baseline-mark-test",
+            "telegram_enabled": False,
+        }
+    )
+    adapters = create_public_adapters(candidate_settings)
+    factory = cast(async_sessionmaker[AsyncSession], EmptySessionFactory())
+    candidate = PaperTestRunner(
+        candidate_settings,
+        RuntimeState(candidate_settings, adapters),
+        factory,
+    )
+    baseline_runtime = RuntimeState(baseline_settings, adapters, emit_metrics=False)
+    baseline = PaperTestRunner(
+        baseline_settings,
+        baseline_runtime,
+        factory,
+        collector=candidate.collector,
+    )
+    now = datetime.now(UTC)
+    position = PaperPosition(
+        opportunity_id="baseline-coti",
+        asset="COTI",
+        capital=Decimal("250"),
+        strategy="cross_exchange_funding",
+        leg_a=_exit_test_fill("gate", "COTI_USDT", "SELL"),
+        leg_b=_exit_test_fill("bybit", "COTIUSDT", "BUY"),
+        leg_a_type=InstrumentType.PERPETUAL,
+        leg_b_type=InstrumentType.PERPETUAL,
+        state=PositionState.OPEN,
+        opened_at=now - timedelta(minutes=5),
+    )
+    baseline_runtime.portfolio.allocate_position(
+        position, ("gate", "bybit"), Decimal("250")
+    )
+    requested_books: dict[str, list[tuple[str, InstrumentType]]] = {}
+
+    async def missing_open_tickers(**kwargs: object) -> MarketSnapshot:
+        requested_books.update(
+            cast(dict[str, list[tuple[str, InstrumentType]]], kwargs["orderbook_symbols"])
+        )
+        return MarketSnapshot([], [], [], {}, now)
+
+    monkeypatch.setattr(candidate.collector, "collect_once", missing_open_tickers)
+
+    with pytest.raises(IncompleteMarketSnapshotError) as captured:
+        await candidate.collect_snapshot((baseline,))
+
+    assert set(captured.value.venues) == {"bybit", "gate"}
+    assert ("COTI_USDT", InstrumentType.PERPETUAL) in requested_books["gate"]
+    assert ("COTIUSDT", InstrumentType.PERPETUAL) in requested_books["bybit"]
+    assert candidate.runtime.last_completed_snapshot is None
+    assert baseline.runtime.last_completed_snapshot is None
     await candidate.close()
     await baseline.close()
     for adapter in adapters.values():

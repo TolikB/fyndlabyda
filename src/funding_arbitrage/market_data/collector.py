@@ -392,6 +392,7 @@ class MarketDataCollector:
                     valid_tickers,
                     venue_funding,
                     self.market_asset_limit,
+                    required_markets=set(requested_books or ()),
                 )
             self._ensure_ticker_stream(adapter, valid_tickers)
             discovery_books = _rank_orderbook_requests(
@@ -726,8 +727,9 @@ def _limit_venue_universe(
     tickers: list[Ticker],
     funding: list[FundingSnapshot],
     asset_limit: int,
+    required_markets: set[tuple[str, InstrumentType]] | None = None,
 ) -> tuple[list[NormalizedInstrument], list[Ticker], list[FundingSnapshot]]:
-    """Keep a bounded, liquid real-data universe while preserving spot/perp pairs."""
+    """Keep a liquid universe while pinning markets needed by open positions."""
 
     instrument_by_symbol = {item.exchange_symbol: item for item in instruments if item.is_active}
     supported_quotes = {"USD", "USDC", "USDT"}
@@ -778,17 +780,31 @@ def _limit_venue_universe(
             ),
         )[:asset_limit]
     }
-    selected_symbols = {
-        item.exchange_symbol
+    selected_markets = {
+        (item.exchange_symbol, item.instrument_type)
         for item in instruments
         if item.is_active
         and item.base_asset in selected_assets
         and item.quote_asset in supported_quotes
     }
+    selected_markets.update(required_markets or ())
+    selected_funding_symbols = {
+        symbol
+        for symbol, instrument_type in selected_markets
+        if instrument_type is InstrumentType.PERPETUAL
+    }
     return (
-        [item for item in instruments if item.exchange_symbol in selected_symbols],
-        [item for item in tickers if item.symbol in selected_symbols],
-        [item for item in funding if item.symbol in selected_symbols],
+        [
+            item
+            for item in instruments
+            if (item.exchange_symbol, item.instrument_type) in selected_markets
+        ],
+        [
+            item
+            for item in tickers
+            if (item.symbol, item.instrument_type) in selected_markets
+        ],
+        [item for item in funding if item.symbol in selected_funding_symbols],
     )
 
 

@@ -417,9 +417,9 @@ async def _load_and_audit(args: argparse.Namespace) -> dict[str, Any]:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--candidate-version", default="v28-oos-candidate")
-    parser.add_argument("--baseline-version", default="v28-oos-baseline")
     parser.add_argument("--start", required=True)
+    parser.add_argument("--candidate-version", default="v29-oos-candidate")
+    parser.add_argument("--baseline-version", default="v29-oos-baseline")
     parser.add_argument("--observed-at")
     parser.add_argument("--maximum-target-delay-seconds", type=int, default=300)
     parser.add_argument("--require-payments", action="store_true")

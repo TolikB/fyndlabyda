@@ -298,6 +298,13 @@ class PaperTestRunner:
         )
         if snapshot.incomplete_venues:
             raise IncompleteMarketSnapshotError(snapshot.incomplete_venues)
+        missing_mark_venues = {
+            venue
+            for runner in runners
+            for venue in runner._missing_mark_venues(snapshot)
+        }
+        if missing_mark_venues:
+            raise IncompleteMarketSnapshotError(tuple(sorted(missing_mark_venues)))
         if periodic_history_refresh:
             self._last_history_refresh = snapshot.captured_at
         if refresh_history:
@@ -354,6 +361,7 @@ class PaperTestRunner:
         stage_started = time.monotonic()
         await self._persist_portfolio(snapshot.captured_at)
         await self.daily_report.check_and_send(snapshot.captured_at)
+        self.runtime.last_completed_snapshot = snapshot
         paper_runner_stage_duration_seconds.labels("portfolio_persist").observe(
             time.monotonic() - stage_started
         )
@@ -366,6 +374,27 @@ class PaperTestRunner:
         for position in self.runtime.portfolio.positions.values():
             if position.state is PositionState.OPEN:
                 self.executor.mark_to_market(position, snapshot)
+
+    def _missing_mark_venues(self, snapshot: MarketSnapshot) -> tuple[str, ...]:
+        """Identify open legs that cannot be marked before a shared cycle mutates state."""
+
+        missing: set[str] = set()
+        for position in self.runtime.portfolio.positions.values():
+            if position.state is not PositionState.OPEN:
+                continue
+            for leg, instrument_type in zip(
+                (position.leg_a, position.leg_b),
+                (position.leg_a_type, position.leg_b_type),
+                strict=True,
+            ):
+                if leg is None or instrument_type is None:
+                    continue
+                ticker = snapshot.ticker(leg.exchange, leg.symbol, instrument_type)
+                if ticker is None or (
+                    snapshot.captured_at - ticker.timestamp
+                ).total_seconds() > self.executor.stale_seconds:
+                    missing.add(leg.exchange)
+        return tuple(sorted(missing))
 
     @staticmethod
     def _position_exposure_key(position: PaperPosition) -> str | None:
