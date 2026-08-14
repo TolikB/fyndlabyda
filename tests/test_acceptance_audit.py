@@ -1,6 +1,10 @@
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
+import pytest
+from scripts import paper_acceptance_audit as audit_module
 from scripts.paper_acceptance_audit import (
     build_audit,
     merge_stream_observations,
@@ -30,6 +34,34 @@ def _operational(**updates: object) -> dict[str, object]:
     }
     values.update(updates)
     return values
+
+
+def test_ready_fetch_retries_transient_shared_ledger_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[str] = []
+
+    def fake_urlopen(url: str, timeout: float) -> BytesIO:
+        del timeout
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise HTTPError(url, 503, "in-flight shared snapshot", None, None)
+        return BytesIO(b'{"status":"ready"}')
+
+    monkeypatch.setattr(audit_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(audit_module.time, "sleep", lambda _: None)
+
+    result = audit_module._fetch_ready_json(
+        "http://127.0.0.1:8000",
+        timeout=1,
+        retry_interval_seconds=0,
+    )
+
+    assert result == {"status": "ready"}
+    assert attempts == [
+        "http://127.0.0.1:8000/health/ready",
+        "http://127.0.0.1:8000/health/ready",
+    ]
 
 
 def _audit(execution_mode: str = "paper") -> dict[str, object]:

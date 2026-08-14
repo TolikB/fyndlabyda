@@ -8,6 +8,7 @@ import time
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -30,6 +31,34 @@ def _fetch_json(
     if not isinstance(payload, dict):
         raise ValueError(f"expected an object from {path}")
     return payload
+
+
+def _fetch_ready_json(
+    base_url: str,
+    *,
+    timeout: float = 30,
+    retry_interval_seconds: float = 0.5,
+) -> dict[str, Any]:
+    """Wait through a bounded in-flight shared-ledger readiness transition."""
+
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out waiting for /health/ready")
+        try:
+            return _fetch_json(
+                base_url,
+                "/health/ready",
+                timeout=remaining,
+            )
+        except HTTPError as error:
+            if error.code != 503:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(retry_interval_seconds, remaining))
 
 
 def _fetch_text(base_url: str, path: str, timeout: float = 30) -> str:
@@ -460,7 +489,7 @@ def main() -> int:
     if args.start:
         compare_query["start"] = args.start
     health = _fetch_json(args.base_url, "/health", timeout=args.timeout)
-    ready = _fetch_json(args.base_url, "/health/ready", timeout=args.timeout)
+    ready = _fetch_ready_json(args.base_url, timeout=args.timeout)
     comparison = _fetch_json(
         args.base_url,
         "/analytics/compare",
