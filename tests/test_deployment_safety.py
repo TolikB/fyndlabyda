@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -44,6 +45,18 @@ def test_datastores_publish_no_host_ports() -> None:
         service = services[name]
         assert isinstance(service, dict)
         assert not service.get("ports")
+
+
+def test_core_datastore_images_are_digest_pinned() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name in ("postgres", "redis"):
+        service = services[name]
+        assert isinstance(service, dict)
+        image = service.get("image")
+        assert isinstance(image, str)
+        assert re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", image), (name, image)
 
 
 def test_app_container_is_unprivileged_and_filesystem_locked_down() -> None:

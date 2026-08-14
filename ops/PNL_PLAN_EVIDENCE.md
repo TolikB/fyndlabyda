@@ -80,9 +80,10 @@ goal remains open until every row is proven, including the last two rows.
   release 073: the app uses fixed UID/GID `10001`, a read-only root filesystem,
   a bounded `/tmp` tmpfs, `no-new-privileges`, no Linux capabilities, an init
   process, and a 256 PID limit. Its deployment-safety regression is included in
-  the 170-test green suite. Do not claim this boundary as running until an actual
-  image build and non-root migration/health smoke succeed after the pending
-  `12:00Z` funding settlements are reconciled.
+  the green suite. Core PostgreSQL and Redis images are also pinned by exact
+  SHA-256 digest rather than mutable tags. Do not claim these boundaries as
+  running until an actual image build and non-root migration/health smoke
+  succeed after the pending `12:00Z` funding settlements are reconciled.
 - Do not restart or deploy after the clean boundary unless a material correctness
   defect is found; a restart is a persisted incident and invalidates the window.
 - Do not claim expected profitability from the historical replay alone.
