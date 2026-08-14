@@ -16,7 +16,7 @@ goal remains open until every row is proven, including the last two rows.
 | Mark open positions to market without close-time double count | Typed fresh tickers, `PaperTradingExecutor.mark_to_market`, open/close equity regressions, and DB replay reconciliation | Proven locally and deployed |
 | Ratio units for spread/slippage | Default `0.0015`/`0.0020` plus config tests | Proven |
 | Enforce `PAPER_AUTOTRADE` and a UTC start boundary | Runtime health fields and runner tests | Proven |
-| Exclude pre-fix data | Invalidated v25 through v29 remain queryable but excluded. Release 072 uses `v30-oos-*` with an enforced `2026-08-14T07:30:00Z` audit boundary; the post-boundary audit found zero carry-in positions and derives every timed metric from rows at/after that boundary | Proven running |
+| Exclude pre-fix data | Invalidated v25 through v30 remain queryable but excluded. Release 073 uses `v31-oos-*` with an enforced `2026-08-14T08:40:00Z` audit boundary; deployment proved zero carry-in v31 positions/fills/payments and records every process start before that boundary. The first post-boundary audit found zero carry-in and zero runtime incidents | Proven running |
 
 ## Signal, funding, borrow, and market data
 
@@ -51,16 +51,16 @@ goal remains open until every row is proven, including the last two rows.
 | Event-driven deterministic replay with costs, attribution, and open-position M2M | Historical replay tests; canonical candle snapshots include unrealized two-leg PnL and accrued borrow, and the final forced-close snapshot reconciles to the event ledger | Proven |
 | Same dataset/config candidate versus baseline, no look-ahead | Dataset `market-db-sha256:0745b20ed8e77c0ba02a7472ab10f6d48264e25405ad9e5d81f83e7c5c0103dc`; deterministic candidate event SHA `53e9e263f2709bb84ef4466a522ed1766e53cdd6235b019b082e9a96742c9534` | Proven |
 | Historical candidate passes the economic comparison checks | Candidate `+$20.7234382435`; strict baseline `-$83.1268879021`; snapshot max drawdown `0.102224%` versus `2.000771%`; higher median monthly PnL; 2/3 profitable snapshot windows; 721 exact shared timestamps; event/snapshot PnL error below `$0.01` | Proven historical economics only |
-| Historical telemetry satisfies the runtime five-minute cadence gate | The source dataset is hourly and reports its real `3600s` maximum snapshot gap. No synthetic interpolation is used, so full historical `accepted` and `evidence_ready` correctly remain false on the `300s` cadence check. Earlier v29 runtime data proved sub-five-minute cadence but is diagnostic only because that window was later invalidated | Historical cadence not claimed; v30 timed gates pending |
-| Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260814-072` from code commit `7456ae0`; project-scoped postflight confirmed `paper_test / live_public / paper`, distinct `v30-oos-*` profiles, healthy app, restart count 0, and the exact configured boundary | Proven running |
-| Initial post-boundary smoke | Six exact shared v30 pairs from `07:30:15Z` through `07:32:46Z`; maximum gap `36.40708s`, zero pending snapshots, zero runtime incidents/carry-in, candidate invariant/replay error `0E-18`, baseline invariant error `0E-18` and replay error `3.19477E-19`. All five venues were healthy with fresh ticker/orderbook WebSockets, complete funding/book coverage, zero stale books, and zero runner errors | Proven initial smoke |
-| First live-public funding settlement | The invalidated v29 diagnostic window produced four payments across exact Bybit/Gate event timestamps. The tracked audit matched all four to raw history with zero PnL, notional, timestamp, duplicate, orphan, leg, and position-total errors; a fresh v30 payment is still required for timed acceptance | Proven diagnostic; v30 event pending |
-| Telegram preview reconciles to active ledger | A DB-backed, non-sending v30 preview after the boundary showed candidate net/equity `+$0.00`/`$6250.00` and baseline approximately `-$0.28`/`$6249.72`, including separate funding, fees, slippage, fills, day/total sections, simulator versions, and the warning not to add portfolios together. Telegram remains enabled on the `Europe/Kyiv` midnight schedule without exposing credentials | Proven installed preview |
-| Candidate inactivity or entry is an economic decision, not a runner fault | The v30 funnel observed 18 raw candidates, zero eligible/confirmed, best raw net APR `-0.7247493995`, and rejected all 18 on net APR (one also unstable). Candidate remained flat while the deliberately simpler baseline opened one COTI control position; runner errors and exposure defects were zero | Proven initial economic decision |
-| Funding reconciliation is durable and replayable at timed gates | The initial v30 smoke returned `ok=true` with all 17 checks true for one position and no settlement yet; every mismatch/duplicate/orphan counter was zero. The invalidated v29 diagnostic separately proved the same audit against four real payments. A real v30 event is still required at timed gates | Proven tooling/smoke; v30 event pending |
-| Final acceptance cannot pass without continuous shared telemetry | Core comparison and tracked operator audit fail closed when either comparable snapshot series is empty, max gap exceeds `300s`, or snapshot-derived risk/window sources are absent. The runtime pins every open-position market, rejects an unmarkable shared snapshot before either ledger mutates, and reports readiness from fully completed shared snapshots. Local verification for release 072 is 161 tests plus clean Ruff and mypy over 96 source files | Proven implementation; timed window pending |
-| Clean 72-hour canary | Boundary `2026-08-14T07:30:00Z`; earliest audit `2026-08-17T07:31:00Z` | Pending time gate |
-| 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-13T07:31:00Z` | Pending time gate |
+| Historical telemetry satisfies the runtime five-minute cadence gate | The source dataset is hourly and reports its real `3600s` maximum snapshot gap. No synthetic interpolation is used, so full historical `accepted` and `evidence_ready` correctly remain false on the `300s` cadence check. Earlier v29/v30 runtime data proved sub-five-minute cadence but is diagnostic only because those windows were later invalidated | Historical cadence not claimed; v31 timed gates pending |
+| Paper-only shared-feed candidate/baseline on VM | Release `funding-pnl-v2-20260814-073` from code commit `d9b6d6c`; project-scoped postflight confirmed `paper_test / live_public / paper`, distinct `v31-oos-*` profiles, healthy app, restart count 0, and the exact `2026-08-14T08:40:00Z` boundary | Proven running |
+| Initial post-boundary smoke | Six exact shared v31 pairs from `08:40:03Z` through `08:42:33Z`; maximum gap `34.819379s`, zero pending snapshots, zero runtime incidents/carry-in, and candidate/baseline invariant errors `0E-18`. All five venues were healthy with fresh ticker/orderbook WebSockets, complete funding/book coverage, zero stale books, and zero runner errors. Canary correctly remained false only because 72 hours had not elapsed | Proven initial smoke |
+| First live-public funding settlement | v31 baseline opened COTI with venue-specific targets: Bybit `09:00Z`, Gate `12:00Z`. The first Bybit event persisted at exactly `09:00:00Z`, rate `-0.00484701`, short notional `$250`, and funding PnL `-$1.2117525`. The raw history identity matched exactly, target delay was `0s`, all 17 funding checks passed, and incidents/restarts remained zero. Gate remains correctly unpaid until its own target | Bybit proven live-public; Gate pending |
+| Telegram preview reconciles to active ledger | A DB-backed, non-sending v31 preview showed candidate day/total net PnL `+$0.00`, equity `$6250.00`, zero fills, and baseline approximately `-$1.80`, equity `$6248.20`, fees `-$0.26`, slippage `-$0.28`, two fills, and one open position. It included separate day/total sections, exact v31 versions, runner evidence, the warning not to add portfolios, and `PAPER ONLY` | Proven installed preview |
+| Candidate inactivity or entry is an economic decision, not a runner fault | Candidate observed the COTI signal but repeatedly rejected entry on `settlement_cost_coverage`; baseline opened the corrected `$250` COTI control exposure and subsequently rejected duplicate exposure. HOME was rejected on `no_viable_size_quote`. Runner errors and exposure defects were zero | Proven initial economic decision |
+| Funding reconciliation is durable and replayable at timed gates | Audit failure on the first v30 payment pair exposed the market-persist cadence race. Release 073 writes the exact raw event and new payment in one transaction and includes a regression for idempotent repair of an existing payment. The first v31 Bybit payment passed `--require-payments`: one payment, one exact history event, zero PnL/notional/timestamp/duplicate/orphan/leg/position-total/settled-marker errors | Proven locally and first live-public event; Gate pending |
+| Final acceptance cannot pass without continuous shared telemetry | Core comparison and tracked operator audit fail closed when either comparable snapshot series is empty, max gap exceeds `300s`, or snapshot-derived risk/window sources are absent. The runtime pins every open-position market, rejects an unmarkable shared snapshot before either ledger mutates, and reports readiness from fully completed shared snapshots. Local verification for release 073 is 163 tests plus clean Ruff and mypy over 88 source files | Proven implementation; timed window pending |
+| Clean 72-hour canary | Boundary `2026-08-14T08:40:00Z`; earliest audit `2026-08-17T08:41:00Z` | Pending time gate |
+| 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-13T08:41:00Z` | Pending time gate |
 
 ## Current safety boundary
 
@@ -120,8 +120,17 @@ per profile inside the window. Subsequent rollback verification added more v29
 process starts, so no v29 result is eligible for the 72-hour or 30-day gate.
 
 Release 072 and its failed pre-boundary validation attempts created
-zero-exposure v30 telemetry snapshots and six process-start records before the final
-`2026-08-14T07:30:00Z` boundary. They created no v30 positions, fills, funding
-payments, non-start incidents, or rows at/after the boundary. The timed audit
-explicitly starts at the boundary, so those deployment observations are retained
-for traceability but excluded from candidate/baseline economics and canary time.
+zero-exposure v30 telemetry snapshots and six process-start records before the
+`2026-08-14T07:30:00Z` boundary. The clean window later opened one baseline COTI
+position and applied two exact `08:00Z` funding payments. However, the payments
+committed between periodic market-history writes, so neither exact raw exchange
+event was durable in `funding_history`. The fail-closed reconciliation audit found
+`exact_history_mismatch_count=2`; v30 is therefore invalid for timed acceptance.
+
+Release 073 persists a live raw funding event and its new paper payment in the
+same transaction, and repairs missing history when an already-persisted payment
+is seen again without changing PnL or event count. Deploying the fix required an
+app restart, so `v31-oos-*` starts at the new clean
+`2026-08-14T08:40:00Z` boundary. Deployment created exactly two profile-specific
+process-start records before that boundary and zero v31 positions, fills,
+funding payments, or post-boundary incidents.
