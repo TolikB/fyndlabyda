@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -16,6 +16,48 @@ def test_default_simulator_namespaces_match_current_canary() -> None:
 
     assert settings.paper_simulation_version == "v31-oos-candidate"
     assert settings.paper_baseline_simulation_version == "v31-oos-baseline"
+
+
+def test_comparison_rejects_shared_or_blank_simulator_namespaces() -> None:
+    with pytest.raises(ValueError, match="must be distinct"):
+        Settings(
+            _env_file=None,
+            paper_comparison_enabled=True,
+            paper_simulation_version="same-ledger",
+            paper_baseline_simulation_version="same-ledger",
+        )
+
+    with pytest.raises(ValueError, match="PAPER_SIMULATION_VERSION must not be blank"):
+        Settings(_env_file=None, paper_simulation_version="   ")
+    with pytest.raises(
+        ValueError, match="PAPER_BASELINE_SIMULATION_VERSION must not be blank"
+    ):
+        Settings(_env_file=None, paper_baseline_simulation_version="")
+
+
+def test_autotrade_boundary_is_timezone_aware_and_normalized_to_utc() -> None:
+    with pytest.raises(ValueError, match="must include a timezone"):
+        Settings(
+            _env_file=None,
+            paper_autotrade_start_utc=datetime(2026, 8, 14, 8, 40),
+        )
+
+    settings = Settings(
+        _env_file=None,
+        paper_autotrade_start_utc=datetime(
+            2026,
+            8,
+            14,
+            11,
+            40,
+            tzinfo=timezone(timedelta(hours=3)),
+        ),
+    )
+
+    assert settings.paper_autotrade_start_utc == datetime(
+        2026, 8, 14, 8, 40, tzinfo=UTC
+    )
+    assert settings.paper_autotrade_start_utc.tzinfo is UTC
 
 
 def test_canonical_instrument_id() -> None:

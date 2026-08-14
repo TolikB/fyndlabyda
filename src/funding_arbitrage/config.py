@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -353,6 +353,14 @@ def _validate_safe_values(settings: Settings) -> None:
         and settings.paper_autotrade_start_utc.utcoffset() is None
     ):
         raise ValueError("PAPER_AUTOTRADE_START_UTC must include a timezone")
+    if settings.paper_autotrade_start_utc is not None:
+        settings.paper_autotrade_start_utc = (
+            settings.paper_autotrade_start_utc.astimezone(UTC)
+        )
+    if not settings.paper_simulation_version.strip():
+        raise ValueError("PAPER_SIMULATION_VERSION must not be blank")
+    if not settings.paper_baseline_simulation_version.strip():
+        raise ValueError("PAPER_BASELINE_SIMULATION_VERSION must not be blank")
     if settings.paper_settlement_interval_seconds <= 0:
         raise ValueError("PAPER_SETTLEMENT_INTERVAL_SECONDS must be positive")
     if settings.paper_max_hold_seconds <= 0:
