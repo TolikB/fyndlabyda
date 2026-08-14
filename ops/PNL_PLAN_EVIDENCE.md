@@ -23,7 +23,7 @@ goal remains open until every row is proven, including the last two rows.
 | Requirement | Authoritative evidence | State |
 | --- | --- | --- |
 | No duplicate or reverse-route two-instrument exposure | Runtime/replay canonical key; API independently derives keys for every persisted position and gate rejects missing/mismatched keys plus any overlapping historical holding intervals | Proven locally |
-| Venue-specific future funding events | Adapter schedule tests for 1/4/8-hour intervals and settlement engine tests | Proven |
+| Venue-specific future funding events | Adapter schedule tests cover 1/4/8-hour intervals and settlement accounting. A fail-closed live-public probe at `2026-08-14T03:17:33Z` selected exact BTC/USDT-family perpetuals on Binance, Bybit, Gate, OKX, and Hyperliquid; every current next timestamp was future/present, history was ordered and non-future, and recent event deltas matched venue metadata within `5s`. Observed universes were Binance `1/4/8h`, Bybit `1/4/8h`, Gate `1/4/8h`, OKX `4/8h`, and Hyperliquid `1h` | Proven locally and live-public |
 | Robust median/EWMA, persistence, sign changes, two-sided outliers | Funding statistics/forecast code and scanner tests | Proven |
 | Time-synchronized cross-venue differential | Historical-window projection and no-look-ahead replay tests | Proven |
 | No unsupported short spot; hourly borrow accrual where enabled | Scanner gate, borrow config, and runner accrual test | Proven |
