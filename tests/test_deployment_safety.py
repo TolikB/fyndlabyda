@@ -24,6 +24,21 @@ def test_every_service_has_cpu_and_memory_limits() -> None:
         assert service.get("mem_limit"), name
 
 
+def test_every_service_has_bounded_json_log_rotation() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name, service in services.items():
+        assert isinstance(service, dict), name
+        logging = service.get("logging")
+        assert isinstance(logging, dict), name
+        assert logging.get("driver") == "json-file", name
+        options = logging.get("options")
+        assert isinstance(options, dict), name
+        assert options.get("max-size") == "10m", name
+        assert options.get("max-file") == "3", name
+
+
 def test_published_ports_are_loopback_only_and_do_not_conflict() -> None:
     services = _compose()["services"]
     assert isinstance(services, dict)

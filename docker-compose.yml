@@ -1,3 +1,9 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   app: &paper-app
     build: .
@@ -11,6 +17,7 @@ services:
     cap_drop:
       - ALL
     pids_limit: 256
+    logging: *bounded-logging
     env_file: .env
     depends_on:
       postgres:
@@ -41,6 +48,7 @@ services:
     cpus: "0.25"
     mem_limit: 384m
     shm_size: 128m
+    logging: *bounded-logging
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-funding} -d ${POSTGRES_DB:-funding}"]
       interval: 5s
@@ -52,6 +60,7 @@ services:
     image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     cpus: "0.10"
     mem_limit: 96m
+    logging: *bounded-logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -68,6 +77,7 @@ services:
       - "127.0.0.1:9090:9090"
     cpus: "0.10"
     mem_limit: 192m
+    logging: *bounded-logging
     restart: unless-stopped
 
   grafana:
@@ -79,6 +89,7 @@ services:
       - "127.0.0.1:3000:3000"
     cpus: "0.20"
     mem_limit: 256m
+    logging: *bounded-logging
     restart: unless-stopped
 
 volumes:

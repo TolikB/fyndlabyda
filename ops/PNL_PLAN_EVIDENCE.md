@@ -84,6 +84,10 @@ goal remains open until every row is proven, including the last two rows.
   SHA-256 digest rather than mutable tags. Do not claim these boundaries as
   running until an actual image build and non-root migration/health smoke
   succeed after the pending `12:00Z` funding settlements are reconciled.
+- Release 074 also bounds Docker JSON logs for every service to three `10 MiB`
+  files, preventing a long canary from consuming the VM disk through unbounded
+  container logs. This remains locally proven until the release-074 smoke and
+  deployment checks observe the rendered Compose configuration.
 - The complete 35-package exact runtime dependency set in `requirements.lock`
   passed `pip-audit 2.10.1` on `2026-08-14` with no known vulnerabilities. The
   audit used `--no-deps` because the file already contains the full captured
