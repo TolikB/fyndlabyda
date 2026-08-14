@@ -69,21 +69,29 @@ class MexcPublicAdapter(ExchangeAdapter):
 
     def __init__(
         self,
-        base_url: str = "https://api.mexc.com",
+        spot_base_url: str = "https://api.mexc.com",
+        futures_base_url: str = "https://contract.mexc.com",
         futures_websocket_url: str = "wss://contract.mexc.com/edge",
         spot_websocket_url: str = "wss://wbs-api.mexc.com/ws",
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
         burst: int = 8,
         http_client: httpx.AsyncClient | None = None,
+        base_url: str | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        # ``base_url`` is retained only for deterministic single-transport tests.
+        if base_url is not None:
+            spot_base_url = base_url
+            futures_base_url = base_url
+        self.spot_base_url = spot_base_url.rstrip("/")
+        self.futures_base_url = futures_base_url.rstrip("/")
         self.futures_websocket_url = futures_websocket_url
         self.spot_websocket_url = spot_websocket_url
         self.timeout = timeout_seconds
-        self._http = http_client
+        self._spot_http = http_client
+        self._futures_http = http_client
         self._owns_http = http_client is None
         self._limiter = RateLimiter(requests_per_second, burst)
         self._sleep = sleep
@@ -91,23 +99,39 @@ class MexcPublicAdapter(ExchangeAdapter):
         self._contract_sizes: dict[str, Decimal] = {}
         self._funding_intervals: dict[str, Decimal] = {}
 
-    async def _ensure_http(self) -> httpx.AsyncClient:
-        if self._http is None:
-            self._http = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout)
-        return self._http
+    async def _ensure_http(self, *, futures: bool) -> httpx.AsyncClient:
+        if futures:
+            if self._futures_http is None:
+                self._futures_http = httpx.AsyncClient(
+                    base_url=self.futures_base_url, timeout=self.timeout
+                )
+            return self._futures_http
+        if self._spot_http is None:
+            self._spot_http = httpx.AsyncClient(
+                base_url=self.spot_base_url, timeout=self.timeout
+            )
+        return self._spot_http
 
     async def close(self) -> None:
-        if self._http is not None and self._owns_http:
-            await self._http.aclose()
-            self._http = None
+        if self._owns_http:
+            clients = {
+                id(client): client
+                for client in (self._spot_http, self._futures_http)
+                if client is not None
+            }
+            await asyncio.gather(*(client.aclose() for client in clients.values()))
+        self._spot_http = None
+        self._futures_http = None
 
     async def _request(
         self,
         endpoint: str,
         params: dict[str, str | int | float | bool | None] | None = None,
+        *,
+        futures: bool = False,
     ) -> Any:
         await self._limiter.acquire()
-        client = await self._ensure_http()
+        client = await self._ensure_http(futures=futures)
         try:
             response = await client.get(endpoint, params=params or {})
         except httpx.HTTPError as exc:
@@ -127,7 +151,7 @@ class MexcPublicAdapter(ExchangeAdapter):
         endpoint: str,
         params: dict[str, str | int | float | bool | None] | None = None,
     ) -> Any:
-        payload = await self._request(endpoint, params)
+        payload = await self._request(endpoint, params, futures=True)
         if not isinstance(payload, dict) or payload.get("success") is not True:
             code = payload.get("code") if isinstance(payload, dict) else "unknown"
             message = payload.get("message") if isinstance(payload, dict) else "invalid JSON"
@@ -136,7 +160,7 @@ class MexcPublicAdapter(ExchangeAdapter):
 
     async def get_instruments(self) -> list[NormalizedInstrument]:
         futures_payload, spot_payload = await asyncio.gather(
-            self._futures("/api/v1/contract/detail/country"),
+            self._futures("/api/v1/contract/detail"),
             self._request("/api/v3/exchangeInfo"),
         )
         futures = [

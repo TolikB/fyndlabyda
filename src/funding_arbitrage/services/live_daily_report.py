@@ -24,6 +24,10 @@ from funding_arbitrage.notifications.telegram import TelegramNotifier
 logger = logging.getLogger(__name__)
 
 
+class LiveReportDataUnavailable(RuntimeError):
+    """Raised instead of publishing a misleading partial-equity report."""
+
+
 def _signed_usd(value: Decimal) -> str:
     sign = "+" if value >= 0 else "-"
     return f"{sign}${abs(value):.2f}"
@@ -88,23 +92,28 @@ class LiveDailyReportService:
             )
             if record is not None and record.status == "sent":
                 return False
-            message = await self._build_message(session, report_date)
+            message = ""
             try:
+                message = await self._build_message(session, report_date)
                 await self.notifier.send_message(message)
             except Exception as exc:
                 logger.exception("live_daily_report_failed")
+                stored_message = message or (
+                    f"Live report for {report_date.isoformat()} was not sent because "
+                    "complete equity evidence was unavailable."
+                )
                 if record is None:
                     record = LiveDailyReportRecord(
                         report_date=report_date,
                         status="failed",
                         sent_at=None,
-                        message=message,
+                        message=stored_message,
                         error=type(exc).__name__,
                     )
                     session.add(record)
                 else:
                     record.status = "failed"
-                    record.message = message
+                    record.message = stored_message
                     record.error = type(exc).__name__
                 await session.commit()
                 return False
@@ -172,7 +181,9 @@ class LiveDailyReportService:
         active = int(
             await session.scalar(
                 select(func.count(LivePositionRecord.id)).where(
-                    LivePositionRecord.state.in_(["OPEN", "OPENING", "CLOSING"])
+                    LivePositionRecord.state.in_(
+                        ["OPEN", "OPENING", "CLOSING", "MANUAL_INTERVENTION"]
+                    )
                 )
             )
             or 0
@@ -235,6 +246,7 @@ class LiveDailyReportService:
 
     async def _equity_before(self, session: AsyncSession, before: datetime) -> Decimal:
         total = Decimal("0")
+        missing: list[str] = []
         for venue in self.settings.live_venue_values:
             row = await session.scalar(
                 select(LiveAccountSnapshotRecord)
@@ -246,12 +258,16 @@ class LiveDailyReportService:
             )
             if row is not None:
                 total += row.equity_usd
+            else:
+                missing.append(venue)
+        self._require_complete_equity(missing, "period_end")
         return total
 
     async def _equity_at_start(
         self, session: AsyncSession, start: datetime, end: datetime
     ) -> Decimal:
         total = Decimal("0")
+        missing: list[str] = []
         for venue in self.settings.live_venue_values:
             row = await session.scalar(
                 select(LiveAccountSnapshotRecord)
@@ -273,10 +289,14 @@ class LiveDailyReportService:
                 )
             if row is not None:
                 total += row.equity_usd
+            else:
+                missing.append(venue)
+        self._require_complete_equity(missing, "period_start")
         return total
 
     async def _first_equity(self, session: AsyncSession) -> Decimal:
         total = Decimal("0")
+        missing: list[str] = []
         for venue in self.settings.live_venue_values:
             row = await session.scalar(
                 select(LiveAccountSnapshotRecord)
@@ -285,4 +305,14 @@ class LiveDailyReportService:
             )
             if row is not None:
                 total += row.equity_usd
+            else:
+                missing.append(venue)
+        self._require_complete_equity(missing, "tracking_start")
         return total
+
+    @staticmethod
+    def _require_complete_equity(missing: list[str], boundary: str) -> None:
+        if missing:
+            raise LiveReportDataUnavailable(
+                f"missing {boundary} equity for: {','.join(sorted(missing))}"
+            )

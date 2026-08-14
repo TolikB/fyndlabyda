@@ -26,8 +26,11 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+asyncpg://funding:funding@localhost:5432/funding",
         alias="DATABASE_URL",
+        repr=False,
     )
-    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    redis_url: str = Field(
+        default="redis://localhost:6379/0", alias="REDIS_URL", repr=False
+    )
     bybit_base_url: str = Field(default="https://api.bybit.com", alias="BYBIT_BASE_URL")
     bybit_ws_url: str = Field(
         default="wss://stream.bybit.com/v5/public/linear", alias="BYBIT_WS_URL"
@@ -53,6 +56,9 @@ class Settings(BaseSettings):
         default="wss://api.hyperliquid.xyz/ws", alias="HYPERLIQUID_WS_URL"
     )
     mexc_base_url: str = Field(default="https://api.mexc.com", alias="MEXC_BASE_URL")
+    mexc_futures_base_url: str = Field(
+        default="https://contract.mexc.com", alias="MEXC_FUTURES_BASE_URL"
+    )
     mexc_futures_ws_url: str = Field(
         default="wss://contract.mexc.com/edge", alias="MEXC_FUTURES_WS_URL"
     )
@@ -465,6 +471,7 @@ def get_settings() -> Settings:
             },
             "mexc": {
                 "base_url": "mexc_base_url",
+                "futures_base_url": "mexc_futures_base_url",
                 "futures_websocket_url": "mexc_futures_ws_url",
                 "spot_websocket_url": "mexc_spot_ws_url",
             },
@@ -548,6 +555,12 @@ def _validate_safe_values(settings: Settings) -> None:
     }:
         raise ValueError("paper_test requires mock or live_public market data")
     if settings.run_mode == "live":
+        if settings.app_env != "production":
+            raise ValueError("live run mode requires APP_ENV=production")
+        if not settings.database_url.startswith("postgresql+asyncpg://"):
+            raise ValueError(
+                "live run mode requires PostgreSQL via postgresql+asyncpg"
+            )
         if settings.execution_mode != "live":
             raise ValueError("live run mode requires EXECUTION_MODE=live")
         if settings.market_data_mode != "live_public":
@@ -569,6 +582,97 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError(
                 "MEXC live sandbox is not supported; use paper_test with live_public data"
             )
+        if not settings.live_require_dedicated_accounts:
+            raise ValueError("live run mode requires dedicated exchange accounts")
+        if settings.live_margin_mode != "isolated":
+            raise ValueError("live run mode requires isolated margin")
+        if not settings.telegram_enabled:
+            raise ValueError("live run mode requires Telegram safety alerts")
+        _require_official_https_url(
+            settings.telegram_api_base_url,
+            host="api.telegram.org",
+            label="TELEGRAM_API_BASE_URL",
+        )
+        official_market_endpoints: dict[str, tuple[tuple[str, str, str], ...]] = {
+            "bybit": (
+                (settings.bybit_base_url, "https://api.bybit.com", "BYBIT_BASE_URL"),
+                (
+                    settings.bybit_ws_url,
+                    "wss://stream.bybit.com/v5/public/linear",
+                    "BYBIT_WS_URL",
+                ),
+            ),
+            "gate": (
+                (
+                    settings.gate_base_url,
+                    "https://api.gateio.ws/api/v4",
+                    "GATE_BASE_URL",
+                ),
+                (
+                    settings.gate_ws_url,
+                    "wss://fx-ws.gateio.ws/v4/ws/usdt",
+                    "GATE_WS_URL",
+                ),
+            ),
+            "okx": (
+                (settings.okx_base_url, "https://www.okx.com", "OKX_BASE_URL"),
+                (
+                    settings.okx_ws_url,
+                    "wss://ws.okx.com:8443/ws/v5/public",
+                    "OKX_WS_URL",
+                ),
+            ),
+            "binance": (
+                (
+                    settings.binance_spot_base_url,
+                    "https://api.binance.com",
+                    "BINANCE_SPOT_BASE_URL",
+                ),
+                (
+                    settings.binance_futures_base_url,
+                    "https://fapi.binance.com",
+                    "BINANCE_FUTURES_BASE_URL",
+                ),
+                (
+                    settings.binance_ws_url,
+                    "wss://fstream.binance.com/ws",
+                    "BINANCE_WS_URL",
+                ),
+            ),
+            "hyperliquid": (
+                (
+                    settings.hyperliquid_base_url,
+                    "https://api.hyperliquid.xyz",
+                    "HYPERLIQUID_BASE_URL",
+                ),
+                (
+                    settings.hyperliquid_ws_url,
+                    "wss://api.hyperliquid.xyz/ws",
+                    "HYPERLIQUID_WS_URL",
+                ),
+            ),
+            "mexc": (
+                (settings.mexc_base_url, "https://api.mexc.com", "MEXC_BASE_URL"),
+                (
+                    settings.mexc_futures_base_url,
+                    "https://contract.mexc.com",
+                    "MEXC_FUTURES_BASE_URL",
+                ),
+                (
+                    settings.mexc_futures_ws_url,
+                    "wss://contract.mexc.com/edge",
+                    "MEXC_FUTURES_WS_URL",
+                ),
+                (
+                    settings.mexc_spot_ws_url,
+                    "wss://wbs-api.mexc.com/ws",
+                    "MEXC_SPOT_WS_URL",
+                ),
+            ),
+        }
+        for venue in settings.live_venue_values:
+            for value, expected, label in official_market_endpoints[venue]:
+                _require_exact_endpoint(value, expected=expected, label=label)
         missing_credentials = [
             venue
             for venue in settings.live_venue_values
@@ -596,7 +700,7 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError("LIVE_ALLOWED_STRATEGIES must contain at least one strategy")
         if settings.paper_comparison_enabled:
             raise ValueError("paper comparison cannot run in live mode")
-        if settings.telegram_enabled and (
+        if (
             not settings.telegram_bot_token.get_secret_value()
             or not settings.telegram_chat_id.strip()
         ):
@@ -759,3 +863,12 @@ def _is_hex_credential(value: str, digits: int) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _require_official_https_url(value: str, *, host: str, label: str) -> None:
+    _require_exact_endpoint(value, expected=f"https://{host}", label=label)
+
+
+def _require_exact_endpoint(value: str, *, expected: str, label: str) -> None:
+    if value.rstrip("/") != expected.rstrip("/"):
+        raise ValueError(f"{label} must be the official {expected} endpoint")

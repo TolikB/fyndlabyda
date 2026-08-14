@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -14,7 +15,12 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from funding_arbitrage.config import Settings
-from funding_arbitrage.database.models import LiveOrderRecord
+from funding_arbitrage.database.models import LiveIntentRecord, LiveOrderRecord
+from funding_arbitrage.database.repositories.live import (
+    create_live_intent,
+    save_live_position,
+    save_pending_live_order,
+)
 from funding_arbitrage.exchanges.base.models import (
     FundingSnapshot,
     InstrumentType,
@@ -26,6 +32,7 @@ from funding_arbitrage.execution.live import LiveTradingExecutor
 from funding_arbitrage.execution.reconciliation import LiveReconciler
 from funding_arbitrage.execution.trading import (
     LiveOrderStatus,
+    LivePosition,
     LivePositionState,
     TradingAdapter,
     TradingOrderRequest,
@@ -43,6 +50,7 @@ from funding_arbitrage.opportunity.models import (
     StrategyName,
 )
 from funding_arbitrage.risk.live import LiveRiskController, LiveTradingPaused
+from funding_arbitrage.services.live_runner import LiveTradingRunner
 
 
 class FakeTradingAdapter(TradingAdapter):
@@ -183,6 +191,7 @@ def live_settings(tmp_path: Path) -> Settings:
     kill_switch = str(tmp_path / "LIVE_DISABLED")
     return Settings(
         _env_file=None,
+        APP_ENV="production",
         RUN_MODE="live",
         MARKET_DATA_MODE="live_public",
         EXECUTION_MODE="live",
@@ -195,6 +204,9 @@ def live_settings(tmp_path: Path) -> Settings:
         BYBIT_API_SECRET="secret",
         GATE_API_KEY="key",
         GATE_API_SECRET="secret",
+        TELEGRAM_ENABLED=True,
+        TELEGRAM_BOT_TOKEN="telegram-secret",
+        TELEGRAM_CHAT_ID="123",
         LIVE_KILL_SWITCH_FILE=kill_switch,
     )
 
@@ -389,6 +401,38 @@ async def test_live_open_and_close_use_exact_filled_base_quantities(
 
 
 @pytest.mark.asyncio
+async def test_disarmed_autotrade_stops_before_intent_or_exchange_action(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]], tmp_path: Path
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path).model_copy(update={"live_autotrade": False})
+    bybit = FakeTradingAdapter("bybit", [])
+    gate = FakeTradingAdapter("gate", [])
+    executor = LiveTradingExecutor(
+        settings,
+        {"bybit": bybit, "gate": gate},
+        factory,
+        LiveRiskController(settings),
+    )
+
+    with pytest.raises(LiveTradingPaused, match="live_autotrade_not_armed"):
+        await executor.open_position(
+            opportunity(),
+            Decimal("100"),
+            market_snapshot(),
+            "disabled-key",
+            balances(),
+            Decimal("0"),
+        )
+
+    async with factory() as session:
+        intent_count = await session.scalar(select(func.count(LiveIntentRecord.id)))
+    assert intent_count == 0
+    assert bybit.requests == []
+    assert gate.requests == []
+
+
+@pytest.mark.asyncio
 async def test_spot_base_fee_is_hedged_from_balance_delta_and_dust_is_reconciled(
     database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]], tmp_path: Path
 ) -> None:
@@ -577,6 +621,62 @@ async def test_reconciliation_passes_empty_dedicated_accounts_then_trips_on_posi
     assert "reconciliation" in risk.paused_reason
 
 
+@pytest.mark.asyncio
+async def test_startup_reconciliation_blocks_interrupted_intent_without_resubmission(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]], tmp_path: Path
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path)
+    risk = LiveRiskController(settings)
+    bybit = FakeTradingAdapter("bybit", [])
+    gate = FakeTradingAdapter("gate", [])
+    pending_position = LivePosition(
+        position_id="interrupted-position",
+        intent_id="interrupted-intent",
+        opportunity_id="interrupted-opportunity",
+        opportunity_key="cross:BTC:bybit:gate",
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING.value,
+        asset="BTC",
+        capital_per_leg=Decimal("100"),
+        state=LivePositionState.OPENING,
+    )
+    pending_request = TradingOrderRequest(
+        intent_id=pending_position.intent_id,
+        client_order_id="fa-interrupted-a",
+        exchange="bybit",
+        exchange_symbol="BTCUSDT",
+        instrument_type=InstrumentType.PERPETUAL,
+        side="SELL",
+        base_quantity=Decimal("1"),
+        limit_price=Decimal("100"),
+        reduce_only=False,
+    )
+    async with factory() as session:
+        await create_live_intent(
+            session,
+            pending_position.intent_id,
+            opportunity(),
+            pending_position.capital_per_leg,
+        )
+        await save_live_position(session, pending_position)
+        await save_pending_live_order(
+            session,
+            pending_request,
+            position_id=pending_position.position_id,
+            leg="open_a",
+        )
+
+    reconciler = LiveReconciler(
+        settings, {"bybit": bybit, "gate": gate}, factory, risk
+    )
+    with pytest.raises(LiveTradingPaused, match="interrupted_position_transition"):
+        await reconciler.reconcile(startup=True)
+
+    assert bybit.requests == []
+    assert gate.requests == []
+    assert risk.kill_switch_path.exists()
+
+
 def test_kill_switch_blocks_entries_but_permits_exact_risk_reduction(
     tmp_path: Path,
 ) -> None:
@@ -609,3 +709,88 @@ def test_restored_daily_risk_baseline_cannot_be_reset_by_restart(
     risk.update_equity(Decimal("990"), now)
 
     assert risk.paused_reason == "daily_loss_limit"
+
+
+def test_live_equity_valuation_pauses_on_unpriced_non_stable_asset(
+    tmp_path: Path,
+) -> None:
+    settings = live_settings(tmp_path)
+    runner = LiveTradingRunner.__new__(LiveTradingRunner)
+    runner.settings = settings
+    runner.risk = LiveRiskController(settings)
+    balance = VenueBalance(
+        exchange="bybit",
+        free={"BTC": Decimal("1")},
+        total={"BTC": Decimal("1")},
+    )
+    snapshot = MarketSnapshot(
+        instruments=[],
+        tickers=[],
+        funding=[],
+        orderbooks={},
+        captured_at=datetime.now(UTC),
+    )
+
+    with pytest.raises(LiveTradingPaused, match="unpriced_equity_asset:bybit:BTC"):
+        runner._balance_equity(balance, snapshot)
+
+    assert runner.risk.kill_switch_path.exists()
+
+
+def test_live_equity_valuation_pauses_on_stale_spot_mark(tmp_path: Path) -> None:
+    settings = live_settings(tmp_path)
+    runner = LiveTradingRunner.__new__(LiveTradingRunner)
+    runner.settings = settings
+    runner.risk = LiveRiskController(settings)
+    balance = VenueBalance(
+        exchange="bybit",
+        free={"BTC": Decimal("1")},
+        total={"BTC": Decimal("1")},
+    )
+    snapshot = market_snapshot()
+    stale_snapshot = replace(
+        snapshot,
+        captured_at=snapshot.captured_at + timedelta(seconds=31),
+        stale_after_seconds=30,
+    )
+
+    with pytest.raises(LiveTradingPaused, match="unpriced_equity_asset:bybit:BTC"):
+        runner._balance_equity(balance, stale_snapshot)
+
+    assert runner.risk.kill_switch_path.exists()
+
+
+def test_live_runner_pauses_on_incomplete_market_snapshot(tmp_path: Path) -> None:
+    settings = live_settings(tmp_path)
+    runner = LiveTradingRunner.__new__(LiveTradingRunner)
+    runner.risk = LiveRiskController(settings)
+    snapshot = replace(market_snapshot(), incomplete_venues=("gate",))
+
+    with pytest.raises(LiveTradingPaused, match="market_snapshot_incomplete:gate"):
+        runner._require_complete_market_snapshot(snapshot)
+
+    assert runner.risk.kill_switch_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_balance_refresh_pauses_on_venue_identity_mismatch(tmp_path: Path) -> None:
+    settings = live_settings(tmp_path)
+    runner = LiveTradingRunner.__new__(LiveTradingRunner)
+    runner.risk = LiveRiskController(settings)
+    bybit = FakeTradingAdapter("bybit", [])
+    gate = FakeTradingAdapter("gate", [])
+
+    async def wrong_gate_balance() -> VenueBalance:
+        return VenueBalance(
+            exchange="bybit",
+            free={"USDT": Decimal("1000")},
+            total={"USDT": Decimal("1000")},
+        )
+
+    gate.fetch_balance = wrong_gate_balance  # type: ignore[method-assign]
+    runner.trading_adapters = {"bybit": bybit, "gate": gate}
+
+    with pytest.raises(LiveTradingPaused, match="balance_identity_mismatch:gate"):
+        await runner._fetch_fresh_balances()
+
+    assert runner.risk.kill_switch_path.exists()

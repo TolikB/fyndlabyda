@@ -67,7 +67,8 @@ class MexcTradingAdapter(TradingAdapter):
         *,
         api_key: str,
         api_secret: str,
-        base_url: str = "https://api.mexc.com",
+        spot_base_url: str = "https://api.mexc.com",
+        futures_base_url: str = "https://contract.mexc.com",
         timeout_seconds: float = 15.0,
         margin_mode: str = "isolated",
         leverage: int = 1,
@@ -75,18 +76,27 @@ class MexcTradingAdapter(TradingAdapter):
         http_client: httpx.AsyncClient | None = None,
         public_adapter: MexcPublicAdapter | None = None,
         clock_ms: Any | None = None,
+        base_url: str | None = None,
     ) -> None:
+        # ``base_url`` is retained only for deterministic single-transport tests.
+        if base_url is not None:
+            spot_base_url = base_url
+            futures_base_url = base_url
         self.api_key = api_key
         self.api_secret = api_secret
-        self.base_url = base_url.rstrip("/")
+        self.spot_base_url = spot_base_url.rstrip("/")
+        self.futures_base_url = futures_base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.margin_mode = margin_mode
         self.leverage = leverage
         self.recv_window_ms = recv_window_ms
-        self._http = http_client
+        self._spot_http = http_client
+        self._futures_http = http_client
         self._owns_http = http_client is None
         self._public = public_adapter or MexcPublicAdapter(
-            base_url=base_url, timeout_seconds=timeout_seconds
+            spot_base_url=spot_base_url,
+            futures_base_url=futures_base_url,
+            timeout_seconds=timeout_seconds,
         )
         self._owns_public = public_adapter is None
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
@@ -95,10 +105,18 @@ class MexcTradingAdapter(TradingAdapter):
         self._configured: set[tuple[str, int, str]] = set()
         self._hedge_mode_configured = False
 
-    async def _ensure_http(self) -> httpx.AsyncClient:
-        if self._http is None:
-            self._http = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds)
-        return self._http
+    async def _ensure_http(self, *, futures: bool) -> httpx.AsyncClient:
+        if futures:
+            if self._futures_http is None:
+                self._futures_http = httpx.AsyncClient(
+                    base_url=self.futures_base_url, timeout=self.timeout_seconds
+                )
+            return self._futures_http
+        if self._spot_http is None:
+            self._spot_http = httpx.AsyncClient(
+                base_url=self.spot_base_url, timeout=self.timeout_seconds
+            )
+        return self._spot_http
 
     async def initialize(self) -> None:
         if not self.api_key or not self.api_secret:
@@ -109,7 +127,7 @@ class MexcTradingAdapter(TradingAdapter):
             for item in instruments
             if item.is_active
         }
-        client = await self._ensure_http()
+        client = await self._ensure_http(futures=False)
         response = await client.get("/api/v3/time")
         response.raise_for_status()
         payload = response.json()
@@ -120,9 +138,15 @@ class MexcTradingAdapter(TradingAdapter):
     async def close(self) -> None:
         if self._owns_public:
             await self._public.close()
-        if self._http is not None and self._owns_http:
-            await self._http.aclose()
-            self._http = None
+        if self._owns_http:
+            clients = {
+                id(client): client
+                for client in (self._spot_http, self._futures_http)
+                if client is not None
+            }
+            await asyncio.gather(*(client.aclose() for client in clients.values()))
+        self._spot_http = None
+        self._futures_http = None
 
     def _timestamp(self) -> int:
         return int(self._clock_ms()) + self._clock_offset_ms
@@ -140,7 +164,7 @@ class MexcTradingAdapter(TradingAdapter):
             (("recvWindow", str(self.recv_window_ms)), ("timestamp", str(self._timestamp())))
         )
         ordered.append(("signature", sign_mexc_spot(self.api_secret, ordered)))
-        client = await self._ensure_http()
+        client = await self._ensure_http(futures=False)
         try:
             response = await client.request(
                 method,
@@ -176,7 +200,7 @@ class MexcTradingAdapter(TradingAdapter):
             ),
             "Content-Type": "application/json",
         }
-        client = await self._ensure_http()
+        client = await self._ensure_http(futures=True)
         try:
             if method in {"GET", "DELETE"}:
                 query: list[tuple[str, str | int | float | bool | None]] = list(
@@ -404,14 +428,16 @@ class MexcTradingAdapter(TradingAdapter):
         else:
             payload = await self._futures_request(
                 "GET",
-                "/api/v1/private/account/tiered_fee_rate/v2",
+                "/api/v1/private/account/tiered_fee_rate",
                 {"symbol": exchange_symbol},
             )
-            fee = (
-                _decimal(payload.get("realTakerFee"))
-                if isinstance(payload, dict)
-                else Decimal("-1")
-            )
+            if isinstance(payload, dict) and payload.get("realTakerFee") is not None:
+                fee = _decimal(payload["realTakerFee"])
+            elif isinstance(payload, dict) and payload.get("takerFee") is not None:
+                discount = _decimal(payload.get("takerFeeDiscount", 1))
+                fee = _decimal(payload["takerFee"]) * discount
+            else:
+                fee = Decimal("-1")
         if fee < 0 or fee > Decimal("0.02"):
             raise MexcPrivateError("MEXC returned an invalid taker fee", definitive=True)
         return fee
@@ -493,7 +519,7 @@ class MexcTradingAdapter(TradingAdapter):
         side = _futures_side(request.side, request.reduce_only)
         await self._futures_request(
             "POST",
-            "/api/v1/private/order/create",
+            "/api/v1/private/order/submit",
             {
                 "symbol": request.exchange_symbol,
                 "price": _format_decimal(request.limit_price),
@@ -552,15 +578,18 @@ class MexcTradingAdapter(TradingAdapter):
                     },
                 )
                 return self._parse_spot_order(row)
-            if order.exchange_order_id is None:
-                return order.model_copy(update={"status": LiveOrderStatus.UNKNOWN})
             await self._futures_request(
                 "POST",
-                "/api/v1/private/order/cancel",
-                {"orderIds": [order.exchange_order_id]},
+                "/api/v1/private/order/cancel_with_external",
+                {
+                    "symbol": order.exchange_symbol,
+                    "externalOid": order.client_order_id,
+                },
             )
             row = await self._futures_request(
-                "GET", f"/api/v1/private/order/get/{order.exchange_order_id}"
+                "GET",
+                f"/api/v1/private/order/external/{order.exchange_symbol}/"
+                f"{order.client_order_id}",
             )
             return self._parse_futures_order(row)
         except MexcPrivateError:

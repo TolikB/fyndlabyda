@@ -110,10 +110,8 @@ class LiveRiskController:
         open_notional: Decimal,
         free_collateral: Decimal,
     ) -> None:
-        if self.paused:
-            raise LiveTradingPaused(self.paused_reason or "live_trading_paused")
-        if not self.settings.live_armed or not self.settings.live_autotrade:
-            raise LiveTradingPaused("live_autotrade_not_armed")
+        self.assert_entry_enabled()
+
         if order_notional > self.settings.live_max_order_notional_usd:
             raise LiveTradingPaused("single_order_notional_limit")
         if open_notional + order_notional > self.settings.live_max_total_notional_usd:
@@ -121,6 +119,12 @@ class LiveRiskController:
         reserve = free_collateral * self.settings.live_min_free_balance_percent / Decimal("100")
         if free_collateral - order_notional < reserve:
             raise LiveTradingPaused("free_collateral_reserve")
+
+    def assert_entry_enabled(self) -> None:
+        if self.paused:
+            raise LiveTradingPaused(self.paused_reason or "live_trading_paused")
+        if not self.settings.live_armed or not self.settings.live_autotrade:
+            raise LiveTradingPaused("live_autotrade_not_armed")
 
     def assert_can_reduce(self, *, order_notional: Decimal) -> None:
         """Allow risk-reducing orders even after the entry kill switch has tripped."""

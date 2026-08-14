@@ -103,6 +103,18 @@ def _spot_request() -> TradingOrderRequest:
     )
 
 
+@pytest.mark.asyncio
+async def test_mexc_private_transports_use_distinct_official_origins() -> None:
+    adapter = MexcTradingAdapter(api_key="key", api_secret="secret")
+    spot = await adapter._ensure_http(futures=False)
+    futures = await adapter._ensure_http(futures=True)
+
+    assert str(spot.base_url) == "https://api.mexc.com"
+    assert str(futures.base_url) == "https://contract.mexc.com"
+    assert spot is not futures
+    await adapter.close()
+
+
 def test_mexc_signatures_match_fixed_vectors() -> None:
     spot_parameters = [
         ("symbol", "BTCUSDT"),
@@ -127,6 +139,7 @@ def test_mexc_signatures_match_fixed_vectors() -> None:
 def test_live_factory_uses_native_mexc_adapter_without_network_calls() -> None:
     settings = Settings(
         _env_file=None,
+        APP_ENV="production",
         RUN_MODE="live",
         MARKET_DATA_MODE="live_public",
         EXECUTION_MODE="live",
@@ -136,13 +149,17 @@ def test_live_factory_uses_native_mexc_adapter_without_network_calls() -> None:
         LIVE_VENUES="mexc",
         MEXC_API_KEY="mexc-key",
         MEXC_API_SECRET="mexc-secret",
-        TELEGRAM_ENABLED=False,
+        TELEGRAM_ENABLED=True,
+        TELEGRAM_BOT_TOKEN="telegram-secret",
+        TELEGRAM_CHAT_ID="123",
     )
 
     adapters = create_trading_adapters(settings)
 
     assert set(adapters) == {"mexc"}
     assert isinstance(adapters["mexc"], MexcTradingAdapter)
+    assert adapters["mexc"].spot_base_url == "https://api.mexc.com"
+    assert adapters["mexc"].futures_base_url == "https://contract.mexc.com"
 
 
 @pytest.mark.asyncio
@@ -226,7 +243,7 @@ async def test_mexc_futures_full_fill_uses_contract_units_and_signed_exact_json(
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal creates
-        if request.url.path == "/api/v1/private/order/create":
+        if request.url.path == "/api/v1/private/order/submit":
             creates += 1
             body = request.content.decode()
             payload = json.loads(body)
@@ -281,7 +298,7 @@ async def test_mexc_partial_ioc_is_canceled_and_keeps_exact_filled_quantity() ->
 
     def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
-        if request.url.path == "/api/v1/private/order/create":
+        if request.url.path == "/api/v1/private/order/submit":
             return httpx.Response(200, json={"success": True, "code": 0, "data": 77})
         if request.url.path.endswith("/BTC_USDT/fa123456789"):
             return httpx.Response(
@@ -301,9 +318,13 @@ async def test_mexc_partial_ioc_is_canceled_and_keeps_exact_filled_quantity() ->
                     },
                 },
             )
-        if request.url.path == "/api/v1/private/order/cancel":
+        if request.url.path == "/api/v1/private/order/cancel_with_external":
+            assert json.loads(request.content) == {
+                "symbol": "BTC_USDT",
+                "externalOid": "fa123456789",
+            }
             return httpx.Response(200, json={"success": True, "code": 0, "data": True})
-        assert request.url.path == "/api/v1/private/order/get/77"
+        assert request.url.path.endswith("/BTC_USDT/fa123456789")
         return httpx.Response(
             200,
             json={
@@ -328,8 +349,8 @@ async def test_mexc_partial_ioc_is_canceled_and_keeps_exact_filled_quantity() ->
 
     assert result.status is LiveOrderStatus.PARTIAL
     assert result.filled_base_quantity == Decimal("0.0004")
-    assert paths.count("/api/v1/private/order/create") == 1
-    assert "/api/v1/private/order/cancel" in paths
+    assert paths.count("/api/v1/private/order/submit") == 1
+    assert "/api/v1/private/order/cancel_with_external" in paths
 
 
 @pytest.mark.asyncio
@@ -338,7 +359,7 @@ async def test_mexc_timeout_recovers_by_external_id_without_duplicate_submission
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal creates
-        if request.url.path == "/api/v1/private/order/create":
+        if request.url.path == "/api/v1/private/order/submit":
             creates += 1
             raise httpx.ReadTimeout("ambiguous timeout", request=request)
         return httpx.Response(
@@ -374,7 +395,7 @@ async def test_mexc_timeout_and_failed_recovery_return_unknown() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal creates
-        if request.url.path == "/api/v1/private/order/create":
+        if request.url.path == "/api/v1/private/order/submit":
             creates += 1
         raise httpx.ReadTimeout("network unavailable", request=request)
 
@@ -393,7 +414,7 @@ async def test_mexc_definitive_rejection_is_not_retried() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal creates
-        if request.url.path == "/api/v1/private/order/create":
+        if request.url.path == "/api/v1/private/order/submit":
             creates += 1
             return httpx.Response(400, json={"success": False, "code": 1002})
         return httpx.Response(404, json={"success": False, "code": 2006})
@@ -460,8 +481,8 @@ async def test_mexc_private_account_position_funding_and_fee_are_normalized() ->
                     ]
                 }
             )
-        assert request.url.path == "/api/v1/private/account/tiered_fee_rate/v2"
-        return _future_response({"realTakerFee": "0.0006"})
+        assert request.url.path == "/api/v1/private/account/tiered_fee_rate"
+        return _future_response({"takerFee": "0.0008", "takerFeeDiscount": "0.75"})
 
     adapter, client = _adapter(httpx.MockTransport(handler))
     balance = await adapter.fetch_balance()

@@ -12,6 +12,18 @@ from funding_arbitrage.exchanges.mexc.client import (
 )
 
 
+@pytest.mark.asyncio
+async def test_mexc_default_rest_transports_use_distinct_official_origins() -> None:
+    adapter = MexcPublicAdapter()
+    spot = await adapter._ensure_http(futures=False)
+    futures = await adapter._ensure_http(futures=True)
+
+    assert str(spot.base_url) == "https://api.mexc.com"
+    assert str(futures.base_url) == "https://contract.mexc.com"
+    assert spot is not futures
+    await adapter.close()
+
+
 def _contract() -> dict[str, object]:
     return {
         "symbol": "BTC_USDT",
@@ -32,7 +44,7 @@ def _contract() -> dict[str, object]:
 @pytest.mark.asyncio
 async def test_mexc_instruments_keep_contract_and_base_units_distinct() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v1/contract/detail/country":
+        if request.url.path == "/api/v1/contract/detail":
             return httpx.Response(200, json={"success": True, "code": 0, "data": [_contract()]})
         assert request.url.path == "/api/v3/exchangeInfo"
         return httpx.Response(
@@ -79,7 +91,7 @@ async def test_mexc_instruments_keep_contract_and_base_units_distinct() -> None:
 @pytest.mark.asyncio
 async def test_mexc_spot_instrument_uses_documented_empty_filter_precisions() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v1/contract/detail/country":
+        if request.url.path == "/api/v1/contract/detail":
             return httpx.Response(200, json={"success": True, "code": 0, "data": []})
         return httpx.Response(
             200,

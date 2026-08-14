@@ -37,6 +37,7 @@ services:
       timeout: 30s
       retries: 5
       start_period: 180s
+    stop_grace_period: 90s
     restart: unless-stopped
 
   postgres:

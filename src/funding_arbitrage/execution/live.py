@@ -64,6 +64,8 @@ class LiveTradingExecutor:
         balances: dict[str, VenueBalance],
         open_notional: Decimal,
     ) -> LivePosition:
+        # Reject before fee lookups, derivative configuration, or durable intents.
+        self.risk.assert_entry_enabled()
         self._validate_opportunity(opportunity, capital_per_leg)
         await self._validate_account_fees(opportunity, capital_per_leg)
         intent_id = uuid4().hex

@@ -201,6 +201,7 @@ class LiveTradingRunner:
             history_symbols={venue: list(symbols) for venue, symbols in history_symbols.items()},
             force_history_refresh=periodic_history_refresh,
         )
+        self._require_complete_market_snapshot(snapshot)
         if refresh_history:
             self._last_history_refresh = snapshot.captured_at
             self._last_history_symbols = history_symbols
@@ -223,7 +224,7 @@ class LiveTradingRunner:
         if reconciliation_due:
             await self._poll_funding_payments(snapshot.captured_at)
         await self._close_positions(opportunities, snapshot)
-        if not self.risk.paused:
+        if not self.risk.paused and self.settings.live_autotrade:
             self._balances = await self._fetch_fresh_balances()
             await self._open_positions(opportunities, snapshot)
         live_positions_open.set(
@@ -437,17 +438,39 @@ class LiveTradingRunner:
         if failures:
             self.risk.trip("balance_refresh_failed:" + ",".join(failures))
             raise LiveTradingPaused(self.risk.paused_reason or "balance_refresh_failed")
+        invalid = [
+            venue
+            for venue, row in zip(venue_names, rows, strict=True)
+            if not isinstance(row, VenueBalance) or row.exchange != venue
+        ]
+        if invalid:
+            reason = "balance_identity_mismatch:" + ",".join(invalid)
+            self.risk.trip(reason)
+            raise LiveTradingPaused(reason)
         return {
             venue: row
             for venue, row in zip(venue_names, rows, strict=True)
             if isinstance(row, VenueBalance)
         }
 
+    def _require_complete_market_snapshot(self, snapshot: MarketSnapshot) -> None:
+        if not snapshot.incomplete_venues:
+            return
+        reason = "market_snapshot_incomplete:" + ",".join(snapshot.incomplete_venues)
+        self.risk.trip(reason)
+        raise LiveTradingPaused(reason)
+
     def _balance_equity(
         self, balance: VenueBalance, snapshot: MarketSnapshot
     ) -> Decimal:
         value = Decimal("0")
         for currency, amount in balance.total.items():
+            if amount == 0:
+                continue
+            if amount < 0:
+                reason = f"negative_equity_asset:{balance.exchange}:{currency}"
+                self.risk.trip(reason)
+                raise LiveTradingPaused(reason)
             if currency in {"USD", "USDT", "USDC"}:
                 value += amount
                 continue
@@ -456,16 +479,24 @@ class LiveTradingRunner:
                 for ticker in snapshot.tickers
                 if ticker.exchange == balance.exchange
                 and ticker.instrument_type is InstrumentType.SPOT
+                and ticker.last_price > 0
+                and (
+                    snapshot.captured_at - ticker.timestamp
+                ).total_seconds() <= snapshot.stale_after_seconds
                 and any(
                     instrument.exchange == ticker.exchange
                     and instrument.exchange_symbol == ticker.symbol
                     and instrument.base_asset == currency
                     and instrument.quote_asset in {"USD", "USDT", "USDC"}
+                    and instrument.instrument_type is InstrumentType.SPOT
                     for instrument in snapshot.instruments
                 )
             ]
-            if prices:
-                value += amount * prices[0]
+            if not prices:
+                reason = f"unpriced_equity_asset:{balance.exchange}:{currency}"
+                self.risk.trip(reason)
+                raise LiveTradingPaused(reason)
+            value += amount * prices[0]
         return value
 
     async def _open_positions(

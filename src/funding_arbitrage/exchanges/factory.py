@@ -60,7 +60,8 @@ def create_public_adapters(settings: Settings) -> dict[str, ExchangeAdapter]:
             burst=settings.rate_limit_burst,
         ),
         "mexc": MexcPublicAdapter(
-            base_url=settings.mexc_base_url,
+            spot_base_url=settings.mexc_base_url,
+            futures_base_url=settings.mexc_futures_base_url,
             futures_websocket_url=settings.mexc_futures_ws_url,
             spot_websocket_url=settings.mexc_spot_ws_url,
             timeout_seconds=settings.request_timeout_seconds,

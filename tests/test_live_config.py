@@ -10,6 +10,7 @@ from funding_arbitrage.config import Settings
 
 def _live_values() -> dict[str, object]:
     return {
+        "APP_ENV": "production",
         "RUN_MODE": "live",
         "MARKET_DATA_MODE": "live_public",
         "EXECUTION_MODE": "live",
@@ -23,6 +24,9 @@ def _live_values() -> dict[str, object]:
         "GATE_API_SECRET": "gate-secret",
         "MEXC_API_KEY": "mexc-key",
         "MEXC_API_SECRET": "mexc-secret",
+        "TELEGRAM_ENABLED": True,
+        "TELEGRAM_BOT_TOKEN": "telegram-secret",
+        "TELEGRAM_CHAT_ID": "123",
     }
 
 
@@ -60,12 +64,11 @@ def test_live_mode_accepts_complete_minimal_configuration_and_masks_secrets() ->
 
 def test_live_telegram_alerts_require_both_credentials_and_mask_token() -> None:
     values = _live_values()
-    values["TELEGRAM_ENABLED"] = True
+    values.pop("TELEGRAM_BOT_TOKEN")
     with pytest.raises(ValidationError, match="live Telegram alerts require"):
         Settings(_env_file=None, **values)
 
     values["TELEGRAM_BOT_TOKEN"] = "telegram-secret"
-    values["TELEGRAM_CHAT_ID"] = "123"
     settings = Settings(_env_file=None, **values)
     assert "telegram-secret" not in repr(settings)
 
@@ -73,6 +76,68 @@ def test_live_telegram_alerts_require_both_credentials_and_mask_token() -> None:
 def test_live_execution_cannot_be_enabled_from_api_or_paper_mode() -> None:
     with pytest.raises(ValidationError, match="EXECUTION_MODE=live requires RUN_MODE=live"):
         Settings(_env_file=None, EXECUTION_MODE="live")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("APP_ENV", "development", "APP_ENV=production"),
+        ("DATABASE_URL", "sqlite+aiosqlite:///live.db", "requires PostgreSQL"),
+        ("LIVE_REQUIRE_DEDICATED_ACCOUNTS", False, "dedicated exchange accounts"),
+        ("LIVE_MARGIN_MODE", "cross", "requires isolated margin"),
+        ("TELEGRAM_ENABLED", False, "requires Telegram safety alerts"),
+        (
+            "TELEGRAM_API_BASE_URL",
+            "https://example.invalid",
+            "TELEGRAM_API_BASE_URL must be the official",
+        ),
+        (
+            "MEXC_BASE_URL",
+            "https://example.invalid",
+            "MEXC_BASE_URL must be the official",
+        ),
+        (
+            "MEXC_FUTURES_BASE_URL",
+            "https://example.invalid",
+            "MEXC_FUTURES_BASE_URL must be the official",
+        ),
+        (
+            "MEXC_FUTURES_WS_URL",
+            "wss://example.invalid/edge",
+            "MEXC_FUTURES_WS_URL must be the official",
+        ),
+        (
+            "BYBIT_WS_URL",
+            "wss://example.invalid/ws",
+            "BYBIT_WS_URL must be the official",
+        ),
+        (
+            "GATE_BASE_URL",
+            "https://example.invalid/api/v4",
+            "GATE_BASE_URL must be the official",
+        ),
+    ],
+)
+def test_live_mode_rejects_unsafe_runtime_boundaries(
+    field: str, value: object, message: str
+) -> None:
+    values = _live_values()
+    values[field] = value
+
+    with pytest.raises(ValidationError, match=message):
+        Settings(_env_file=None, **values)
+
+
+def test_database_and_redis_credentials_are_not_in_settings_repr() -> None:
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql+asyncpg://funding:db-secret@localhost/funding",
+        REDIS_URL="redis://:redis-secret@localhost:6379/0",
+    )
+
+    rendered = repr(settings)
+    assert "db-secret" not in rendered
+    assert "redis-secret" not in rendered
 
 
 def test_mexc_live_sandbox_is_rejected_in_favor_of_public_paper_mode() -> None:
@@ -108,4 +173,4 @@ def test_live_example_is_complete_after_only_secrets_are_supplied() -> None:
     )
 
     assert settings.run_mode == "live"
-    assert settings.live_autotrade is True
+    assert settings.live_autotrade is False

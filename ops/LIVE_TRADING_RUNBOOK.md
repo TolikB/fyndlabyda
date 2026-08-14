@@ -42,8 +42,40 @@ smallest useful `LIVE_VENUES` subset, and insert only those venue credentials.
 The exact confirmation phrase and `LIVE_ARMED=true` are mandatory. Keep the
 initial $100 per-leg limit and 1x leverage for the canary.
 
-Before startup, ensure `.runtime/LIVE_DISABLED` does not exist. Then validate
-without starting the service:
+For the first credential/reconciliation startup, override
+`LIVE_AUTOTRADE=false`. This prevents the entry pipeline before fee lookups,
+derivative configuration, intent creation, or order submission. Confirm private
+balances, positions, open orders, `/system/live`, readiness, and Telegram
+alerts; stop the service before changing it to `true` for the canary.
+
+Live startup additionally refuses any configuration that is not
+`APP_ENV=production`, PostgreSQL through `postgresql+asyncpg`, isolated margin,
+dedicated accounts, enabled Telegram alerts, and the official HTTPS Telegram
+endpoint. All enabled exchange REST/WebSocket endpoints must exactly match the
+code allowlist. MEXC uses separate official REST origins for spot
+(`https://api.mexc.com`) and contracts (`https://contract.mexc.com`). These are
+code-enforced boundaries, not optional operator conventions.
+
+Only release an immutable commit whose GitHub **Release gate** passed. The gate
+uses the hash-locked development environment, runs compile/Ruff/mypy/pytest and
+the dependency audit, exercises the complete PostgreSQL migration chain, checks
+Compose, and builds the production image. It never deploys or accesses a VPS.
+
+Before a migration or image change, record the exact commit and create a
+database backup outside the database volume:
+
+```bash
+git rev-parse HEAD
+mkdir -p backups
+backup_path="backups/funding-before-$(date -u +%Y%m%dT%H%M%SZ).dump"
+docker compose exec -T postgres sh -c \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+  > "$backup_path"
+test -s "$backup_path"
+```
+
+Before startup, verify that the persistent runtime volume does not contain
+`/app/.runtime/LIVE_DISABLED`. Then validate without starting the service:
 
 ```bash
 docker compose config --quiet
@@ -60,6 +92,14 @@ curl -fsS http://127.0.0.1:8000/system/live
 curl -fsS http://127.0.0.1:8000/health/ready
 curl -fsS http://127.0.0.1:8000/metrics | grep funding_live
 ```
+
+If preflight, migration, or startup fails, keep/create `LIVE_DISABLED`, stop the
+app, and do not retry orders. Capture `docker compose logs app`, the commit SHA,
+and `alembic current`. A code-only rollback must check out the previously proven
+immutable commit and rebuild it while the app stays stopped. If the schema must
+also be rolled back, restore the pre-migration dump (or run the explicitly
+reviewed Alembic downgrade) before starting that older image. Never let the
+older app auto-start against an unreviewed newer schema.
 
 ## Emergency stop
 

@@ -688,7 +688,8 @@ def create_trading_adapters(settings: Settings) -> dict[str, TradingAdapter]:
             result[venue] = MexcTradingAdapter(
                 api_key=credentials["apiKey"],
                 api_secret=credentials["secret"],
-                base_url=settings.mexc_base_url,
+                spot_base_url=settings.mexc_base_url,
+                futures_base_url=settings.mexc_futures_base_url,
                 timeout_seconds=settings.request_timeout_seconds,
                 margin_mode=settings.live_margin_mode,
                 leverage=settings.live_leverage,
