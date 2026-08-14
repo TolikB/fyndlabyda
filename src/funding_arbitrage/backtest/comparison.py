@@ -164,7 +164,11 @@ def compare_paper_datasets(
         "profitable_in_two_of_three_windows": profitable_windows >= 2,
         "minimum_30_days": evidence_days >= Decimal("30"),
         "accounting_reconciled": accounting_reconciled,
-        "exact_shared_timestamps": exact_shared_timestamps,
+        "snapshot_evidence_present": has_snapshot_evidence,
+        "exact_shared_timestamps": has_snapshot_evidence and exact_shared_timestamps,
+        "maximum_gap_within_5_minutes": (
+            has_snapshot_evidence and maximum_gap <= Decimal("300")
+        ),
         "runtime_incidents_zero": runtime_incidents_zero,
         "no_carry_in_positions": no_carry_in_positions,
     }
@@ -172,7 +176,9 @@ def compare_paper_datasets(
         "evidence_ready": (
             checks["minimum_30_days"]
             and checks["accounting_reconciled"]
+            and checks["snapshot_evidence_present"]
             and checks["exact_shared_timestamps"]
+            and checks["maximum_gap_within_5_minutes"]
             and checks["runtime_incidents_zero"]
             and checks["no_carry_in_positions"]
         ),

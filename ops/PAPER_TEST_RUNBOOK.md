@@ -105,9 +105,15 @@ is not ready yet (for example, fewer than 72 hours or 30 days have elapsed, or
 an acceptance condition is still false). Any connection or malformed-response
 failure exits with another non-zero code and should be investigated.
 
+For an evidence window already running on an older immutable release, stream
+the tracked current script to `python -` inside that same app container instead
+of rebuilding it. This applies correctness fixes to the read-only operator gate
+without changing the service process, restart count, database, or clean boundary.
+
 Both gates require a paper-only runtime, distinct candidate and baseline
 simulation versions, exact shared snapshot timestamps, no accounting invariant
-errors, acceptable snapshot gaps, zero current runner errors, a fresh latest
+errors, non-empty comparable snapshot series, a maximum snapshot gap of five
+minutes, zero current runner errors, a fresh latest
 cycle, and complete funding-history/orderbook coverage with zero stale books on
 Binance, Bybit, Gate, Hyperliquid, and OKX. Recent normalized ticker and
 orderbook messages must also be observed from each venue's WebSocket stream;

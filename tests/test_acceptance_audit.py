@@ -50,7 +50,11 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
             "evidence_ready": True,
             "accepted": True,
             "evidence_days": "30",
-            "observation": {},
+            "observation": {
+                "baseline_snapshot_count": 10,
+                "candidate_snapshot_count": 10,
+                "maximum_snapshot_gap_seconds": "30",
+            },
         },
         {
             "simulation_version": "candidate",
@@ -99,6 +103,81 @@ def test_acceptance_audit_rejects_non_paper_execution() -> None:
     assert result["runtime_safe"] is False
     assert result["canary_ready"] is False
     assert result["acceptance_ready"] is False
+
+
+def test_acceptance_audit_fails_closed_without_continuous_snapshot_evidence() -> None:
+    result = _audit()
+    result_without_snapshots = build_audit(
+        {
+            "status": "ok",
+            "run_mode": "paper_test",
+            "market_data_mode": "live_public",
+            "execution_mode": "paper",
+            "paper_autotrade_enabled": True,
+            "paper_autotrade_active": True,
+            "paper_autotrade_start_utc": "2026-01-01T00:00:00Z",
+        },
+        {
+            "status": "ready",
+            "comparison_enabled": True,
+            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "okx"],
+        },
+        {
+            "canary": {"ready": True, "checks": {}},
+            "checks": {"minimum_30_days": True},
+            "evidence_ready": True,
+            "accepted": True,
+            "evidence_days": "30",
+            "observation": {
+                "baseline_snapshot_count": 0,
+                "candidate_snapshot_count": 0,
+                "maximum_snapshot_gap_seconds": "301",
+            },
+        },
+        {
+            "simulation_version": "candidate",
+            "snapshot_count": 10,
+            "open_positions_missing_exposure_key_count": 0,
+            "open_positions_unverifiable_exposure_key_count": 0,
+            "open_positions_mismatched_exposure_key_count": 0,
+            "duplicate_open_exposure_count": 0,
+            "historical_positions_missing_exposure_key_count": 0,
+            "historical_positions_unverifiable_exposure_key_count": 0,
+            "historical_positions_mismatched_exposure_key_count": 0,
+            "historical_positions_missing_interval_count": 0,
+            "overlapping_exposure_interval_count": 0,
+        },
+        {
+            "simulation_version": "baseline",
+            "snapshot_count": 10,
+            "open_positions_missing_exposure_key_count": 0,
+            "open_positions_unverifiable_exposure_key_count": 0,
+            "open_positions_mismatched_exposure_key_count": 0,
+            "duplicate_open_exposure_count": 0,
+            "historical_positions_missing_exposure_key_count": 0,
+            "historical_positions_unverifiable_exposure_key_count": 0,
+            "historical_positions_mismatched_exposure_key_count": 0,
+            "historical_positions_missing_interval_count": 0,
+            "overlapping_exposure_interval_count": 0,
+        },
+        {"raw_candidates": 5},
+        _operational(),
+        "candidate",
+        "baseline",
+        "2026-01-01T00:00:00Z",
+    )
+
+    assert result["evidence_integrity_checks"] == {
+        "comparable_snapshot_series_present": True,
+        "maximum_snapshot_gap_within_5_minutes": True,
+    }
+    assert result_without_snapshots["runtime_safe"] is True
+    assert result_without_snapshots["evidence_integrity_checks"] == {
+        "comparable_snapshot_series_present": False,
+        "maximum_snapshot_gap_within_5_minutes": False,
+    }
+    assert result_without_snapshots["canary_ready"] is False
+    assert result_without_snapshots["acceptance_ready"] is False
 
 
 def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:

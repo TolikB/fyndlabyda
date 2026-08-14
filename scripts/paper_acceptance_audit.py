@@ -6,6 +6,7 @@ import argparse
 import json
 import time
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -255,9 +256,37 @@ def build_audit(
     runtime_safe = all(runtime_checks.values()) and all(operational_checks.values())
     comparison_canary = comparison.get("canary") or {}
     comparison_checks = comparison.get("checks") or {}
-    canary_ready = runtime_safe and comparison_canary.get("ready") is True
+    comparison_observation = comparison.get("observation") or {}
+    baseline_snapshot_count = comparison_observation.get("baseline_snapshot_count")
+    candidate_snapshot_count = comparison_observation.get("candidate_snapshot_count")
+    maximum_snapshot_gap = comparison_observation.get(
+        "maximum_snapshot_gap_seconds"
+    )
+    try:
+        maximum_snapshot_gap_decimal = Decimal(str(maximum_snapshot_gap))
+    except (InvalidOperation, TypeError, ValueError):
+        maximum_snapshot_gap_decimal = None
+    evidence_integrity_checks = {
+        "comparable_snapshot_series_present": (
+            isinstance(baseline_snapshot_count, int)
+            and baseline_snapshot_count > 0
+            and isinstance(candidate_snapshot_count, int)
+            and candidate_snapshot_count > 0
+        ),
+        "maximum_snapshot_gap_within_5_minutes": (
+            maximum_snapshot_gap_decimal is not None
+            and maximum_snapshot_gap_decimal <= Decimal("300")
+        ),
+    }
+    evidence_integrity_safe = all(evidence_integrity_checks.values())
+    canary_ready = (
+        runtime_safe
+        and evidence_integrity_safe
+        and comparison_canary.get("ready") is True
+    )
     acceptance_ready = (
         runtime_safe
+        and evidence_integrity_safe
         and comparison.get("evidence_ready") is True
         and comparison.get("accepted") is True
     )
@@ -267,6 +296,7 @@ def build_audit(
         "acceptance_ready": acceptance_ready,
         "runtime_checks": runtime_checks,
         "operational_checks": operational_checks,
+        "evidence_integrity_checks": evidence_integrity_checks,
         "operational_metrics": operational_metrics,
         "canary": comparison_canary,
         "acceptance_checks": comparison_checks,

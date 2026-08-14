@@ -60,6 +60,46 @@ def test_mismatched_shared_feed_timestamps_fail_reconciliation_gate() -> None:
     assert result["canary"]["ready"] is False
 
 
+def test_missing_snapshot_series_invalidates_final_evidence_gate() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=31)
+
+    result = compare_paper_datasets(
+        _observed_dataset("baseline", start, end, ()),
+        _observed_dataset("candidate", start, end, ()),
+        Decimal("6250"),
+    )
+
+    assert result["evidence_days"] == "31.0"
+    assert result["checks"]["snapshot_evidence_present"] is False
+    assert result["checks"]["exact_shared_timestamps"] is False
+    assert result["checks"]["maximum_gap_within_5_minutes"] is False
+    assert result["evidence_ready"] is False
+    assert result["accepted"] is False
+
+
+def test_large_snapshot_gap_invalidates_final_evidence_gate() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=31)
+    timestamps = (start, end)
+    baseline = replace(
+        _observed_dataset("baseline", start, end, timestamps),
+        max_snapshot_gap_seconds=Decimal("301"),
+    )
+    candidate = replace(
+        _observed_dataset("candidate", start, end, timestamps),
+        max_snapshot_gap_seconds=Decimal("301"),
+    )
+
+    result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+
+    assert result["checks"]["snapshot_evidence_present"] is True
+    assert result["checks"]["exact_shared_timestamps"] is True
+    assert result["checks"]["maximum_gap_within_5_minutes"] is False
+    assert result["evidence_ready"] is False
+    assert result["accepted"] is False
+
+
 def test_latest_uncommitted_snapshot_is_excluded_from_completed_overlap() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=31)
