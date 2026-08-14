@@ -91,6 +91,12 @@ docker compose -p funding_arbitrage_paper exec -T app \
   --start 2026-08-13T23:15:00Z \
   --gate acceptance \
   --timeout 45
+
+# Run at both gates; require at least one real live-public payment as evidence.
+docker compose -p funding_arbitrage_paper exec -T app \
+  python scripts/funding_payment_audit.py \
+  --start 2026-08-13T23:15:00Z \
+  --require-payments
 ```
 
 The script prints a JSON evidence bundle. Exit code `0` means the requested
@@ -123,7 +129,14 @@ For every paper funding payment, the timed audit must also reconcile the exact
 `funding_history`, match the payment to the perpetual leg and its side, and
 recalculate signed PnL from notional and settled rate. A venue's actual event
 timestamp is authoritative and may differ by seconds from the predicted target;
-do not round it to a nominal wall-clock boundary.
+do not round it to a nominal wall-clock boundary. The funding-payment audit also
+rejects any raw history event missing from the payment ledger while its position
+was held, a payment outside its holding interval, a wrong notional, stale
+`funding_events`/`settled_funding_at` state, duplicate payments, or a mismatch
+between payment totals and position funding PnL. The 300-second target grace is
+applied to the first actual payment at or after each persisted entry target;
+later settlements are checked against their own exact raw venue timestamps,
+not incorrectly compared with the original target.
 
 The release also requires the digest-pinned Python base image and exact
 `requirements.lock` dependency graph. Any dependency update is a new release
