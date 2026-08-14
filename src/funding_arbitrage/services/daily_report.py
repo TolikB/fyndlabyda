@@ -16,6 +16,7 @@ from funding_arbitrage.database.models import (
     PaperFillRecord,
     PaperFundingPaymentRecord,
     PaperPositionRecord,
+    PaperRuntimeIncidentRecord,
     PortfolioSnapshotRecord,
     TelegramDailyReportRecord,
 )
@@ -27,6 +28,49 @@ logger = logging.getLogger(__name__)
 def _signed_usd(value: Decimal) -> str:
     sign = "+" if value >= 0 else "-"
     return f"{sign}${abs(value):.2f}"
+
+
+def _no_fill_note(
+    *,
+    fills: int,
+    equity_delta: Decimal,
+    eligible_signals: int,
+    confirmed_signals: int,
+    snapshot_count: int,
+    cycle_failures: int,
+) -> str | None:
+    if fills != 0 or equity_delta != 0:
+        return None
+    if snapshot_count == 0 or cycle_failures > 0:
+        return (
+            "No paper fills were recorded, but runtime evidence needs attention; "
+            "unchanged equity does not prove that the market had no edge."
+        )
+    if confirmed_signals > 0:
+        return (
+            f"{confirmed_signals} confirmed signal(s) were observed, but no paper "
+            "fill was produced; inspect risk and execution gates."
+        )
+    if eligible_signals > 0:
+        return (
+            f"{eligible_signals} eligible signal(s) were observed, but none reached "
+            "confirmed state; no position was opened."
+        )
+    return "No eligible paper signals were observed; equity was unchanged."
+
+
+def _runner_state(
+    *,
+    snapshot_count: int,
+    cycle_failures: int,
+    process_starts: int,
+    had_prior_snapshot: bool,
+) -> str:
+    if snapshot_count == 0 or cycle_failures > 0:
+        return "ATTENTION"
+    if process_starts > 0:
+        return "RESTARTED" if had_prior_snapshot else "STARTED"
+    return "OK"
 
 
 class DailyReportService:
@@ -102,6 +146,8 @@ class DailyReportService:
         start_local = datetime.combine(report_date, time.min, tzinfo=self.timezone)
         start = start_local.astimezone(UTC)
         end = (start_local + timedelta(days=1)).astimezone(UTC)
+        autotrade_start = self.settings.paper_autotrade_start_utc
+        signal_start = max(start, min(autotrade_start, end)) if autotrade_start else start
         previous = await session.scalar(
             select(PortfolioSnapshotRecord)
             .where(
@@ -209,8 +255,41 @@ class DailyReportService:
         )
         opportunities = await session.scalar(
             select(func.count(OpportunityRecord.id)).where(
-                OpportunityRecord.created_at >= start,
+                OpportunityRecord.created_at >= signal_start,
                 OpportunityRecord.created_at < end,
+            )
+        )
+        confirmed = await session.scalar(
+            select(func.count(OpportunityRecord.id)).where(
+                OpportunityRecord.created_at >= signal_start,
+                OpportunityRecord.created_at < end,
+                OpportunityRecord.status == "confirmed",
+            )
+        )
+        snapshots = await session.scalar(
+            select(func.count(PortfolioSnapshotRecord.id)).where(
+                PortfolioSnapshotRecord.timestamp >= start,
+                PortfolioSnapshotRecord.timestamp < end,
+                PortfolioSnapshotRecord.simulation_version
+                == self.settings.paper_simulation_version,
+            )
+        )
+        cycle_failures = await session.scalar(
+            select(func.count(PaperRuntimeIncidentRecord.id)).where(
+                PaperRuntimeIncidentRecord.occurred_at >= start,
+                PaperRuntimeIncidentRecord.occurred_at < end,
+                PaperRuntimeIncidentRecord.simulation_version
+                == self.settings.paper_simulation_version,
+                PaperRuntimeIncidentRecord.category != "process_start",
+            )
+        )
+        process_starts = await session.scalar(
+            select(func.count(PaperRuntimeIncidentRecord.id)).where(
+                PaperRuntimeIncidentRecord.occurred_at >= start,
+                PaperRuntimeIncidentRecord.occurred_at < end,
+                PaperRuntimeIncidentRecord.simulation_version
+                == self.settings.paper_simulation_version,
+                PaperRuntimeIncidentRecord.category == "process_start",
             )
         )
         equity = latest.equity if latest is not None else self.settings.paper_initial_balance_usd
@@ -228,10 +307,25 @@ class DailyReportService:
             else Decimal("0")
         )
         first_seen = first.timestamp.astimezone(self.timezone) if first is not None else None
-        no_trades_note = (
-            "No eligible paper trades during the day; equity was unchanged."
-            if int(fills or 0) == 0 and equity_delta == 0
-            else None
+        fill_count = int(fills or 0)
+        eligible_count = int(opportunities or 0)
+        confirmed_count = int(confirmed or 0)
+        snapshot_count = int(snapshots or 0)
+        cycle_failure_count = int(cycle_failures or 0)
+        process_start_count = int(process_starts or 0)
+        no_trades_note = _no_fill_note(
+            fills=fill_count,
+            equity_delta=equity_delta,
+            eligible_signals=eligible_count,
+            confirmed_signals=confirmed_count,
+            snapshot_count=snapshot_count,
+            cycle_failures=cycle_failure_count,
+        )
+        runner_state = _runner_state(
+            snapshot_count=snapshot_count,
+            cycle_failures=cycle_failure_count,
+            process_starts=process_start_count,
+            had_prior_snapshot=previous is not None,
         )
         return "\n".join(
             [
@@ -247,10 +341,18 @@ class DailyReportService:
                 f"Fees: -${Decimal(str(fees or 0)):.2f}",
                 f"Slippage: -${Decimal(str(slippage or 0)):.2f}",
                 (
-                    f"Fills: {int(fills or 0)} | Opened: {int(opened or 0)} "
+                    f"Fills: {fill_count} | Opened: {int(opened or 0)} "
                     f"| Closed: {int(closed or 0)}"
                 ),
-                f"Opportunities observed: {int(opportunities or 0)}",
+                (
+                    f"Unique eligible signals: {eligible_count} | "
+                    f"Confirmed: {confirmed_count}"
+                ),
+                (
+                    f"Runner: {runner_state} | snapshots: {snapshot_count} | "
+                    f"cycle failures: {cycle_failure_count} | "
+                    f"process starts: {process_start_count}"
+                ),
                 *([no_trades_note] if no_trades_note is not None else []),
                 "",
                 "TOTAL — CURRENT SIMULATOR",

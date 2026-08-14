@@ -13,7 +13,11 @@ from funding_arbitrage.notifications.telegram import (
     TelegramNotificationError,
     TelegramNotifier,
 )
-from funding_arbitrage.services.daily_report import DailyReportService
+from funding_arbitrage.services.daily_report import (
+    DailyReportService,
+    _no_fill_note,
+    _runner_state,
+)
 
 
 @pytest.mark.asyncio
@@ -66,6 +70,10 @@ class ReportSession:
             1,
             1,
             10,
+            2,
+            96,
+            0,
+            0,
         ]
         self.added: list[object] = []
 
@@ -166,7 +174,11 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
         0,
         0,
         0,
-        30,
+        0,
+        0,
+        96,
+        0,
+        0,
     ]
     service = DailyReportService(
         settings,
@@ -181,5 +193,56 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
 
     assert await service.check_and_send(datetime(2026, 8, 11, 0, 1, tzinfo=UTC))
     assert "Net PnL: +$0.00" in sent[0]
-    assert "No eligible paper trades during the day; equity was unchanged." in sent[0]
+    assert "No eligible paper signals were observed; equity was unchanged." in sent[0]
+    assert "Unique eligible signals: 0 | Confirmed: 0" in sent[0]
+    assert "Runner: OK | snapshots: 96 | cycle failures: 0 | process starts: 0" in sent[0]
     assert "simulator v26-oos-candidate" in sent[0]
+
+
+def test_daily_report_distinguishes_unconfirmed_signals_from_no_edge() -> None:
+    note = _no_fill_note(
+        fills=0,
+        equity_delta=Decimal("0"),
+        eligible_signals=10,
+        confirmed_signals=0,
+        snapshot_count=96,
+        cycle_failures=0,
+    )
+
+    assert note == (
+        "10 eligible signal(s) were observed, but none reached confirmed state; "
+        "no position was opened."
+    )
+
+
+def test_daily_report_does_not_call_unchanged_equity_no_edge_after_failure() -> None:
+    note = _no_fill_note(
+        fills=0,
+        equity_delta=Decimal("0"),
+        eligible_signals=0,
+        confirmed_signals=0,
+        snapshot_count=0,
+        cycle_failures=1,
+    )
+
+    assert note is not None
+    assert "runtime evidence needs attention" in note
+    assert "does not prove that the market had no edge" in note
+    assert _runner_state(
+        snapshot_count=0,
+        cycle_failures=1,
+        process_starts=1,
+        had_prior_snapshot=False,
+    ) == "ATTENTION"
+    assert _runner_state(
+        snapshot_count=96,
+        cycle_failures=0,
+        process_starts=1,
+        had_prior_snapshot=False,
+    ) == "STARTED"
+    assert _runner_state(
+        snapshot_count=96,
+        cycle_failures=0,
+        process_starts=1,
+        had_prior_snapshot=True,
+    ) == "RESTARTED"
