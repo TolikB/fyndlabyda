@@ -42,7 +42,7 @@ goal remains open until every row is proven, including the last two rows.
 | Exit on edge, sign, target, basis, liquidity, or max hold | Parameterized runner tests | Proven |
 | Restart-safe pending exit after a bad close book | Persisted exit-request test across serialization/recovery | Proven |
 | Explain candidate/baseline rejections | Profile/reason Prometheus counters and structured decision logs | Proven |
-| Daily Telegram report shows day and current-simulator totals | Telegram tests plus DB-backed read-only report preview | Proven |
+| Daily Telegram report shows day and current-simulator totals | Telegram tests plus a DB-backed, non-sending v29 preview prove day/total accounting and runner evidence. A separate fail-closed live probe at `2026-08-14T03:32:52Z` called only Telegram `getMe/getChat`, redacts the token on every path, and proved the configured bot, exact private chat, and `00:00 Europe/Kyiv` schedule reachable from the VM without sending a message | Proven locally and live-public |
 
 ## Replay and acceptance gates
 
