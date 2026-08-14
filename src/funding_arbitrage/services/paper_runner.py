@@ -343,6 +343,7 @@ class PaperTestRunner:
         stage_started = time.monotonic()
         self._accrue_borrow(snapshot.captured_at)
         await self._settle_funding(snapshot)
+        self._mark_open_positions(snapshot)
         await self._close_expired(snapshot)
         if self._autotrade_enabled(snapshot.captured_at):
             await self._open_confirmed(opportunities, snapshot)
@@ -360,6 +361,11 @@ class PaperTestRunner:
     def _autotrade_enabled(self, now: datetime) -> bool:
         start = self.settings.paper_autotrade_start_utc
         return self.settings.paper_autotrade and (start is None or now >= start)
+
+    def _mark_open_positions(self, snapshot: MarketSnapshot) -> None:
+        for position in self.runtime.portfolio.positions.values():
+            if position.state is PositionState.OPEN:
+                self.executor.mark_to_market(position, snapshot)
 
     @staticmethod
     def _position_exposure_key(position: PaperPosition) -> str | None:

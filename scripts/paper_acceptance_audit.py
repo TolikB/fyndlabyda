@@ -262,6 +262,8 @@ def build_audit(
     maximum_snapshot_gap = comparison_observation.get(
         "maximum_snapshot_gap_seconds"
     )
+    snapshot_risk = comparison.get("snapshot_risk") or {}
+    validation_windows = comparison.get("validation_windows") or []
     try:
         maximum_snapshot_gap_decimal = Decimal(str(maximum_snapshot_gap))
     except (InvalidOperation, TypeError, ValueError):
@@ -276,6 +278,17 @@ def build_audit(
         "maximum_snapshot_gap_within_5_minutes": (
             maximum_snapshot_gap_decimal is not None
             and maximum_snapshot_gap_decimal <= Decimal("300")
+        ),
+        "risk_metrics_use_portfolio_snapshots": (
+            snapshot_risk.get("source") == "portfolio_snapshots"
+        ),
+        "validation_windows_use_portfolio_snapshots": (
+            len(validation_windows) == 3
+            and all(
+                isinstance(window, dict)
+                and window.get("source") == "portfolio_snapshots"
+                for window in validation_windows
+            )
         ),
     }
     evidence_integrity_safe = all(evidence_integrity_checks.values())
@@ -390,8 +403,8 @@ def _normalize_utc(value: object) -> str | None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--candidate-version", default="v26-oos-candidate")
-    parser.add_argument("--baseline-version", default="v26-oos-baseline")
+    parser.add_argument("--candidate-version", default="v27-oos-candidate")
+    parser.add_argument("--baseline-version", default="v27-oos-baseline")
     parser.add_argument("--start", help="Optional ISO-8601 start of the clean canary window")
     parser.add_argument("--gate", choices=("canary", "acceptance"), default="canary")
     parser.add_argument("--timeout", type=float, default=30)

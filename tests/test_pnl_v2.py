@@ -277,6 +277,44 @@ async def test_spot_perp_convergence_is_attributed_to_basis_without_double_count
 
 
 @pytest.mark.asyncio
+async def test_open_position_is_marked_to_market_and_close_replaces_unrealized_pnl() -> None:
+    opportunity = _spot_perp_opportunity().model_copy(
+        update={
+            "leg_a_side": "BUY",
+            "leg_b_side": "SELL",
+            "borrow_cost": Decimal("0"),
+        }
+    )
+    executor = PaperTradingExecutor()
+    position = await executor.open(
+        opportunity, Decimal("100"), _typed_snapshot("100", "102")
+    )
+    portfolio = PaperPortfolio(
+        Decimal("1000"),
+        ("gate",),
+        reserve_percent=Decimal("0"),
+    )
+    portfolio.allocate_position(position, ("gate", "gate"), Decimal("100"))
+    marked_snapshot = _typed_snapshot("101", "101")
+
+    unrealized = executor.mark_to_market(position, marked_snapshot)
+    open_equity = portfolio.snapshot(marked_snapshot.captured_at).equity
+
+    assert unrealized > 0
+    assert position.pnl.unrealized_pnl_leg_a > 0
+    assert position.pnl.unrealized_pnl_leg_b > 0
+    assert open_equity == Decimal("1000") + unrealized
+
+    await executor.close(position, marked_snapshot)
+    portfolio.close_position(position.id)
+
+    assert position.pnl.unrealized_pnl_leg_a == 0
+    assert position.pnl.unrealized_pnl_leg_b == 0
+    assert position.pnl.basis_pnl == unrealized
+    assert portfolio.snapshot(marked_snapshot.captured_at).equity == open_equity
+
+
+@pytest.mark.asyncio
 async def test_partial_depth_cannot_be_reported_as_open() -> None:
     snapshot = _typed_snapshot()
     shallow_books = {

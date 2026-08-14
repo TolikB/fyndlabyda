@@ -27,6 +27,8 @@ class PnLBreakdown(BaseModel):
     basis_pnl: Decimal = Decimal("0")
     price_pnl_leg_a: Decimal = Decimal("0")
     price_pnl_leg_b: Decimal = Decimal("0")
+    unrealized_pnl_leg_a: Decimal = Decimal("0")
+    unrealized_pnl_leg_b: Decimal = Decimal("0")
     fees: Decimal = Decimal("0")
     spread: Decimal = Decimal("0")
     slippage: Decimal = Decimal("0")
@@ -40,6 +42,8 @@ class PnLBreakdown(BaseModel):
             + self.basis_pnl
             + self.price_pnl_leg_a
             + self.price_pnl_leg_b
+            + self.unrealized_pnl_leg_a
+            + self.unrealized_pnl_leg_b
             - self.fees
             - self.spread
             - self.slippage

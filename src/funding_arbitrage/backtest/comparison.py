@@ -4,9 +4,59 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from statistics import median
 
 from funding_arbitrage.backtest.database_replay import PaperReplayDataset
 from funding_arbitrage.backtest.engine import BacktestEngine
+
+
+def _snapshot_max_drawdown(
+    curve: tuple[tuple[datetime, Decimal], ...], initial_capital: Decimal
+) -> Decimal:
+    peak = initial_capital
+    drawdown = Decimal("0")
+    for _timestamp, pnl in curve:
+        equity = initial_capital + pnl
+        peak = max(peak, equity)
+        if peak > 0:
+            drawdown = max(drawdown, (peak - equity) / peak)
+    return drawdown
+
+
+def _snapshot_monthly_pnl(
+    curve: tuple[tuple[datetime, Decimal], ...],
+) -> dict[str, Decimal]:
+    month_end_pnl: dict[str, Decimal] = {}
+    for timestamp, pnl in curve:
+        month_end_pnl[timestamp.strftime("%Y-%m")] = pnl
+    result: dict[str, Decimal] = {}
+    previous = Decimal("0")
+    for month, cumulative in month_end_pnl.items():
+        result[month] = cumulative - previous
+        previous = cumulative
+    return result
+
+
+def _snapshot_window_pnl(
+    curve: tuple[tuple[datetime, Decimal], ...],
+    start: datetime,
+    end: datetime,
+    *,
+    include_end: bool,
+) -> Decimal:
+    start_pnl = next(
+        (pnl for timestamp, pnl in reversed(curve) if timestamp < start),
+        Decimal("0"),
+    )
+    end_pnl = next(
+        (
+            pnl
+            for timestamp, pnl in reversed(curve)
+            if (timestamp <= end if include_end else timestamp < end)
+        ),
+        start_pnl,
+    )
+    return end_pnl - start_pnl
 
 
 def compare_paper_datasets(
@@ -61,6 +111,13 @@ def compare_paper_datasets(
         observation_end = max(event_timestamps) if event_timestamps else None
     evidence_days = Decimal("0")
     profitable_windows = 0
+    validation_windows: list[dict[str, object]] = []
+    baseline_curve_valid = bool(baseline.snapshot_pnl_curve) and tuple(
+        timestamp for timestamp, _pnl in baseline.snapshot_pnl_curve
+    ) == baseline.snapshot_timestamps
+    candidate_curve_valid = bool(candidate.snapshot_pnl_curve) and tuple(
+        timestamp for timestamp, _pnl in candidate.snapshot_pnl_curve
+    ) == candidate.snapshot_timestamps
     if (
         observation_start is not None
         and observation_end is not None
@@ -76,23 +133,47 @@ def compare_paper_datasets(
                 if index == 2
                 else observation_start + window * (index + 1)
             )
-            events = [
-                event
-                for event in candidate.events
-                if window_start <= event.timestamp
-                and (
-                    event.timestamp <= window_end
-                    if index == 2
-                    else event.timestamp < window_end
+            include_end = index == 2
+            if candidate_curve_valid:
+                window_pnl = _snapshot_window_pnl(
+                    candidate.snapshot_pnl_curve,
+                    window_start,
+                    window_end,
+                    include_end=include_end,
                 )
-            ]
-            result = engine.run(
-                events,
-                initial_capital,
-                {"profile": "candidate", "window": index},
-                candidate.dataset_version,
+                source = "portfolio_snapshots"
+            else:
+                events = [
+                    event
+                    for event in candidate.events
+                    if window_start <= event.timestamp
+                    and (
+                        event.timestamp <= window_end
+                        if include_end
+                        else event.timestamp < window_end
+                    )
+                ]
+                result = engine.run(
+                    events,
+                    initial_capital,
+                    {"profile": "candidate", "window": index},
+                    candidate.dataset_version,
+                )
+                window_pnl = result.metrics.net_profit_after_costs
+                source = "event_fallback"
+            profitable = window_pnl > 0
+            profitable_windows += profitable
+            validation_windows.append(
+                {
+                    "index": index + 1,
+                    "start": window_start,
+                    "end": window_end,
+                    "end_inclusive": include_end,
+                    "net_pnl": str(window_pnl),
+                    "profitable": profitable,
+                    "source": source,
+                }
             )
-            profitable_windows += result.metrics.net_profit_after_costs > 0
     accounting_reconciled = (
         baseline.max_accounting_invariant_error <= Decimal("0.01")
         and candidate.max_accounting_invariant_error <= Decimal("0.01")
@@ -108,7 +189,10 @@ def compare_paper_datasets(
         and candidate.carry_in_position_count == 0
     )
     has_snapshot_evidence = bool(
-        baseline.snapshot_timestamps and candidate.snapshot_timestamps
+        baseline_curve_valid
+        and candidate_curve_valid
+        and baseline.snapshot_timestamps
+        and candidate.snapshot_timestamps
     )
     comparable_baseline_timestamps: tuple[datetime, ...] = ()
     comparable_candidate_timestamps: tuple[datetime, ...] = ()
@@ -142,6 +226,32 @@ def compare_paper_datasets(
         baseline.max_snapshot_gap_seconds,
         candidate.max_snapshot_gap_seconds,
     )
+    baseline_snapshot_monthly = _snapshot_monthly_pnl(
+        baseline.snapshot_pnl_curve
+    )
+    candidate_snapshot_monthly = _snapshot_monthly_pnl(
+        candidate.snapshot_pnl_curve
+    )
+    baseline_median_monthly_pnl = (
+        Decimal(str(median(baseline_snapshot_monthly.values())))
+        if baseline_curve_valid and baseline_snapshot_monthly
+        else baseline_result.metrics.median_monthly_pnl
+    )
+    candidate_median_monthly_pnl = (
+        Decimal(str(median(candidate_snapshot_monthly.values())))
+        if candidate_curve_valid and candidate_snapshot_monthly
+        else candidate_result.metrics.median_monthly_pnl
+    )
+    baseline_max_drawdown = (
+        _snapshot_max_drawdown(baseline.snapshot_pnl_curve, initial_capital)
+        if baseline_curve_valid
+        else baseline_result.metrics.max_drawdown
+    )
+    candidate_max_drawdown = (
+        _snapshot_max_drawdown(candidate.snapshot_pnl_curve, initial_capital)
+        if candidate_curve_valid
+        else candidate_result.metrics.max_drawdown
+    )
     canary_checks = {
         "minimum_72_hours": evidence_days >= Decimal("3"),
         "accounting_reconciled": accounting_reconciled,
@@ -155,11 +265,10 @@ def compare_paper_datasets(
     checks = {
         "net_pnl_at_least_10_percent_better": ten_percent_better,
         "median_monthly_pnl_higher": (
-            candidate_result.metrics.median_monthly_pnl
-            > baseline_result.metrics.median_monthly_pnl
+            candidate_median_monthly_pnl > baseline_median_monthly_pnl
         ),
         "max_drawdown_not_higher": (
-            candidate_result.metrics.max_drawdown <= baseline_result.metrics.max_drawdown
+            candidate_max_drawdown <= baseline_max_drawdown
         ),
         "profitable_in_two_of_three_windows": profitable_windows >= 2,
         "minimum_30_days": evidence_days >= Decimal("30"),
@@ -185,6 +294,24 @@ def compare_paper_datasets(
         "accepted": all(checks.values()),
         "evidence_days": str(evidence_days),
         "profitable_candidate_windows": profitable_windows,
+        "validation_windows": validation_windows,
+        "snapshot_risk": {
+            "source": (
+                "portfolio_snapshots"
+                if baseline_curve_valid and candidate_curve_valid
+                else "event_fallback"
+            ),
+            "baseline_monthly_pnl": {
+                key: str(value) for key, value in baseline_snapshot_monthly.items()
+            },
+            "candidate_monthly_pnl": {
+                key: str(value) for key, value in candidate_snapshot_monthly.items()
+            },
+            "baseline_median_monthly_pnl": str(baseline_median_monthly_pnl),
+            "candidate_median_monthly_pnl": str(candidate_median_monthly_pnl),
+            "baseline_max_drawdown": str(baseline_max_drawdown),
+            "candidate_max_drawdown": str(candidate_max_drawdown),
+        },
         "observation": {
             "start": observation_start,
             "end": observation_end,

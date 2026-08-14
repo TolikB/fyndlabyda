@@ -100,7 +100,11 @@ async def test_database_replay_marks_open_position_and_reconciles_snapshot_pnl()
         state=PositionState.OPEN,
         opened_at=start + timedelta(minutes=1),
         allocated_venues=("gate", "gate"),
-        pnl=PnLBreakdown(legging_cost=Decimal("0.1")),
+        pnl=PnLBreakdown(
+            unrealized_pnl_leg_a=Decimal("1.2"),
+            unrealized_pnl_leg_b=Decimal("0.8"),
+            legging_cost=Decimal("0.1"),
+        ),
     )
     position_row = PaperPositionRecord(
         position_id=position_id,
@@ -127,10 +131,10 @@ async def test_database_replay_marks_open_position_and_reconciles_snapshot_pnl()
         PortfolioSnapshotRecord(
             timestamp=end,
             simulation_version="candidate",
-            equity=Decimal("996.5"),
+            equity=Decimal("998.5"),
             cash=Decimal("800"),
             locked_capital=Decimal("200"),
-            total_pnl=Decimal("-3.5"),
+            total_pnl=Decimal("-1.5"),
             funding_pnl=Decimal("0"),
             fees=Decimal("2"),
             balances={},
@@ -149,8 +153,12 @@ async def test_database_replay_marks_open_position_and_reconciles_snapshot_pnl()
     comparison = compare_paper_datasets(dataset, dataset, Decimal("1000"))
 
     assert dataset.position_count == 1
-    assert dataset.snapshot_pnl_delta == Decimal("-3.5")
-    assert result.metrics.net_profit_after_costs == Decimal("-3.5")
+    assert dataset.snapshot_pnl_delta == Decimal("-1.5")
+    assert dataset.snapshot_pnl_curve == (
+        (start, Decimal("0")),
+        (end, Decimal("-1.5")),
+    )
+    assert result.metrics.net_profit_after_costs == Decimal("-1.5")
     assert comparison["checks"]["accounting_reconciled"] is True
     assert comparison["observation"]["candidate_replay_pnl_error"] == "0.0"
 

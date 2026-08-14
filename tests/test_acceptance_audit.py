@@ -55,6 +55,12 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
                 "candidate_snapshot_count": 10,
                 "maximum_snapshot_gap_seconds": "30",
             },
+            "snapshot_risk": {"source": "portfolio_snapshots"},
+            "validation_windows": [
+                {"source": "portfolio_snapshots"},
+                {"source": "portfolio_snapshots"},
+                {"source": "portfolio_snapshots"},
+            ],
         },
         {
             "simulation_version": "candidate",
@@ -133,6 +139,8 @@ def test_acceptance_audit_fails_closed_without_continuous_snapshot_evidence() ->
                 "candidate_snapshot_count": 0,
                 "maximum_snapshot_gap_seconds": "301",
             },
+            "snapshot_risk": {"source": "event_fallback"},
+            "validation_windows": [],
         },
         {
             "simulation_version": "candidate",
@@ -170,11 +178,15 @@ def test_acceptance_audit_fails_closed_without_continuous_snapshot_evidence() ->
     assert result["evidence_integrity_checks"] == {
         "comparable_snapshot_series_present": True,
         "maximum_snapshot_gap_within_5_minutes": True,
+        "risk_metrics_use_portfolio_snapshots": True,
+        "validation_windows_use_portfolio_snapshots": True,
     }
     assert result_without_snapshots["runtime_safe"] is True
     assert result_without_snapshots["evidence_integrity_checks"] == {
         "comparable_snapshot_series_present": False,
         "maximum_snapshot_gap_within_5_minutes": False,
+        "risk_metrics_use_portfolio_snapshots": False,
+        "validation_windows_use_portfolio_snapshots": False,
     }
     assert result_without_snapshots["canary_ready"] is False
     assert result_without_snapshots["acceptance_ready"] is False

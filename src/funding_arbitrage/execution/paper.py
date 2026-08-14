@@ -20,7 +20,7 @@ class PaperTradingExecutor:
         fee_rate: Decimal = Decimal("0"),
         fees: dict[str, Decimal] | None = None,
         stale_seconds: int = 30,
-        simulation_version: str = "v26-oos-candidate",
+        simulation_version: str = "v27-oos-candidate",
         legging_move_percent: Decimal = Decimal("0"),
     ) -> None:
         self.fee_rate = fee_rate
@@ -146,6 +146,10 @@ class PaperTradingExecutor:
         position.pnl.slippage += position.close_leg_a.slippage + position.close_leg_b.slippage
         leg_a_pnl = self._leg_pnl(position.leg_a, position.close_leg_a)
         leg_b_pnl = self._leg_pnl(position.leg_b, position.close_leg_b)
+        # Replace the latest mark with final realized leg PnL. Keeping both
+        # would double-count the same movement in portfolio equity.
+        position.pnl.unrealized_pnl_leg_a = Decimal("0")
+        position.pnl.unrealized_pnl_leg_b = Decimal("0")
         if position.strategy in {"spot_perp", "futures_basis"}:
             position.pnl.basis_pnl += leg_a_pnl + leg_b_pnl
         else:
@@ -153,6 +157,48 @@ class PaperTradingExecutor:
             position.pnl.price_pnl_leg_b += leg_b_pnl
         position.transition(PositionState.CLOSED)
         return position
+
+    def mark_to_market(
+        self, position: PaperPosition, snapshot: MarketSnapshot
+    ) -> Decimal:
+        """Persist current unrealized two-leg PnL using fresh typed tickers."""
+
+        if (
+            position.state is not PositionState.OPEN
+            or position.leg_a is None
+            or position.leg_b is None
+        ):
+            raise ValueError("only an open two-leg position can be marked")
+        leg_a_type = position.leg_a_type or position.leg_a.instrument_type
+        leg_b_type = position.leg_b_type or position.leg_b.instrument_type
+        if leg_a_type is None or leg_b_type is None:
+            raise ValueError("position leg instrument types are required for marking")
+        leg_a_pnl = self._mark_leg(position.leg_a, leg_a_type, snapshot)
+        leg_b_pnl = self._mark_leg(position.leg_b, leg_b_type, snapshot)
+        position.pnl.unrealized_pnl_leg_a = leg_a_pnl
+        position.pnl.unrealized_pnl_leg_b = leg_b_pnl
+        return leg_a_pnl + leg_b_pnl
+
+    def _mark_leg(
+        self,
+        open_fill: PaperFill,
+        instrument_type: InstrumentType,
+        snapshot: MarketSnapshot,
+    ) -> Decimal:
+        ticker = snapshot.ticker(open_fill.exchange, open_fill.symbol, instrument_type)
+        if ticker is None:
+            raise ValueError("fresh typed ticker is required for paper marking")
+        if (snapshot.captured_at - ticker.timestamp).total_seconds() > self.stale_seconds:
+            raise ValueError("stale ticker cannot be used for paper marking")
+        open_price = open_fill.reference_price or open_fill.price
+        if open_price is None:
+            raise ValueError("open fill reference price is required for paper marking")
+        direction = Decimal("1") if open_fill.side.upper() == "BUY" else Decimal("-1")
+        return (
+            (ticker.last_price - open_price)
+            * open_fill.filled_quantity
+            * direction
+        )
 
     def _fill_notional(
         self,

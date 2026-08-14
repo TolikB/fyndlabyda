@@ -36,6 +36,7 @@ class PaperReplayDataset:
     observation_start: datetime | None = None
     observation_end: datetime | None = None
     snapshot_timestamps: tuple[datetime, ...] = ()
+    snapshot_pnl_curve: tuple[tuple[datetime, Decimal], ...] = ()
     max_snapshot_gap_seconds: Decimal = Decimal("0")
     max_accounting_invariant_error: Decimal = Decimal("0")
     snapshot_pnl_delta: Decimal | None = None
@@ -107,6 +108,12 @@ class DatabasePaperReplay:
             )
         snapshots = list((await session.execute(snapshot_statement)).scalars())
         snapshot_timestamps = tuple(row.timestamp for row in snapshots)
+        prior_total_pnl = (
+            prior_snapshot.total_pnl if prior_snapshot is not None else Decimal("0")
+        )
+        snapshot_pnl_curve = tuple(
+            (row.timestamp, row.total_pnl - prior_total_pnl) for row in snapshots
+        )
         snapshot_gaps = [
             Decimal(str((current - previous).total_seconds()))
             for previous, current in zip(
@@ -180,6 +187,7 @@ class DatabasePaperReplay:
                 observation_start=(snapshot_timestamps[0] if snapshot_timestamps else None),
                 observation_end=(snapshot_timestamps[-1] if snapshot_timestamps else None),
                 snapshot_timestamps=snapshot_timestamps,
+                snapshot_pnl_curve=snapshot_pnl_curve,
                 max_snapshot_gap_seconds=max_snapshot_gap,
                 max_accounting_invariant_error=max_invariant_error,
                 snapshot_pnl_delta=snapshot_pnl_delta,
@@ -280,12 +288,19 @@ class DatabasePaperReplay:
                 if closed_in_window
                 else Decimal("0")
             )
+            unrealized_pnl = (
+                Decimal("0")
+                if closed_in_window
+                else position.pnl.unrealized_pnl_leg_a
+                + position.pnl.unrealized_pnl_leg_b
+            )
             borrow_cost = position.pnl.borrow_cost
             if not closed_in_window and position.state == "CLOSED":
                 borrow_cost = Decimal("0")
             market_pnl = (
                 basis_pnl
                 + price_mismatch_pnl
+                + unrealized_pnl
                 - borrow_cost
                 - position.pnl.legging_cost
             )
@@ -341,6 +356,7 @@ class DatabasePaperReplay:
                 "funding_pnl": funding_total,
                 "basis_pnl": basis_pnl,
                 "price_mismatch_pnl": price_mismatch_pnl,
+                "unrealized_pnl": unrealized_pnl,
                 "fees": fees_total,
                 "spread": spread_total,
                 "slippage": slippage_total,
@@ -349,6 +365,7 @@ class DatabasePaperReplay:
                 "net_pnl": (
                     basis_pnl
                     + price_mismatch_pnl
+                    + unrealized_pnl
                     + funding_total
                     - fees_total
                     - spread_total
@@ -392,6 +409,7 @@ class DatabasePaperReplay:
             observation_start=(snapshot_timestamps[0] if snapshot_timestamps else None),
             observation_end=(snapshot_timestamps[-1] if snapshot_timestamps else None),
             snapshot_timestamps=snapshot_timestamps,
+            snapshot_pnl_curve=snapshot_pnl_curve,
             max_snapshot_gap_seconds=max_snapshot_gap,
             max_accounting_invariant_error=max_invariant_error,
             snapshot_pnl_delta=snapshot_pnl_delta,

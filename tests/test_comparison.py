@@ -21,6 +21,7 @@ def _observed_dataset(
         observation_start=start,
         observation_end=end,
         snapshot_timestamps=timestamps,
+        snapshot_pnl_curve=tuple((timestamp, Decimal("0")) for timestamp in timestamps),
         max_snapshot_gap_seconds=Decimal("30"),
         max_accounting_invariant_error=Decimal("0"),
     )
@@ -100,6 +101,55 @@ def test_large_snapshot_gap_invalidates_final_evidence_gate() -> None:
     assert result["accepted"] is False
 
 
+def test_risk_and_validation_metrics_use_durable_snapshot_pnl_curve() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=30)
+    timestamps = (
+        start,
+        start + timedelta(days=10),
+        start + timedelta(days=20),
+        end,
+    )
+    baseline = replace(
+        _observed_dataset("baseline", start, end, timestamps),
+        snapshot_pnl_curve=(
+            (start, Decimal("0")),
+            (start + timedelta(days=10), Decimal("100")),
+            (start + timedelta(days=20), Decimal("-100")),
+            (end, Decimal("0")),
+        ),
+    )
+    candidate = replace(
+        _observed_dataset("candidate", start, end, timestamps),
+        snapshot_pnl_curve=(
+            (start, Decimal("0")),
+            (start + timedelta(days=10), Decimal("50")),
+            (start + timedelta(days=20), Decimal("40")),
+            (end, Decimal("60")),
+        ),
+    )
+
+    result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
+
+    assert result["snapshot_risk"]["source"] == "portfolio_snapshots"
+    assert result["snapshot_risk"]["baseline_median_monthly_pnl"] == "0"
+    assert result["snapshot_risk"]["candidate_median_monthly_pnl"] == "60"
+    assert result["snapshot_risk"]["baseline_max_drawdown"] == str(
+        Decimal("200") / Decimal("6350")
+    )
+    assert result["snapshot_risk"]["candidate_max_drawdown"] == str(
+        Decimal("10") / Decimal("6300")
+    )
+    assert result["checks"]["median_monthly_pnl_higher"] is True
+    assert result["checks"]["max_drawdown_not_higher"] is True
+    assert result["profitable_candidate_windows"] == 2
+    assert [window["net_pnl"] for window in result["validation_windows"]] == [
+        "0",
+        "50",
+        "10",
+    ]
+
+
 def test_latest_uncommitted_snapshot_is_excluded_from_completed_overlap() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=31)
@@ -124,7 +174,12 @@ def test_latest_uncommitted_snapshot_is_excluded_from_completed_overlap() -> Non
 def test_rolling_window_boundary_event_is_counted_only_once() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=30)
-    timestamps = (start, end)
+    timestamps = (
+        start,
+        start + timedelta(days=10),
+        start + timedelta(days=20),
+        end,
+    )
     baseline = _observed_dataset("baseline", start, end, timestamps)
     candidate = _observed_dataset("candidate", start, end, timestamps)
     candidate.events.append(
@@ -138,10 +193,23 @@ def test_rolling_window_boundary_event_is_counted_only_once() -> None:
             pnl=Decimal("1"),
         )
     )
+    candidate = replace(
+        candidate,
+        snapshot_pnl_curve=(
+            (start, Decimal("0")),
+            (start + timedelta(days=10), Decimal("1")),
+            (start + timedelta(days=20), Decimal("1")),
+            (end, Decimal("1")),
+        ),
+    )
 
     result = compare_paper_datasets(baseline, candidate, Decimal("6250"))
 
     assert result["profitable_candidate_windows"] == 1
+    assert all(
+        window["source"] == "portfolio_snapshots"
+        for window in result["validation_windows"]
+    )
 
 
 def test_negative_baseline_does_not_allow_merely_less_negative_candidate() -> None:
