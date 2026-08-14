@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -15,9 +16,29 @@ from funding_arbitrage.notifications.telegram import (
 )
 from funding_arbitrage.services.daily_report import (
     DailyReportService,
+    _local_day_utc_bounds,
     _no_fill_note,
     _runner_state,
 )
+
+
+@pytest.mark.parametrize(
+    ("report_date", "expected_hours"),
+    (
+        (date(2026, 3, 29), 23),
+        (date(2026, 10, 25), 25),
+    ),
+)
+def test_daily_report_uses_exact_kyiv_calendar_day_across_dst(
+    report_date: date, expected_hours: int
+) -> None:
+    timezone = ZoneInfo("Europe/Kyiv")
+
+    start, end = _local_day_utc_bounds(report_date, timezone)
+
+    assert end - start == timedelta(hours=expected_hours)
+    assert start.astimezone(timezone).date() == report_date
+    assert end.astimezone(timezone).date() == report_date + timedelta(days=1)
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,18 @@ from funding_arbitrage.notifications.telegram import TelegramNotifier
 logger = logging.getLogger(__name__)
 
 
+def _local_day_utc_bounds(
+    report_date: date, timezone: tzinfo
+) -> tuple[datetime, datetime]:
+    """Return UTC bounds for one local calendar day, including DST changes."""
+
+    start_local = datetime.combine(report_date, time.min, tzinfo=timezone)
+    end_local = datetime.combine(
+        report_date + timedelta(days=1), time.min, tzinfo=timezone
+    )
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
+
+
 @dataclass(frozen=True)
 class _PortfolioReport:
     label: str
@@ -169,9 +181,7 @@ class DailyReportService:
             return True
 
     async def _build_message(self, session: AsyncSession, report_date: date) -> str:
-        start_local = datetime.combine(report_date, time.min, tzinfo=self.timezone)
-        start = start_local.astimezone(UTC)
-        end = (start_local + timedelta(days=1)).astimezone(UTC)
+        start, end = _local_day_utc_bounds(report_date, self.timezone)
         autotrade_start = self.settings.paper_autotrade_start_utc
         signal_start = max(start, min(autotrade_start, end)) if autotrade_start else start
         candidate = await self._load_portfolio_report(
