@@ -28,8 +28,8 @@ goal remains open until every row is proven, including the last two rows.
 | Time-synchronized cross-venue differential | Historical-window projection and no-look-ahead replay tests | Proven |
 | No unsupported short spot; hourly borrow accrual where enabled | Scanner gate, borrow config, and runner accrual test | Proven |
 | Liquidity/staleness/history filters before confirmation | Opportunity filters, candidate history routing, and funnel evidence | Proven |
-| WebSocket tickers/order books primary; REST recovery | Collector stream tests and VM stream-age metrics | Proven |
-| Concurrent venue collection, limits, circuit breakers | Collector/adapters and failure-path tests | Proven |
+| WebSocket tickers/order books primary; REST recovery | Collector stream tests and VM two-sample stream ages prove fresh ticker/orderbook data on all five venues; REST remains snapshot/recovery/history only | Proven locally and running |
+| Concurrent venue collection, limits, circuit breakers, and cycle latency | Collector/adapters and failure-path tests. With a configured `30s` loop, a post-boundary DB sample of 45 exact gaps per profile was identical for candidate/baseline: average `31.495s`, p50 `31.158s`, p95 `48.280s`, max `63.862s`, and zero gaps over `300s`. Prometheus observed 89 completed cycles averaging `7.60s`, with collection averaging `6.43s` and scan averaging about `0.19s` per profile; longer gaps were fail-closed incomplete-venue skips rather than cycle errors | Proven locally and running |
 
 ## Capital, exits, and observability
 
