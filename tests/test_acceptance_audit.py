@@ -17,6 +17,35 @@ from funding_arbitrage.api.routes.analytics import (
 )
 
 
+def test_operator_gate_requires_clean_boundary_and_exact_versions() -> None:
+    with pytest.raises(SystemExit):
+        audit_module._parse_args([])
+    with pytest.raises(SystemExit):
+        audit_module._parse_args(
+            [
+                "--start",
+                "2026-08-14T08:40:00Z",
+                "--candidate-version",
+                "v31-oos-candidate",
+            ]
+        )
+
+    args = audit_module._parse_args(
+        [
+            "--start",
+            "2026-08-14T08:40:00Z",
+            "--candidate-version",
+            "v31-oos-candidate",
+            "--baseline-version",
+            "v31-oos-baseline",
+        ]
+    )
+
+    assert args.start == "2026-08-14T08:40:00Z"
+    assert args.candidate_version == "v31-oos-candidate"
+    assert args.baseline_version == "v31-oos-baseline"
+
+
 def _operational(**updates: object) -> dict[str, object]:
     venues = ("binance", "bybit", "gate", "hyperliquid", "okx")
     values: dict[str, object] = {

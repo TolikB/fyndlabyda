@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -463,12 +464,16 @@ def _normalize_utc(value: object) -> str | None:
     return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--candidate-version", default="v30-oos-candidate")
-    parser.add_argument("--baseline-version", default="v30-oos-baseline")
-    parser.add_argument("--start", help="Optional ISO-8601 start of the clean canary window")
+    parser.add_argument("--candidate-version", required=True)
+    parser.add_argument("--baseline-version", required=True)
+    parser.add_argument(
+        "--start",
+        required=True,
+        help="ISO-8601 start of the clean canary window",
+    )
     parser.add_argument("--gate", choices=("canary", "acceptance"), default="canary")
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument(
@@ -477,7 +482,7 @@ def _parse_args() -> argparse.Namespace:
         default=2,
         help="Delay between two WS heartbeat samples; use 0 for one sample",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:

@@ -415,15 +415,15 @@ async def _load_and_audit(args: argparse.Namespace) -> dict[str, Any]:
         await engine.dispose()
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", required=True)
-    parser.add_argument("--candidate-version", default="v30-oos-candidate")
-    parser.add_argument("--baseline-version", default="v30-oos-baseline")
+    parser.add_argument("--candidate-version", required=True)
+    parser.add_argument("--baseline-version", required=True)
     parser.add_argument("--observed-at")
     parser.add_argument("--maximum-target-delay-seconds", type=int, default=300)
     parser.add_argument("--require-payments", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:

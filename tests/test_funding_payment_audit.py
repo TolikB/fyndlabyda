@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+from scripts import funding_payment_audit as audit_module
 from scripts.funding_payment_audit import audit_funding_payments
 
 from funding_arbitrage.database.models import (
@@ -8,6 +10,27 @@ from funding_arbitrage.database.models import (
     PaperFundingPaymentRecord,
     PaperPositionRecord,
 )
+
+
+def test_funding_gate_requires_exact_versions() -> None:
+    with pytest.raises(SystemExit):
+        audit_module._parse_args(["--start", "2026-08-14T08:40:00Z"])
+
+    args = audit_module._parse_args(
+        [
+            "--start",
+            "2026-08-14T08:40:00Z",
+            "--candidate-version",
+            "v31-oos-candidate",
+            "--baseline-version",
+            "v31-oos-baseline",
+            "--require-payments",
+        ]
+    )
+
+    assert args.candidate_version == "v31-oos-candidate"
+    assert args.baseline_version == "v31-oos-baseline"
+    assert args.require_payments is True
 
 
 def _history(exchange: str, symbol: str, at: datetime, rate: str) -> FundingHistoryRecord:
