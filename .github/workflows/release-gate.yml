@@ -59,6 +59,7 @@ jobs:
           python -m compileall -q src scripts migrations
           python -m ruff check src tests scripts migrations
           python -m mypy src
+          python scripts/v1_acceptance_audit.py
           python -m pytest -q
 
       - name: Audit production dependencies

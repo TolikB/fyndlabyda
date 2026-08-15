@@ -463,3 +463,35 @@ class LiveFundingPaymentRecord(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     currency: Mapped[str] = mapped_column(String(32), index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class CanonicalEventRecord(Base):
+    """Append-only canonical event journal used by runtime and deterministic replay."""
+
+    __tablename__ = "canonical_events"
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_canonical_event_id"),
+        Index(
+            "ix_canonical_events_replay",
+            "exchange_timestamp",
+            "monotonic_ns",
+            "event_id",
+        ),
+        Index("ix_canonical_events_source_sequence", "source", "sequence_id"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    event_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    source: Mapped[str] = mapped_column(String(128), index=True)
+    sequence_id: Mapped[str] = mapped_column(String(128))
+    correlation_id: Mapped[str] = mapped_column(String(128), index=True)
+    payload_version: Mapped[int] = mapped_column(Integer)
+    quality: Mapped[str] = mapped_column(String(24), index=True)
+    exchange_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    receive_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    monotonic_ns: Mapped[int] = mapped_column(BigInteger)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)

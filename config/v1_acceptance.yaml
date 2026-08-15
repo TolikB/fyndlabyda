@@ -1,0 +1,437 @@
+schema_version: 1
+specification:
+  title: Automated Multi-Regime Crypto Trading System
+  version: "1.0"
+  date: "2026-08-15"
+release:
+  name: V1
+  all_scope_single_v1: true
+  includes_original_v1: true
+  includes_original_exclusions: true
+  includes_original_v2: true
+  deferred_releases: []
+  default_mode: SAFE_MODE
+safety:
+  explicit_live_authorization_required: true
+  private_credentials_forbidden_in_ci: true
+  real_orders_forbidden_by_default: true
+  withdrawals_forbidden_by_default: true
+  dangerous_capabilities:
+    - automated_withdrawals
+    - dex_execution
+    - grid_averaging
+    - live_llm_decisions
+    - live_rl_decisions
+    - loss_averaging
+    - martingale
+    - mev_execution
+  dangerous_capabilities_default_enabled: false
+required_modes:
+  - BACKTEST
+  - REPLAY
+  - SHADOW
+  - PAPER
+  - LIMITED_LIVE
+  - LIVE
+  - SAFE_MODE
+quality_gates:
+  overall_coverage_percent: 85
+  critical_coverage_percent: 95
+  out_of_sample_profit_factor_min: 1.25
+  out_of_sample_expectancy_r_min: 0.15
+  out_of_sample_sharpe_min: 1.5
+  max_drawdown_percent: 12
+  profitable_walk_forward_windows_percent_min: 65
+  max_single_strategy_pnl_share_percent: 60
+  max_cost_share_of_gross_alpha_percent: 30
+  doubled_slippage_must_remain_profitable: true
+
+# `status` is evidence maturity, never an implementation priority.
+# Existing funding components are partial until they satisfy this specification's
+# canonical event, OMS, replay, security, and elapsed-time acceptance gates.
+requirements:
+  - id: ARCH-001
+    category: architecture
+    title: Strategy intent is separated from validation, risk, execution plan, OMS, and adapter
+    status: partial
+    evidence:
+      - src/funding_arbitrage/domain/decisions.py
+      - tests/test_domain_decisions.py
+  - id: ARCH-002
+    category: architecture
+    title: Canonical typed models cover market, account, order, fill, position, and balance events
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/domain/events.py
+      - tests/test_domain_events.py
+  - id: ARCH-003
+    category: architecture
+    title: Every event carries exchange, receive, monotonic, sequence, source, correlation, and payload-version metadata
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/domain/events.py
+      - tests/test_domain_events.py
+  - id: ARCH-004
+    category: architecture
+    title: Event processing is idempotent, restart-safe, deterministic, and replayable
+    status: partial
+    evidence:
+      - src/funding_arbitrage/database/repositories/events.py
+      - migrations/versions/0011_canonical_events.py
+      - tests/test_event_journal.py
+  - id: MODE-001
+    category: architecture
+    title: BACKTEST, REPLAY, SHADOW, PAPER, LIMITED_LIVE, LIVE, and SAFE_MODE share explicit contracts
+    status: partial
+    evidence:
+      - src/funding_arbitrage/config.py
+  - id: MD-001
+    category: market_data
+    title: Native public WebSocket and REST recovery adapters cover all eight existing CEX venues
+    status: partial
+    evidence:
+      - src/funding_arbitrage/exchanges
+  - id: MD-002
+    category: market_data
+    title: Private order, fill, position, balance, and account streams are normalized and reconciled
+    status: missing
+    evidence: []
+  - id: MD-003
+    category: market_data
+    title: L1 and L2 books reconstruct snapshot plus deltas with sequence and checksum recovery
+    status: missing
+    evidence: []
+  - id: MD-004
+    category: market_data
+    title: Tick trades, OHLCV, mark, index, funding, OI, and public liquidations are collected
+    status: partial
+    evidence:
+      - src/funding_arbitrage/exchanges/base/models.py
+  - id: MD-005
+    category: market_data
+    title: Data quality states detect stale, gap, crossed, invalid, recovering, and unavailable streams
+    status: partial
+    evidence:
+      - src/funding_arbitrage/market_data/health.py
+  - id: MD-006
+    category: market_data
+    title: Instrument metadata, capabilities, precision, fees, rate limits, and clock skew are dynamic per venue
+    status: partial
+    evidence:
+      - src/funding_arbitrage/exchanges
+  - id: FEAT-001
+    category: features
+    title: Incremental EMA, ATR, ADX, efficiency ratio, VWAP, and volume profile features exist
+    status: missing
+    evidence: []
+  - id: FEAT-002
+    category: features
+    title: Incremental swing, BOS, CHoCH, liquidity-zone, and fair-value-gap features exist
+    status: missing
+    evidence: []
+  - id: FEAT-003
+    category: features
+    title: Incremental OFI, microprice, book imbalance, trade flow, and CVD features exist
+    status: missing
+    evidence: []
+  - id: FEAT-004
+    category: features
+    title: Incremental OI, funding, mark-index basis, and derivatives features exist
+    status: missing
+    evidence: []
+  - id: REG-001
+    category: regime
+    title: Deterministic classifier covers trend, range, transition, volatility expansion, stress, and unknown
+    status: missing
+    evidence: []
+  - id: REG-002
+    category: regime
+    title: Regime transitions use hysteresis, minimum dwell, confidence, and deterministic replay
+    status: missing
+    evidence: []
+  - id: STRAT-001
+    category: strategies
+    title: Regime-filtered orderflow breakout implements score, entry, stop, target, and time stop
+    status: missing
+    evidence: []
+  - id: STRAT-002
+    category: strategies
+    title: Liquidity-sweep and failed-breakout reversion implements score, entry, stop, target, and time stop
+    status: missing
+    evidence: []
+  - id: STRAT-003
+    category: strategies
+    title: Funding and basis harvest uses exact settlements, forecast, borrow, fees, basis, and leg state machine
+    status: partial
+    evidence:
+      - src/funding_arbitrage/opportunity
+      - src/funding_arbitrage/services/paper_runner.py
+  - id: STRAT-004
+    category: strategies
+    title: Cross-exchange lead-lag fair value is a meta-filter and executable statistical-arbitrage strategy
+    status: missing
+    evidence: []
+  - id: STRAT-005
+    category: strategies
+    title: Perpetual versus dated-futures basis strategy is implemented
+    status: missing
+    evidence: []
+  - id: STRAT-006
+    category: strategies
+    title: Options volatility strategies and options risk models are implemented
+    status: missing
+    evidence: []
+  - id: STRAT-007
+    category: strategies
+    title: Passive market making is inventory-, adverse-selection-, and fee-aware
+    status: missing
+    evidence: []
+  - id: STRAT-008
+    category: strategies
+    title: Liquid-altcoin universe selection is dynamic, quality-gated, and survivorship-safe
+    status: missing
+    evidence: []
+  - id: STRAT-009
+    category: strategies
+    title: Martingale, grid, and loss-averaging research modules are configurable and fail-closed for live use
+    status: missing
+    evidence: []
+  - id: AI-001
+    category: strategies
+    title: ML meta-labeling has versioned datasets, leakage controls, calibration, drift, and fallback
+    status: missing
+    evidence: []
+  - id: AI-002
+    category: strategies
+    title: RL decisions have constrained action space, offline evaluation, guardrails, and deterministic fallback
+    status: missing
+    evidence: []
+  - id: AI-003
+    category: strategies
+    title: LLM decisions use versioned schemas, bounded latency and spend, audit, and deterministic fallback
+    status: missing
+    evidence: []
+  - id: SIG-001
+    category: strategies
+    title: Signal orchestrator enforces schema, TTL, deduplication, conflicts, correlation, and allocation policy
+    status: missing
+    evidence: []
+  - id: RISK-001
+    category: risk
+    title: Portfolio risk is the sole authority that approves, resizes, or rejects intents
+    status: partial
+    evidence:
+      - src/funding_arbitrage/risk
+  - id: RISK-002
+    category: risk
+    title: Risk hierarchy covers order, position, asset, strategy, venue, correlation group, and portfolio
+    status: partial
+    evidence:
+      - src/funding_arbitrage/risk/engine.py
+  - id: RISK-003
+    category: risk
+    title: Kill switches cover strategy, venue, portfolio, stale data, loss, reconciliation, and operator control
+    status: partial
+    evidence:
+      - src/funding_arbitrage/risk/live.py
+  - id: RISK-004
+    category: risk
+    title: Sizing includes stop distance, liquidity, volatility, correlation, margin, and delta exposure
+    status: missing
+    evidence: []
+  - id: RISK-005
+    category: risk
+    title: Portfolio-margin simulation and venue-specific margin/liquidation risk are implemented
+    status: missing
+    evidence: []
+  - id: EXE-001
+    category: execution
+    title: Durable OMS state machine covers new, acknowledged, partial, filled, cancel, rejected, expired, unknown, and reconciling
+    status: partial
+    evidence:
+      - src/funding_arbitrage/execution/live.py
+  - id: EXE-002
+    category: execution
+    title: Client order IDs, persist-before-submit, unknown-outcome recovery, and cancel-race handling are enforced
+    status: partial
+    evidence:
+      - src/funding_arbitrage/execution/live.py
+  - id: EXE-003
+    category: execution
+    title: Marketable capped limits, all-in cost, slippage guard, partial fills, and emergency flatten are implemented
+    status: partial
+    evidence:
+      - src/funding_arbitrage/execution/live.py
+  - id: EXE-004
+    category: execution
+    title: Exchange-side reduce-only protective stops survive process failure and reconcile after restart
+    status: missing
+    evidence: []
+  - id: EXE-005
+    category: execution
+    title: Smart order router optimizes all-in execution across venues and handles partial routing
+    status: missing
+    evidence: []
+  - id: EXE-006
+    category: execution
+    title: DEX execution handles approvals, nonce, gas, slippage, reorg, replacement, and finality
+    status: missing
+    evidence: []
+  - id: EXE-007
+    category: execution
+    title: On-chain MEV execution handles simulation, bundle policy, reorgs, private relay, and loss bounds
+    status: missing
+    evidence: []
+  - id: EXE-008
+    category: execution
+    title: Native low-latency path supports colocation-capable sub-10ms budgets with measured telemetry
+    status: missing
+    evidence: []
+  - id: PORT-001
+    category: portfolio
+    title: Double-entry ledger reconciles cash, collateral, positions, realized, unrealized, fees, funding, borrow, gas, and transfers
+    status: partial
+    evidence:
+      - src/funding_arbitrage/portfolio
+      - src/funding_arbitrage/database/models.py
+  - id: PORT-002
+    category: portfolio
+    title: Continuous local versus venue order, fill, balance, position, and funding reconciliation is classified and audited
+    status: partial
+    evidence:
+      - src/funding_arbitrage/execution/reconciliation.py
+  - id: PORT-003
+    category: portfolio
+    title: Automated withdrawal state machine is idempotent, allowlisted, multi-approved, capped, and disabled by default
+    status: missing
+    evidence: []
+  - id: BT-001
+    category: backtest
+    title: Deterministic event-driven backtest and replay use the same strategy, risk, and OMS contracts as runtime
+    status: partial
+    evidence:
+      - src/funding_arbitrage/backtest
+  - id: BT-002
+    category: backtest
+    title: Fill models cover aggressive, passive queue, latency, partials, impact, rejections, cancel races, and funding
+    status: missing
+    evidence: []
+  - id: BT-003
+    category: backtest
+    title: Research prevents look-ahead and survivorship bias and supports walk-forward, Monte Carlo, and stress
+    status: missing
+    evidence: []
+  - id: BT-004
+    category: backtest
+    title: Research gates enforce profitability, expectancy, Sharpe, drawdown, diversification, and doubled-slippage robustness
+    status: partial
+    evidence:
+      - src/funding_arbitrage/backtest/comparison.py
+  - id: DATA-001
+    category: storage
+    title: PostgreSQL operational schema covers instruments, intents, orders, fills, positions, balances, risk, reconciliation, and audit
+    status: partial
+    evidence:
+      - src/funding_arbitrage/database/models.py
+      - migrations/versions
+  - id: DATA-002
+    category: storage
+    title: ClickHouse stores raw market events, features, signals, and telemetry with retention
+    status: missing
+    evidence: []
+  - id: DATA-003
+    category: storage
+    title: Redis supports bounded ephemeral state without becoming accounting authority
+    status: partial
+    evidence:
+      - docker-compose.yml
+  - id: DATA-004
+    category: storage
+    title: Parquet datasets are versioned, checksummed, reproducible, and replayable
+    status: missing
+    evidence: []
+  - id: DATA-005
+    category: storage
+    title: Immutable raw event and audit retention supports exact incident reconstruction
+    status: partial
+    evidence:
+      - src/funding_arbitrage/database/repositories/events.py
+      - migrations/versions/0011_canonical_events.py
+      - tests/test_event_journal.py
+  - id: SEC-001
+    category: security
+    title: Control plane enforces JWT, mTLS, RBAC, idempotency, rate limits, and immutable audit
+    status: missing
+    evidence: []
+  - id: SEC-002
+    category: security
+    title: Secrets use least privilege, no-withdraw keys by default, IP allowlists, subaccounts, rotation, and redaction
+    status: partial
+    evidence:
+      - src/funding_arbitrage/config.py
+      - .env.live.example
+  - id: SEC-003
+    category: security
+    title: Databases are non-public and service traffic supports TLS and authenticated access
+    status: partial
+    evidence:
+      - docker-compose.yml
+  - id: OBS-001
+    category: monitoring
+    title: Prometheus and Grafana expose market, strategy, risk, OMS, portfolio, reconciliation, and latency telemetry
+    status: partial
+    evidence:
+      - src/funding_arbitrage/monitoring/metrics.py
+      - docker/prometheus.yml
+  - id: OBS-002
+    category: monitoring
+    title: Actionable alerts cover stale data, gaps, latency, rejects, unknown orders, exposure, drawdown, and reconciliation drift
+    status: missing
+    evidence: []
+  - id: API-001
+    category: security
+    title: Read and controlled-write API endpoints are authenticated, authorized, idempotent, validated, and audited
+    status: missing
+    evidence: []
+  - id: QA-001
+    category: delivery
+    title: Unit, integration, contract, replay, and failure-injection suites meet 85 percent overall and 95 percent critical coverage
+    status: partial
+    evidence:
+      - tests
+  - id: QA-002
+    category: delivery
+    title: CI runs lint, type, unit, integration, replay, security, container scan, signing, shadow deploy, and manual live gate
+    status: partial
+    evidence:
+      - .github/workflows/release-gate.yml
+  - id: QA-003
+    category: delivery
+    title: Docker Compose, Terraform, Vault integration, Chrony, backups, restore, and runbooks are verified
+    status: missing
+    evidence: []
+  - id: QA-004
+    category: delivery
+    title: P99 latency budgets and reliability SLOs are measured under representative load
+    status: missing
+    evidence: []
+  - id: GATE-001
+    category: delivery
+    title: Shadow acceptance window completes without accounting, risk, or reconciliation violations
+    status: missing
+    evidence: []
+  - id: GATE-002
+    category: delivery
+    title: Paper acceptance window proves realistic fills, costs, failure behavior, and deterministic reports
+    status: missing
+    evidence: []
+  - id: GATE-003
+    category: delivery
+    title: Limited Live is formally approved only after technical, research, shadow, paper, failure, and security gates
+    status: missing
+    evidence: []
+  - id: GATE-004
+    category: delivery
+    title: Full V1 completion audit proves every manifest requirement accepted with authoritative evidence
+    status: missing
+    evidence: []
