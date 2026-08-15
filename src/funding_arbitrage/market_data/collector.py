@@ -246,6 +246,11 @@ class MarketDataCollector:
             )
         )
         self._funding_history_cache.update(funding_history)
+        active_history_keys = {(item.exchange, item.symbol) for item in funding}
+        active_venues = {adapter.name for adapter in active_adapters}
+        for key in tuple(self._funding_history_cache):
+            if key[0] in active_venues and key not in active_history_keys:
+                self._funding_history_cache.pop(key, None)
         return MarketSnapshot(
             instruments=instruments,
             tickers=tickers,
@@ -699,9 +704,8 @@ class MarketDataCollector:
                 for ticker in tickers
             )
         )
-        if not symbols:
-            return
         target = frozenset(symbols)
+        self._prune_stream_ticker_cache(adapter.name, target)
         existing = self._stream_tasks.get(adapter.name)
         if (
             existing is not None
@@ -713,6 +717,9 @@ class MarketDataCollector:
             existing.cancel()
         self._stream_ticker_requests[adapter.name] = target
         exchange_stream_last_message_timestamp.labels(adapter.name, "ticker").set(0)
+        if not target:
+            self._stream_tasks.pop(adapter.name, None)
+            return
         self._stream_tasks[adapter.name] = asyncio.create_task(
             self._consume_ticker_stream(adapter, symbols),
             name=f"market-tickers-{adapter.name}",
@@ -725,6 +732,10 @@ class MarketDataCollector:
     ) -> None:
         try:
             async for ticker in adapter.stream_tickers(symbols):
+                requested = self._stream_ticker_requests.get(adapter.name)
+                market = (ticker.symbol, ticker.instrument_type)
+                if requested is not None and market not in requested:
+                    continue
                 if _is_valid_ticker(ticker):
                     self._stream_ticker_cache[
                         (ticker.exchange, ticker.symbol, ticker.instrument_type)
@@ -745,9 +756,10 @@ class MarketDataCollector:
         adapter: ExchangeAdapter,
         requests: list[tuple[str, InstrumentType]],
     ) -> None:
-        if not self.enable_streams or not requests:
+        if not self.enable_streams:
             return
         target = frozenset(requests)
+        self._prune_stream_orderbook_cache(adapter.name, target)
         existing = self._orderbook_stream_tasks.get(adapter.name)
         if (
             existing is not None
@@ -761,6 +773,9 @@ class MarketDataCollector:
         exchange_stream_last_message_timestamp.labels(
             adapter.name, "orderbook"
         ).set(0)
+        if not target:
+            self._orderbook_stream_tasks.pop(adapter.name, None)
+            return
         self._orderbook_stream_tasks[adapter.name] = asyncio.create_task(
             self._consume_orderbook_stream(adapter, list(target)),
             name=f"market-orderbooks-{adapter.name}",
@@ -773,6 +788,10 @@ class MarketDataCollector:
     ) -> None:
         try:
             async for book in adapter.stream_orderbooks(requests, 20):
+                requested = self._orderbook_stream_requests.get(adapter.name)
+                market = (book.symbol, book.instrument_type)
+                if requested is not None and market not in requested:
+                    continue
                 self._stream_orderbook_cache[
                     (book.exchange, book.symbol, book.instrument_type)
                 ] = book
@@ -791,6 +810,27 @@ class MarketDataCollector:
                 "market_orderbook_stream_failed",
                 extra={"exchange": adapter.name, "event": "market_data_stream"},
             )
+
+    def _prune_stream_ticker_cache(
+        self,
+        exchange: str,
+        target: frozenset[tuple[str, InstrumentType]],
+    ) -> None:
+        for key in tuple(self._stream_ticker_cache):
+            if key[0] == exchange and (key[1], key[2]) not in target:
+                self._stream_ticker_cache.pop(key, None)
+
+    def _prune_stream_orderbook_cache(
+        self,
+        exchange: str,
+        target: frozenset[tuple[str, InstrumentType]],
+    ) -> None:
+        for key in tuple(self._stream_orderbook_cache):
+            if key[0] == exchange and (key[1], key[2]) not in target:
+                self._stream_orderbook_cache.pop(key, None)
+        for key in tuple(self._last_rest_book_fetch):
+            if key[0] == exchange and (key[1], key[2]) not in target:
+                self._last_rest_book_fetch.pop(key, None)
 
     def _book_needs_rest_validation(
         self,

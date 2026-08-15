@@ -189,6 +189,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             max_age = max(
                 active_settings.market_data_stale_seconds * 3,
                 active_settings.paper_loop_interval_seconds * 3,
+                300,
             )
             if age > max_age:
                 raise HTTPException(status_code=503, detail="paper market snapshot is stale")

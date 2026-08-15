@@ -228,6 +228,110 @@ async def test_collector_records_ticker_and_orderbook_stream_heartbeats() -> Non
 
 
 @pytest.mark.asyncio
+async def test_collector_prunes_retired_stream_markets() -> None:
+    adapter = MockExchangeAdapter("bybit", sleep=0)
+    collector = MarketDataCollector([adapter], enable_streams=True)
+    now = datetime.now(UTC)
+    old_market = ("OLDUSDT", InstrumentType.PERPETUAL)
+    new_market = ("BTCUSDT", InstrumentType.PERPETUAL)
+    old_key = (adapter.name, *old_market)
+    old_ticker = next(
+        ticker
+        for ticker in await adapter.get_tickers()
+        if ticker.instrument_type is InstrumentType.PERPETUAL
+    ).model_copy(update={"symbol": old_market[0], "timestamp": now})
+    collector._stream_ticker_cache[old_key] = old_ticker
+    collector._stream_orderbook_cache[old_key] = await adapter.get_orderbook(
+        old_market[0], 20, old_market[1]
+    )
+    collector._last_rest_book_fetch[old_key] = now
+
+    collector._ensure_ticker_stream(
+        adapter,
+        [old_ticker.model_copy(update={"symbol": new_market[0]})],
+    )
+    collector._ensure_orderbook_stream(adapter, [new_market])
+
+    assert old_key not in collector._stream_ticker_cache
+    assert old_key not in collector._stream_orderbook_cache
+    assert old_key not in collector._last_rest_book_fetch
+    await collector.close()
+
+
+@pytest.mark.asyncio
+async def test_retired_stream_consumer_cannot_reinsert_old_market() -> None:
+    class RetiredStreamMock(MockExchangeAdapter):
+        def stream_tickers(
+            self, symbols: list[tuple[str, InstrumentType]]
+        ) -> AsyncIterator[Ticker]:
+            del symbols
+            return self._old_ticker_stream()
+
+        async def _old_ticker_stream(self) -> AsyncIterator[Ticker]:
+            ticker = next(
+                row
+                for row in await MockExchangeAdapter.get_tickers(self)
+                if row.instrument_type is InstrumentType.PERPETUAL
+            )
+            yield ticker.model_copy(update={"symbol": "OLDUSDT"})
+
+        def stream_orderbooks(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int = 20,
+        ) -> AsyncIterator[OrderBook]:
+            del symbols
+            return self._old_book_stream(depth)
+
+        async def _old_book_stream(self, depth: int) -> AsyncIterator[OrderBook]:
+            yield await MockExchangeAdapter.get_orderbook(
+                self, "OLDUSDT", depth, InstrumentType.PERPETUAL
+            )
+
+    adapter = RetiredStreamMock("bybit", sleep=0)
+    collector = MarketDataCollector([adapter], enable_streams=True)
+    active = frozenset({("BTCUSDT", InstrumentType.PERPETUAL)})
+    collector._stream_ticker_requests[adapter.name] = active
+    collector._orderbook_stream_requests[adapter.name] = active
+
+    await collector._consume_ticker_stream(
+        adapter, [("OLDUSDT", InstrumentType.PERPETUAL)]
+    )
+    await collector._consume_orderbook_stream(
+        adapter, [("OLDUSDT", InstrumentType.PERPETUAL)]
+    )
+
+    assert not collector._stream_ticker_cache
+    assert not collector._stream_orderbook_cache
+
+
+@pytest.mark.asyncio
+async def test_collector_bounds_history_cache_to_current_funding_universe() -> None:
+    adapter = MockExchangeAdapter("bybit", sleep=0)
+    collector = MarketDataCollector([adapter], enable_streams=False)
+    old_key = (adapter.name, "OLDUSDT")
+    collector.seed_funding_history(
+        {
+            old_key: [
+                FundingHistoryPoint(
+                    exchange=adapter.name,
+                    symbol=old_key[1],
+                    funding_rate=Decimal("0.0001"),
+                    funding_timestamp=datetime.now(UTC) - timedelta(hours=8),
+                )
+            ]
+        }
+    )
+
+    snapshot = await collector.collect_once(include_history=True)
+
+    assert old_key not in collector._funding_history_cache
+    assert set(snapshot.funding_history) == {
+        (item.exchange, item.symbol) for item in snapshot.funding
+    }
+
+
+@pytest.mark.asyncio
 async def test_collector_keeps_fresh_websocket_tickers_when_rest_validation_fails() -> None:
     class RestFailingMock(MockExchangeAdapter):
         def __init__(self) -> None:

@@ -41,6 +41,10 @@ def test_every_service_has_cpu_and_memory_limits() -> None:
         assert service.get("cpus"), name
         assert service.get("mem_limit"), name
 
+    app = services["app"]
+    assert app["cpus"] == "1.00"
+    assert app["mem_limit"] == "1024m"
+
 
 def test_every_service_has_bounded_json_log_rotation() -> None:
     services = _compose()["services"]
