@@ -13,6 +13,7 @@ from funding_arbitrage.config import Settings
 from funding_arbitrage.notifications.telegram import (
     TelegramNotificationError,
     TelegramNotifier,
+    _telegram_chunks,
 )
 from funding_arbitrage.services.daily_report import (
     DailyReportService,
@@ -56,6 +57,16 @@ async def test_telegram_notifier_uses_bot_api_without_logging_secret() -> None:
     )
     await notifier.send_message("paper report")
     await client.aclose()
+
+
+def test_telegram_chunks_preserve_long_report_without_truncation() -> None:
+    report = "\n".join(f"venue-{index}: stats" for index in range(500))
+
+    chunks = _telegram_chunks(report)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 4096 for chunk in chunks)
+    assert "".join(chunks) == report
 
 
 @pytest.mark.asyncio
@@ -106,6 +117,9 @@ class ReportSession:
 
     async def scalar(self, _statement: object) -> object:
         return self.values.pop(0)
+
+    async def execute(self, _statement: object) -> object:
+        return type("EmptyRows", (), {"all": lambda self: []})()
 
     def add(self, value: object) -> None:
         self.added.append(value)

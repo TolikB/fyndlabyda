@@ -39,6 +39,38 @@ def _local_day_utc_bounds(
 
 
 @dataclass(frozen=True)
+class _VenueReport:
+    exchange: str
+    day_positions: int
+    open_positions: int
+    total_positions: int
+    day_fills: int
+    total_fills: int
+    day_funding: Decimal
+    total_funding: Decimal
+    day_fees: Decimal
+    total_fees: Decimal
+    day_slippage: Decimal
+    total_slippage: Decimal
+
+    @property
+    def day_costs(self) -> Decimal:
+        return self.day_fees + self.day_slippage
+
+    @property
+    def total_costs(self) -> Decimal:
+        return self.total_fees + self.total_slippage
+
+    @property
+    def day_funding_after_costs(self) -> Decimal:
+        return self.day_funding - self.day_costs
+
+    @property
+    def total_funding_after_costs(self) -> Decimal:
+        return self.total_funding - self.total_costs
+
+
+@dataclass(frozen=True)
 class _PortfolioReport:
     label: str
     simulation_version: str
@@ -61,6 +93,7 @@ class _PortfolioReport:
     process_starts: int
     had_prior_snapshot: bool
     first_seen: datetime | None
+    venues: tuple[_VenueReport, ...]
 
 
 def _signed_usd(value: Decimal) -> str:
@@ -382,6 +415,12 @@ class DailyReportService:
         total_funding = latest.funding_pnl if latest is not None else Decimal("0")
         total_fees = latest.fees if latest is not None else Decimal("0")
         first_seen = first.timestamp.astimezone(self.timezone) if first is not None else None
+        venues = await self._load_venue_reports(
+            session,
+            simulation_version=simulation_version,
+            start=start,
+            end=end,
+        )
         return _PortfolioReport(
             label=label,
             simulation_version=simulation_version,
@@ -404,7 +443,194 @@ class DailyReportService:
             process_starts=int(process_starts or 0),
             had_prior_snapshot=previous is not None,
             first_seen=first_seen,
+            venues=venues,
         )
+
+    async def _load_venue_reports(
+        self,
+        session: AsyncSession,
+        *,
+        simulation_version: str,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[_VenueReport, ...]:
+        async def fill_totals(
+            *, start_at: datetime | None = None, end_at: datetime | None = None
+        ) -> dict[str, tuple[int, Decimal, Decimal]]:
+            statement = (
+                select(
+                    PaperFillRecord.exchange,
+                    func.count(PaperFillRecord.id),
+                    func.coalesce(func.sum(PaperFillRecord.fee), 0),
+                    func.coalesce(func.sum(PaperFillRecord.slippage), 0),
+                )
+                .join(
+                    PaperPositionRecord,
+                    PaperPositionRecord.position_id == PaperFillRecord.position_id,
+                )
+                .where(PaperPositionRecord.simulation_version == simulation_version)
+            )
+            if start_at is not None:
+                statement = statement.where(PaperFillRecord.timestamp >= start_at)
+            if end_at is not None:
+                statement = statement.where(PaperFillRecord.timestamp < end_at)
+            rows = (await session.execute(statement.group_by(PaperFillRecord.exchange))).all()
+            return {
+                str(exchange): (
+                    int(fill_count),
+                    Decimal(str(fees or 0)),
+                    Decimal(str(slippage or 0)),
+                )
+                for exchange, fill_count, fees, slippage in rows
+            }
+
+        async def funding_totals(
+            *, start_at: datetime | None = None, end_at: datetime | None = None
+        ) -> dict[str, Decimal]:
+            statement = (
+                select(
+                    PaperFundingPaymentRecord.exchange,
+                    func.coalesce(func.sum(PaperFundingPaymentRecord.pnl), 0),
+                )
+                .join(
+                    PaperPositionRecord,
+                    PaperPositionRecord.position_id
+                    == PaperFundingPaymentRecord.position_id,
+                )
+                .where(PaperPositionRecord.simulation_version == simulation_version)
+            )
+            if start_at is not None:
+                statement = statement.where(
+                    PaperFundingPaymentRecord.funding_timestamp >= start_at
+                )
+            if end_at is not None:
+                statement = statement.where(
+                    PaperFundingPaymentRecord.funding_timestamp < end_at
+                )
+            rows = (
+                await session.execute(
+                    statement.group_by(PaperFundingPaymentRecord.exchange)
+                )
+            ).all()
+            return {
+                str(exchange): Decimal(str(funding or 0))
+                for exchange, funding in rows
+            }
+
+        position_rows = (
+            await session.execute(
+                select(
+                    PaperFillRecord.position_id,
+                    PaperFillRecord.exchange,
+                    PaperPositionRecord.state,
+                    PaperPositionRecord.opened_at,
+                    PaperPositionRecord.closed_at,
+                )
+                .join(
+                    PaperPositionRecord,
+                    PaperPositionRecord.position_id == PaperFillRecord.position_id,
+                )
+                .where(
+                    PaperPositionRecord.simulation_version == simulation_version,
+                    PaperFillRecord.position_id.is_not(None),
+                )
+                .distinct()
+            )
+        ).all()
+        day_positions: dict[str, set[str]] = {}
+        open_positions: dict[str, set[str]] = {}
+        total_positions: dict[str, set[str]] = {}
+        active_states = {"OPENING", "OPEN", "CLOSING"}
+        for position_id, exchange, state, opened_at, closed_at in position_rows:
+            venue = str(exchange)
+            opened = (
+                opened_at.replace(tzinfo=UTC)
+                if opened_at is not None and opened_at.tzinfo is None
+                else opened_at
+            )
+            closed = (
+                closed_at.replace(tzinfo=UTC)
+                if closed_at is not None and closed_at.tzinfo is None
+                else closed_at
+            )
+            position_key = str(position_id)
+            total_positions.setdefault(venue, set()).add(position_key)
+            if str(state).upper() in active_states:
+                open_positions.setdefault(venue, set()).add(position_key)
+            if (
+                opened is not None
+                and opened < end
+                and (closed is None or closed >= start)
+            ):
+                day_positions.setdefault(venue, set()).add(position_key)
+
+        day_fills = await fill_totals(start_at=start, end_at=end)
+        total_fills = await fill_totals()
+        day_funding = await funding_totals(start_at=start, end_at=end)
+        total_funding = await funding_totals()
+        venues = (
+            set(total_positions)
+            | set(day_fills)
+            | set(total_fills)
+            | set(day_funding)
+            | set(total_funding)
+        )
+        configured_order = {
+            venue: index for index, venue in enumerate(self.settings.paper_venue_values)
+        }
+        ordered_venues = sorted(
+            venues,
+            key=lambda venue: (configured_order.get(venue, len(configured_order)), venue),
+        )
+        reports: list[_VenueReport] = []
+        for venue in ordered_venues:
+            day_fill_count, day_fee, day_slip = day_fills.get(
+                venue, (0, Decimal("0"), Decimal("0"))
+            )
+            total_fill_count, total_fee, total_slip = total_fills.get(
+                venue, (0, Decimal("0"), Decimal("0"))
+            )
+            reports.append(
+                _VenueReport(
+                    exchange=venue,
+                    day_positions=len(day_positions.get(venue, set())),
+                    open_positions=len(open_positions.get(venue, set())),
+                    total_positions=len(total_positions.get(venue, set())),
+                    day_fills=day_fill_count,
+                    total_fills=total_fill_count,
+                    day_funding=day_funding.get(venue, Decimal("0")),
+                    total_funding=total_funding.get(venue, Decimal("0")),
+                    day_fees=day_fee,
+                    total_fees=total_fee,
+                    day_slippage=day_slip,
+                    total_slippage=total_slip,
+                )
+            )
+        return tuple(reports)
+
+    @staticmethod
+    def _venue_lines(reports: tuple[_VenueReport, ...]) -> list[str]:
+        if not reports:
+            return []
+        lines = [
+            "",
+            "EXCHANGES WITH POSITIONS",
+            "p=positions day/open/total; f=fills day/total; F=funding; C=fees+slippage",
+        ]
+        for report in reports:
+            lines.append(
+                f"{report.exchange.upper()} p {report.day_positions}/"
+                f"{report.open_positions}/{report.total_positions}; "
+                f"f {report.day_fills}/{report.total_fills}; "
+                f"D F {_signed_usd(report.day_funding)} "
+                f"C -${report.day_costs:.2f} "
+                f"FC {_signed_usd(report.day_funding_after_costs)}; "
+                f"T F {_signed_usd(report.total_funding)} "
+                f"C -${report.total_costs:.2f} "
+                f"FC {_signed_usd(report.total_funding_after_costs)}"
+            )
+        lines.append("FC is venue funding minus fees/slippage, not full position Net PnL.")
+        return lines
 
     def _portfolio_lines(self, report: _PortfolioReport) -> list[str]:
         equity_delta = report.equity - report.previous_equity
@@ -453,6 +679,7 @@ class DailyReportService:
                 f"process starts: {report.process_starts}"
             ),
             *([no_trades_note] if no_trades_note is not None else []),
+            *self._venue_lines(report.venues),
             "",
             "TOTAL — CURRENT SIMULATOR",
             f"Equity: ${report.equity:.2f}",
