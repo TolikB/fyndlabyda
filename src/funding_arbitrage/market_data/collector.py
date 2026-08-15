@@ -215,6 +215,12 @@ class MarketDataCollector:
         collections = await self._refresh_funding_aged_during_collection(
             active_adapters, list(collections)
         )
+        collections = await self._refresh_required_tickers_aged_during_collection(
+            active_adapters,
+            collections,
+            orderbook_symbols or {},
+            discovery_orderbook_symbols or {},
+        )
         captured_at = datetime.now(UTC)
         instruments = [item for result in collections for item in result.instruments]
         tickers = [item for result in collections for item in result.tickers]
@@ -315,6 +321,116 @@ class MarketDataCollector:
             )
             self._funding_cache[adapter.name] = value
             self._last_funding_fetch[adapter.name] = refreshed_at
+        return collections
+
+    async def _refresh_required_tickers_aged_during_collection(
+        self,
+        adapters: tuple[ExchangeAdapter, ...],
+        collections: list[_VenueCollection],
+        required_books: dict[str, list[tuple[str, InstrumentType]]],
+        pinned_discovery_books: dict[str, list[tuple[str, InstrumentType]]],
+    ) -> list[_VenueCollection]:
+        """Refresh open-position marks at the shared snapshot boundary."""
+
+        observed_at = datetime.now(UTC)
+        stale_indexes: list[int] = []
+        for index, (adapter, current) in enumerate(
+            zip(adapters, collections, strict=True)
+        ):
+            merged = self._merge_stream_tickers(
+                adapter.name, current.tickers, observed_at
+            )
+            collections[index] = _VenueCollection(
+                current.instruments,
+                merged,
+                current.funding,
+                current.orderbooks,
+                current.funding_history,
+                current.operationally_complete,
+            )
+            if not _required_tickers_are_fresh(
+                adapter.name,
+                merged,
+                required_books.get(adapter.name),
+                observed_at,
+                self.stale_after_seconds,
+            ):
+                stale_indexes.append(index)
+        if stale_indexes:
+            refreshed = await asyncio.gather(
+                *(adapters[index].get_tickers() for index in stale_indexes),
+                return_exceptions=True,
+            )
+            refreshed_at = datetime.now(UTC)
+            for index, value in zip(stale_indexes, refreshed, strict=True):
+                adapter = adapters[index]
+                current = collections[index]
+                if not isinstance(value, list):
+                    collections[index] = _VenueCollection(
+                        current.instruments,
+                        current.tickers,
+                        current.funding,
+                        current.orderbooks,
+                        current.funding_history,
+                        False,
+                    )
+                    logger.warning(
+                        "stale_required_ticker_refresh_failed",
+                        extra={
+                            "exchange": adapter.name,
+                            "event": "market_data_validation",
+                            "error": str(value),
+                        },
+                    )
+                    continue
+                valid_tickers = self._merge_stream_tickers(
+                    adapter.name,
+                    [item for item in value if _is_valid_ticker(item)],
+                    refreshed_at,
+                )
+                venue_instruments = current.instruments
+                venue_funding = current.funding
+                if self.market_asset_limit is not None:
+                    pinned_markets = set(
+                        [
+                            *required_books.get(adapter.name, ()),
+                            *pinned_discovery_books.get(adapter.name, ()),
+                        ]
+                    )
+                    venue_instruments, valid_tickers, venue_funding = (
+                        _limit_venue_universe(
+                            venue_instruments,
+                            valid_tickers,
+                            venue_funding,
+                            self.market_asset_limit,
+                            required_markets=pinned_markets,
+                        )
+                    )
+                operationally_complete = (
+                    current.operationally_complete
+                    and _required_tickers_are_fresh(
+                        adapter.name,
+                        valid_tickers,
+                        required_books.get(adapter.name),
+                        refreshed_at,
+                        self.stale_after_seconds,
+                    )
+                )
+                collections[index] = _VenueCollection(
+                    venue_instruments,
+                    valid_tickers,
+                    venue_funding,
+                    current.orderbooks,
+                    current.funding_history,
+                    operationally_complete,
+                )
+                self._rest_ticker_cache[adapter.name] = value
+                self._last_rest_ticker_fetch[adapter.name] = refreshed_at
+                market_tickers_usable.labels(adapter.name).set(len(valid_tickers))
+        for adapter, current in zip(adapters, collections, strict=True):
+            market_data_age_seconds.labels(adapter.name).set(
+                0 if current.operationally_complete else -1
+            )
         return collections
 
     async def _collect_venue(
@@ -504,49 +620,9 @@ class MarketDataCollector:
                     len(covered) / len(selected) if selected else 0
                 )
                 history_complete = len(covered) == len(selected)
-            completed_at = datetime.now(UTC)
-            valid_tickers = self._merge_stream_tickers(
-                adapter.name, valid_tickers, completed_at
-            )
-            if not _required_tickers_are_fresh(
-                adapter.name,
-                valid_tickers,
-                requested_books,
-                completed_at,
-                self.stale_after_seconds,
-            ):
-                refreshed_tickers = await self._load_tickers_with_stream_fallback(
-                    adapter,
-                    self._rest_ticker_cache.get(adapter.name),
-                    completed_at,
-                )
-                completed_at = datetime.now(UTC)
-                valid_tickers = self._merge_stream_tickers(
-                    adapter.name,
-                    [item for item in refreshed_tickers if _is_valid_ticker(item)],
-                    completed_at,
-                )
-                if self.market_asset_limit is not None:
-                    venue_instruments, valid_tickers, venue_funding = (
-                        _limit_venue_universe(
-                            venue_instruments,
-                            valid_tickers,
-                            venue_funding,
-                            self.market_asset_limit,
-                            required_markets=pinned_markets,
-                        )
-                    )
-                market_tickers_usable.labels(adapter.name).set(len(valid_tickers))
             operationally_complete = (
                 bool(valid_tickers)
                 and bool(venue_funding)
-                and _required_tickers_are_fresh(
-                    adapter.name,
-                    valid_tickers,
-                    requested_books,
-                    completed_at,
-                    self.stale_after_seconds,
-                )
                 and all(
                     (adapter.name, symbol, instrument_type) in orderbooks
                     for symbol, instrument_type in requested_books or ()
