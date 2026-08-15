@@ -99,8 +99,10 @@ requirements:
   - id: MD-003
     category: market_data
     title: L1 and L2 books reconstruct snapshot plus deltas with sequence and checksum recovery
-    status: missing
-    evidence: []
+    status: partial
+    evidence:
+      - src/funding_arbitrage/market_data/l2_book.py
+      - tests/test_l2_book.py
   - id: MD-004
     category: market_data
     title: Tick trades, OHLCV, mark, index, funding, OI, and public liquidations are collected
