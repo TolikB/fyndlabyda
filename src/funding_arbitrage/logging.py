@@ -34,6 +34,7 @@ class JsonFormatter(logging.Formatter):
             "opportunity_id",
             "position_id",
             "category",
+            "exchanges",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)

@@ -266,13 +266,16 @@ class PaperTestRunner:
         required_history: dict[str, set[str]] = {}
         forced_history: dict[str, set[str]] = {}
         required_books: dict[str, set[tuple[str, InstrumentType]]] = {}
+        discovery_books: dict[str, set[tuple[str, InstrumentType]]] = {}
         for runner in runners:
             for venue, symbols in runner._required_funding_symbols().items():
                 required_history.setdefault(venue, set()).update(symbols)
             for venue, symbols in runner._due_funding_symbols(now).items():
                 forced_history.setdefault(venue, set()).update(symbols)
-            for venue, books in runner._required_orderbook_symbols().items():
+            for venue, books in runner._open_position_orderbook_symbols().items():
                 required_books.setdefault(venue, set()).update(books)
+            for venue, candidate_books in runner._candidate_orderbook_symbols.items():
+                discovery_books.setdefault(venue, set()).update(candidate_books)
         normalized_history = {
             venue: tuple(sorted(symbols)) for venue, symbols in required_history.items()
         }
@@ -286,6 +289,10 @@ class PaperTestRunner:
             orderbook_symbols={
                 venue: sorted(books, key=lambda value: (value[0], value[1].value))
                 for venue, books in required_books.items()
+            },
+            discovery_orderbook_symbols={
+                venue: sorted(books, key=lambda value: (value[0], value[1].value))
+                for venue, books in discovery_books.items()
             },
             include_history=refresh_history,
             history_symbols={venue: sorted(symbols) for venue, symbols in required_history.items()},
@@ -924,13 +931,10 @@ class PaperTestRunner:
             venue: list(dict.fromkeys(symbols)) for venue, symbols in result.items()
         }
 
-    def _required_orderbook_symbols(
+    def _open_position_orderbook_symbols(
         self,
     ) -> dict[str, list[tuple[str, InstrumentType]]]:
-        result = {
-            venue: set(symbols)
-            for venue, symbols in self._candidate_orderbook_symbols.items()
-        }
+        result: dict[str, set[tuple[str, InstrumentType]]] = {}
         for position in self.runtime.portfolio.positions.values():
             if position.state is not PositionState.OPEN:
                 continue

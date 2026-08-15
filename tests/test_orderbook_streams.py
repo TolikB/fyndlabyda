@@ -298,6 +298,65 @@ async def test_collector_does_not_mask_rest_failure_without_fresh_stream() -> No
 
 
 @pytest.mark.asyncio
+async def test_missing_discovery_book_does_not_block_shared_snapshot() -> None:
+    class MissingDiscoveryBookMock(MockExchangeAdapter):
+        async def get_orderbook(
+            self,
+            symbol: str,
+            depth: int,
+            instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+        ) -> OrderBook:
+            if symbol == "MISSINGUSDT":
+                raise NetworkError("synthetic discovery book outage")
+            return await super().get_orderbook(symbol, depth, instrument_type)
+
+    adapter = MissingDiscoveryBookMock("bybit", sleep=0)
+    collector = MarketDataCollector([adapter], enable_streams=False)
+
+    snapshot = await collector.collect_once(
+        orderbook_symbols={"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]},
+        discovery_orderbook_symbols={
+            "bybit": [("MISSINGUSDT", InstrumentType.PERPETUAL)]
+        },
+    )
+    await collector.close()
+
+    assert snapshot.incomplete_venues == ()
+    assert snapshot.orderbook(
+        "bybit", "BTCUSDT", InstrumentType.PERPETUAL
+    ) is not None
+    assert snapshot.orderbook(
+        "bybit", "MISSINGUSDT", InstrumentType.PERPETUAL
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_missing_open_position_book_blocks_shared_snapshot() -> None:
+    class MissingRequiredBookMock(MockExchangeAdapter):
+        async def get_orderbook(
+            self,
+            symbol: str,
+            depth: int,
+            instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+        ) -> OrderBook:
+            if symbol == "MISSINGUSDT":
+                raise NetworkError("synthetic required book outage")
+            return await super().get_orderbook(symbol, depth, instrument_type)
+
+    adapter = MissingRequiredBookMock("bybit", sleep=0)
+    collector = MarketDataCollector([adapter], enable_streams=False)
+
+    snapshot = await collector.collect_once(
+        orderbook_symbols={
+            "bybit": [("MISSINGUSDT", InstrumentType.PERPETUAL)]
+        }
+    )
+    await collector.close()
+
+    assert snapshot.incomplete_venues == ("bybit",)
+
+
+@pytest.mark.asyncio
 async def test_collector_only_refetches_cached_history_when_forced() -> None:
     class CountingHistoryMock(MockExchangeAdapter):
         def __init__(self) -> None:

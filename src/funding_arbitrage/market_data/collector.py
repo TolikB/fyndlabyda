@@ -188,6 +188,10 @@ class MarketDataCollector:
         history_symbols: dict[str, list[str]] | None = None,
         force_history_refresh: bool = True,
         force_history_symbols: dict[str, list[str]] | None = None,
+        discovery_orderbook_symbols: dict[
+            str, list[tuple[str, InstrumentType]]
+        ]
+        | None = None,
     ) -> MarketSnapshot:
         active_adapters = tuple(
             adapter
@@ -199,6 +203,7 @@ class MarketDataCollector:
                 self._collect_venue(
                     adapter,
                     (orderbook_symbols or {}).get(adapter.name),
+                    (discovery_orderbook_symbols or {}).get(adapter.name),
                     include_history,
                     (history_symbols or {}).get(adapter.name, []),
                     force_history_refresh,
@@ -316,6 +321,7 @@ class MarketDataCollector:
         self,
         adapter: ExchangeAdapter,
         requested_books: list[tuple[str, InstrumentType]] | None,
+        pinned_discovery_books: list[tuple[str, InstrumentType]] | None,
         include_history: bool,
         required_history: list[str],
         force_history_refresh: bool,
@@ -392,14 +398,25 @@ class MarketDataCollector:
                     valid_tickers,
                     venue_funding,
                     self.market_asset_limit,
-                    required_markets=set(requested_books or ()),
+                    required_markets=set(
+                        [
+                            *(requested_books or ()),
+                            *(pinned_discovery_books or ()),
+                        ]
+                    ),
                 )
             self._ensure_ticker_stream(adapter, valid_tickers)
-            discovery_books = _rank_orderbook_requests(
+            ranked_discovery_books = _rank_orderbook_requests(
                 valid_tickers, venue_funding, venue_instruments
             )[: self.orderbook_symbol_limit]
             book_requests = list(
-                dict.fromkeys([*(requested_books or []), *discovery_books])
+                dict.fromkeys(
+                    [
+                        *(requested_books or []),
+                        *(pinned_discovery_books or []),
+                        *ranked_discovery_books,
+                    ]
+                )
             )
             self._ensure_orderbook_stream(adapter, book_requests)
             for symbol, instrument_type in book_requests:
@@ -489,7 +506,10 @@ class MarketDataCollector:
             operationally_complete = (
                 bool(valid_tickers)
                 and bool(venue_funding)
-                and len(orderbooks) == len(book_requests)
+                and all(
+                    (adapter.name, symbol, instrument_type) in orderbooks
+                    for symbol, instrument_type in requested_books or ()
+                )
                 and history_complete
             )
             breaker.record_success()
