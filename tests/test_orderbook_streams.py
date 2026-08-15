@@ -357,6 +357,38 @@ async def test_missing_open_position_book_blocks_shared_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collector_refreshes_required_ticker_aged_before_snapshot() -> None:
+    class AgingRequiredTickerMock(MockExchangeAdapter):
+        def __init__(self) -> None:
+            super().__init__("bybit", sleep=0)
+            self.ticker_calls = 0
+
+        async def get_tickers(self) -> list[Ticker]:
+            self.ticker_calls += 1
+            rows = await super().get_tickers()
+            if self.ticker_calls == 1:
+                stale_at = datetime.now(UTC) - timedelta(seconds=31)
+                return [row.model_copy(update={"timestamp": stale_at}) for row in rows]
+            return rows
+
+    adapter = AgingRequiredTickerMock()
+    collector = MarketDataCollector(
+        [adapter], enable_streams=False, stale_after_seconds=30
+    )
+
+    snapshot = await collector.collect_once(
+        orderbook_symbols={"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
+    )
+    await collector.close()
+
+    assert adapter.ticker_calls == 2
+    assert snapshot.incomplete_venues == ()
+    ticker = snapshot.ticker("bybit", "BTCUSDT", InstrumentType.PERPETUAL)
+    assert ticker is not None
+    assert (snapshot.captured_at - ticker.timestamp).total_seconds() <= 1
+
+
+@pytest.mark.asyncio
 async def test_collector_only_refetches_cached_history_when_forced() -> None:
     class CountingHistoryMock(MockExchangeAdapter):
         def __init__(self) -> None:

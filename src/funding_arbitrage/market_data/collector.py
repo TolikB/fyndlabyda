@@ -392,18 +392,19 @@ class MarketDataCollector:
                 )
             market_tickers_usable.labels(adapter.name).set(len(valid_tickers))
             venue_funding = all_venue_funding
+            pinned_markets = set(
+                [
+                    *(requested_books or ()),
+                    *(pinned_discovery_books or ()),
+                ]
+            )
             if self.market_asset_limit is not None:
                 venue_instruments, valid_tickers, venue_funding = _limit_venue_universe(
                     venue_instruments,
                     valid_tickers,
                     venue_funding,
                     self.market_asset_limit,
-                    required_markets=set(
-                        [
-                            *(requested_books or ()),
-                            *(pinned_discovery_books or ()),
-                        ]
-                    ),
+                    required_markets=pinned_markets,
                 )
             self._ensure_ticker_stream(adapter, valid_tickers)
             ranked_discovery_books = _rank_orderbook_requests(
@@ -503,9 +504,49 @@ class MarketDataCollector:
                     len(covered) / len(selected) if selected else 0
                 )
                 history_complete = len(covered) == len(selected)
+            completed_at = datetime.now(UTC)
+            valid_tickers = self._merge_stream_tickers(
+                adapter.name, valid_tickers, completed_at
+            )
+            if not _required_tickers_are_fresh(
+                adapter.name,
+                valid_tickers,
+                requested_books,
+                completed_at,
+                self.stale_after_seconds,
+            ):
+                refreshed_tickers = await self._load_tickers_with_stream_fallback(
+                    adapter,
+                    self._rest_ticker_cache.get(adapter.name),
+                    completed_at,
+                )
+                completed_at = datetime.now(UTC)
+                valid_tickers = self._merge_stream_tickers(
+                    adapter.name,
+                    [item for item in refreshed_tickers if _is_valid_ticker(item)],
+                    completed_at,
+                )
+                if self.market_asset_limit is not None:
+                    venue_instruments, valid_tickers, venue_funding = (
+                        _limit_venue_universe(
+                            venue_instruments,
+                            valid_tickers,
+                            venue_funding,
+                            self.market_asset_limit,
+                            required_markets=pinned_markets,
+                        )
+                    )
+                market_tickers_usable.labels(adapter.name).set(len(valid_tickers))
             operationally_complete = (
                 bool(valid_tickers)
                 and bool(venue_funding)
+                and _required_tickers_are_fresh(
+                    adapter.name,
+                    valid_tickers,
+                    requested_books,
+                    completed_at,
+                    self.stale_after_seconds,
+                )
                 and all(
                     (adapter.name, symbol, instrument_type) in orderbooks
                     for symbol, instrument_type in requested_books or ()
@@ -739,6 +780,25 @@ def _is_valid_ticker(ticker: Ticker) -> bool:
         ticker.best_bid is not None
         and ticker.best_ask is not None
         and ticker.best_bid > ticker.best_ask
+    )
+
+
+def _required_tickers_are_fresh(
+    exchange: str,
+    tickers: list[Ticker],
+    required_markets: list[tuple[str, InstrumentType]] | None,
+    now: datetime,
+    stale_after_seconds: int,
+) -> bool:
+    ticker_by_market = {
+        (ticker.symbol, ticker.instrument_type): ticker
+        for ticker in tickers
+        if ticker.exchange == exchange
+    }
+    return all(
+        (ticker := ticker_by_market.get((symbol, instrument_type))) is not None
+        and (now - ticker.timestamp).total_seconds() <= stale_after_seconds
+        for symbol, instrument_type in required_markets or ()
     )
 
 
