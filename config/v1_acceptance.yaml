@@ -134,8 +134,10 @@ requirements:
   - id: FEAT-003
     category: features
     title: Incremental OFI, microprice, book imbalance, trade flow, and CVD features exist
-    status: missing
-    evidence: []
+    status: partial
+    evidence:
+      - src/funding_arbitrage/features/orderflow.py
+      - tests/test_orderflow_features.py
   - id: FEAT-004
     category: features
     title: Incremental OI, funding, mark-index basis, and derivatives features exist
