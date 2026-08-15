@@ -23,8 +23,8 @@ docker compose ps
 
 The app runs Alembic migrations before Uvicorn. The paper runner starts in the
 background and performs a cycle every 15 seconds with real public data from
-Bybit, Gate, OKX, Binance, Hyperliquid, and MEXC. All six venues receive $1,000 of
-tradable virtual balance plus a separate reserve.
+Bybit, Gate, OKX, Binance, Hyperliquid, MEXC, KuCoin, and HTX. All eight venues
+receive $1,000 of tradable virtual balance plus a separate reserve.
 
 The default deployment is resource-limited and starts app, PostgreSQL, and
 Redis only. On a larger host, start monitoring with:

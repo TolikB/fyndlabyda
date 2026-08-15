@@ -18,6 +18,8 @@ PREFERRED_BTC_SYMBOLS = {
     "hyperliquid": "BTC",
     "mexc": "BTC_USDT",
     "okx": "BTC-USDT-SWAP",
+    "kucoin": "XBTUSDTM",
+    "htx": "BTC-USDT",
 }
 SCHEDULE_TOLERANCE_SECONDS = 5.0
 
@@ -92,9 +94,7 @@ async def main() -> int:
             relevant = [item for item in rates if item.symbol in perpetual_symbols]
             sample = select_sample(venue, relevant)
             history = (
-                await adapter.get_funding_history(
-                    sample.symbol, now - timedelta(days=3), now
-                )
+                await adapter.get_funding_history(sample.symbol, now - timedelta(days=3), now)
                 if sample is not None
                 else []
             )
@@ -138,8 +138,7 @@ async def main() -> int:
                 else None,
             }
         report["ok"] = all(
-            isinstance(item, dict) and item.get("ok") is True
-            for item in venues_report.values()
+            isinstance(item, dict) and item.get("ok") is True for item in venues_report.values()
         )
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["ok"] else 1

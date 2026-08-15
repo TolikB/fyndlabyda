@@ -7,7 +7,9 @@ from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
+from funding_arbitrage.exchanges.htx import HtxPublicAdapter
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
+from funding_arbitrage.exchanges.kucoin import KucoinPublicAdapter
 from funding_arbitrage.exchanges.mexc import MexcPublicAdapter
 from funding_arbitrage.exchanges.mock import MockExchangeAdapter
 from funding_arbitrage.exchanges.okx import OkxPublicAdapter
@@ -17,7 +19,16 @@ def create_public_adapters(settings: Settings) -> dict[str, ExchangeAdapter]:
     if settings.market_data_mode == "mock":
         return {
             name: MockExchangeAdapter(name)
-            for name in ("bybit", "gate", "okx", "binance", "hyperliquid", "mexc")
+            for name in (
+                "bybit",
+                "gate",
+                "okx",
+                "binance",
+                "hyperliquid",
+                "mexc",
+                "kucoin",
+                "htx",
+            )
         }
     return {
         "bybit": BybitPublicAdapter(
@@ -64,6 +75,24 @@ def create_public_adapters(settings: Settings) -> dict[str, ExchangeAdapter]:
             futures_base_url=settings.mexc_futures_base_url,
             futures_websocket_url=settings.mexc_futures_ws_url,
             spot_websocket_url=settings.mexc_spot_ws_url,
+            timeout_seconds=settings.request_timeout_seconds,
+            requests_per_second=settings.rate_limit_requests_per_second,
+            burst=settings.rate_limit_burst,
+        ),
+        "kucoin": KucoinPublicAdapter(
+            spot_base_url=settings.kucoin_spot_base_url,
+            futures_base_url=settings.kucoin_futures_base_url,
+            spot_websocket_url=settings.kucoin_spot_ws_url,
+            futures_websocket_url=settings.kucoin_futures_ws_url,
+            timeout_seconds=settings.request_timeout_seconds,
+            requests_per_second=settings.rate_limit_requests_per_second,
+            burst=settings.rate_limit_burst,
+        ),
+        "htx": HtxPublicAdapter(
+            spot_base_url=settings.htx_spot_base_url,
+            futures_base_url=settings.htx_futures_base_url,
+            spot_websocket_url=settings.htx_spot_ws_url,
+            futures_websocket_url=settings.htx_futures_ws_url,
             timeout_seconds=settings.request_timeout_seconds,
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,

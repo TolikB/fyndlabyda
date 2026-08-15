@@ -34,6 +34,8 @@ class MockExchangeAdapter(ExchangeAdapter):
             "binance": Decimal("-0.0008"),
             "hyperliquid": Decimal("0.0010"),
             "mexc": Decimal("0.0012"),
+            "kucoin": Decimal("-0.0013"),
+            "htx": Decimal("0.0009"),
         }
 
     async def close(self) -> None:
@@ -185,9 +187,7 @@ class MockExchangeAdapter(ExchangeAdapter):
             cursor += timedelta(minutes=interval_minutes)
         return candles
 
-    def stream_tickers(
-        self, symbols: list[tuple[str, InstrumentType]]
-    ) -> AsyncIterator[Ticker]:
+    def stream_tickers(self, symbols: list[tuple[str, InstrumentType]]) -> AsyncIterator[Ticker]:
         return self._stream_tickers(symbols)
 
     async def _stream_tickers(

@@ -1,7 +1,7 @@
 # Funding Arbitrage Research Bot
 
 Market-neutral funding/basis arbitrage system for Bybit, Gate.io, OKX,
-Binance, Hyperliquid, and MEXC. It normalizes public REST/WebSocket data, exact
+Binance, Hyperliquid, MEXC, KuCoin, and HTX. It normalizes public REST/WebSocket data, exact
 venue funding cycles, spot/perpetual, perp/perp, and dated-futures
 opportunities. Paper mode is the default. A separately interlocked live mode
 uses authenticated account reconciliation, durable order intents,
@@ -57,7 +57,7 @@ docker compose up -d --build
 ```
 
 This starts the production-shaped paper-test deployment: real public market
-data from Bybit, Gate, OKX, Binance, Hyperliquid, and MEXC, automatic paper
+data from Bybit, Gate, OKX, Binance, Hyperliquid, MEXC, KuCoin, and HTX, automatic paper
 execution, funding settlement, PostgreSQL persistence, Prometheus, and
 Grafana support. The default lightweight profile starts only app, PostgreSQL,
 and Redis; add `--profile observability` when the host has enough resources for
@@ -74,6 +74,7 @@ without writing data or placing orders with:
 ```powershell
 docker compose exec app python scripts/paper_scan_probe.py
 docker compose exec app python scripts/mexc_public_probe.py
+docker compose exec app python scripts/kucoin_htx_public_probe.py
 ```
 
 Port 8000 is bound to VM localhost by default. Reach the dashboard safely with
@@ -158,9 +159,17 @@ MEXC paper mode uses the same public spot/futures feeds and exact settlement
 timestamps as production. MEXC live mode uses native spot V3 and futures V1
 signing, converts futures contracts to base quantity, configures Hedge Mode,
 recovers ambiguous submissions by `externalOid`, and treats unresolved order
-outcomes as `UNKNOWN` so the second leg cannot proceed. MEXC has no separate
-live sandbox in this service; use `paper_test` with `live_public` data for the
-test phase.
+outcomes as `UNKNOWN` so the second leg cannot proceed. MEXC, KuCoin, and HTX
+have no separate live sandbox in this service; use `paper_test` with
+`live_public` data for the test phase.
+
+KuCoin uses separate Classic spot and futures accounts, a mandatory API
+passphrase, dynamic public WebSocket tokens, exact funding timestamps, and
+contract-to-base conversion. HTX uses spot plus isolated USDT-M linear swaps,
+gzip WebSockets, dynamic settlement periods, exact funding events, a numeric
+deterministic client order ID, and the authenticated linear-swap fee endpoint.
+Both venues fail closed on ambiguous order outcomes and reconcile funding only
+for live-allowlisted assets.
 
 Run long replays in a dedicated `RUN_MODE=api`, `PAPER_AUTOTRADE=false` worker.
 This keeps paper market polling responsive and prevents an HTTP client timeout

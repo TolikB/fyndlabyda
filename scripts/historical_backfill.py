@@ -29,9 +29,7 @@ async def run(
     try:
         backfill = HistoricalBackfill(adapters, session_factory)
         selected_assets = (
-            await backfill.discover_assets(asset_limit)
-            if assets == ("AUTO",)
-            else assets
+            await backfill.discover_assets(asset_limit) if assets == ("AUTO",) else assets
         )
         result = await backfill.run(
             days=days,
@@ -66,18 +64,14 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=90, choices=range(30, 91))
     parser.add_argument("--assets", default="auto")
     parser.add_argument("--asset-limit", type=int, default=12)
-    parser.add_argument(
-        "--venues", default="bybit,gate,okx,binance,hyperliquid,mexc"
-    )
+    parser.add_argument("--venues", default="bybit,gate,okx,binance,hyperliquid,mexc,kucoin,htx")
     parser.add_argument("--interval-minutes", type=int, default=60)
     args = parser.parse_args()
     assets = tuple(
         sorted({item.strip().upper() for item in args.assets.split(",") if item.strip()})
     )
     venues = tuple(
-        dict.fromkeys(
-            item.strip().lower() for item in args.venues.split(",") if item.strip()
-        )
+        dict.fromkeys(item.strip().lower() for item in args.venues.split(",") if item.strip())
     )
     raise SystemExit(
         asyncio.run(

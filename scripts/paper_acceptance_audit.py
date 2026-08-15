@@ -16,7 +16,7 @@ from urllib.request import urlopen
 from prometheus_client.parser import text_string_to_metric_families
 
 EXPECTED_VENUES = frozenset(
-    {"binance", "bybit", "gate", "hyperliquid", "mexc", "okx"}
+    {"binance", "bybit", "gate", "htx", "hyperliquid", "kucoin", "mexc", "okx"}
 )
 
 
@@ -128,29 +128,17 @@ def parse_operational_metrics(payload: str, now: float | None = None) -> dict[st
     return {
         "paper_runner_cycles": scalar("funding_paper_runner_cycles_total"),
         "paper_runner_errors": scalar("funding_paper_runner_errors_total"),
-        "market_cycles_skipped": reasons(
-            "funding_paper_market_cycles_skipped_total"
-        ),
-        "trade_rejections": profile_reasons(
-            "funding_paper_trade_rejections_total"
-        ),
-        "last_cycle_age_seconds": (
-            observed_at - last_cycle if last_cycle is not None else None
-        ),
+        "market_cycles_skipped": reasons("funding_paper_market_cycles_skipped_total"),
+        "trade_rejections": profile_reasons("funding_paper_trade_rejections_total"),
+        "last_cycle_age_seconds": (observed_at - last_cycle if last_cycle is not None else None),
         "history_coverage": venues("funding_history_coverage_ratio"),
         "orderbook_coverage": venues("funding_orderbook_coverage_ratio"),
-        "stale_or_missing_orderbooks": venues(
-            "funding_stale_or_missing_orderbooks"
-        ),
-        "stream_message_ages": stream_ages(
-            "funding_exchange_stream_last_message_timestamp"
-        ),
+        "stale_or_missing_orderbooks": venues("funding_stale_or_missing_orderbooks"),
+        "stream_message_ages": stream_ages("funding_exchange_stream_last_message_timestamp"),
     }
 
 
-def merge_stream_observations(
-    earlier: dict[str, Any], latest: dict[str, Any]
-) -> dict[str, Any]:
+def merge_stream_observations(earlier: dict[str, Any], latest: dict[str, Any]) -> dict[str, Any]:
     """Keep the latest counters while retaining any fresh WS receipt in the sample window.
 
     The collector deliberately replaces a WebSocket task when its selected symbol
@@ -163,9 +151,7 @@ def merge_stream_observations(
     merged = dict(latest)
     stream_ages: dict[str, dict[str, float | None]] = {}
     for observation in (earlier, latest):
-        for venue, streams in (
-            observation.get("stream_message_ages") or {}
-        ).items():
+        for venue, streams in (observation.get("stream_message_ages") or {}).items():
             if not isinstance(streams, dict):
                 continue
             venue_ages = stream_ages.setdefault(str(venue), {})
@@ -205,8 +191,7 @@ def build_audit(
         "paper_autotrade_enabled": health.get("paper_autotrade_enabled") is True,
         "paper_autotrade_active": health.get("paper_autotrade_active") is True,
         "autotrade_boundary_matches": (
-            expected_start_utc is None
-            or _normalize_utc(configured_start) == expected_start_utc
+            expected_start_utc is None or _normalize_utc(configured_start) == expected_start_utc
         ),
         "comparison_enabled": ready.get("comparison_enabled") is True,
         "candidate_version": candidate.get("simulation_version") == candidate_version,
@@ -235,13 +220,9 @@ def build_audit(
             "open_positions_mismatched_exposure_key_count"
         )
         == 0,
-        "candidate_duplicate_open_exposures_zero": candidate.get(
-            "duplicate_open_exposure_count"
-        )
+        "candidate_duplicate_open_exposures_zero": candidate.get("duplicate_open_exposure_count")
         == 0,
-        "baseline_duplicate_open_exposures_zero": baseline.get(
-            "duplicate_open_exposure_count"
-        )
+        "baseline_duplicate_open_exposures_zero": baseline.get("duplicate_open_exposure_count")
         == 0,
         "candidate_historical_exposure_keys_complete": candidate.get(
             "historical_positions_missing_exposure_key_count"
@@ -299,8 +280,7 @@ def build_audit(
         "cycles_observed": (operational_metrics.get("paper_runner_cycles") or 0) > 0,
         "cycle_errors_zero": operational_metrics.get("paper_runner_errors") == 0,
         "last_cycle_within_5_minutes": (
-            isinstance(last_cycle_age, (int, float))
-            and -30 <= last_cycle_age <= 300
+            isinstance(last_cycle_age, (int, float)) and -30 <= last_cycle_age <= 300
         ),
         "all_venues_healthy": EXPECTED_VENUES.issubset(healthy_venues),
         "funding_history_coverage_complete": all(
@@ -325,9 +305,7 @@ def build_audit(
     comparison_observation = comparison.get("observation") or {}
     baseline_snapshot_count = comparison_observation.get("baseline_snapshot_count")
     candidate_snapshot_count = comparison_observation.get("candidate_snapshot_count")
-    maximum_snapshot_gap = comparison_observation.get(
-        "maximum_snapshot_gap_seconds"
-    )
+    maximum_snapshot_gap = comparison_observation.get("maximum_snapshot_gap_seconds")
     snapshot_risk = comparison.get("snapshot_risk") or {}
     validation_windows = comparison.get("validation_windows") or []
     try:
@@ -351,17 +329,14 @@ def build_audit(
         "validation_windows_use_portfolio_snapshots": (
             len(validation_windows) == 3
             and all(
-                isinstance(window, dict)
-                and window.get("source") == "portfolio_snapshots"
+                isinstance(window, dict) and window.get("source") == "portfolio_snapshots"
                 for window in validation_windows
             )
         ),
     }
     evidence_integrity_safe = all(evidence_integrity_checks.values())
     canary_ready = (
-        runtime_safe
-        and evidence_integrity_safe
-        and comparison_canary.get("ready") is True
+        runtime_safe and evidence_integrity_safe and comparison_canary.get("ready") is True
     )
     acceptance_ready = (
         runtime_safe
@@ -396,9 +371,7 @@ def build_audit(
             "mismatched_open_exposure_keys": candidate.get(
                 "open_positions_mismatched_exposure_key_count"
             ),
-            "duplicate_open_exposures": candidate.get(
-                "duplicate_open_exposure_count"
-            ),
+            "duplicate_open_exposures": candidate.get("duplicate_open_exposure_count"),
             "historical_missing_exposure_keys": candidate.get(
                 "historical_positions_missing_exposure_key_count"
             ),
@@ -411,9 +384,7 @@ def build_audit(
             "historical_missing_intervals": candidate.get(
                 "historical_positions_missing_interval_count"
             ),
-            "overlapping_exposure_intervals": candidate.get(
-                "overlapping_exposure_interval_count"
-            ),
+            "overlapping_exposure_intervals": candidate.get("overlapping_exposure_interval_count"),
             "funding_pnl": candidate.get("funding_pnl"),
             "fees": candidate.get("fees"),
         },
@@ -423,18 +394,14 @@ def build_audit(
             "positions": baseline.get("position_count"),
             "open_positions": baseline.get("open_position_count"),
             "open_exposure_keys": baseline.get("open_exposure_key_count"),
-            "missing_open_exposure_keys": baseline.get(
-                "open_positions_missing_exposure_key_count"
-            ),
+            "missing_open_exposure_keys": baseline.get("open_positions_missing_exposure_key_count"),
             "unverifiable_open_exposure_keys": baseline.get(
                 "open_positions_unverifiable_exposure_key_count"
             ),
             "mismatched_open_exposure_keys": baseline.get(
                 "open_positions_mismatched_exposure_key_count"
             ),
-            "duplicate_open_exposures": baseline.get(
-                "duplicate_open_exposure_count"
-            ),
+            "duplicate_open_exposures": baseline.get("duplicate_open_exposure_count"),
             "historical_missing_exposure_keys": baseline.get(
                 "historical_positions_missing_exposure_key_count"
             ),
@@ -447,9 +414,7 @@ def build_audit(
             "historical_missing_intervals": baseline.get(
                 "historical_positions_missing_interval_count"
             ),
-            "overlapping_exposure_intervals": baseline.get(
-                "overlapping_exposure_interval_count"
-            ),
+            "overlapping_exposure_intervals": baseline.get("overlapping_exposure_interval_count"),
             "funding_pnl": baseline.get("funding_pnl"),
             "fees": baseline.get("fees"),
         },
@@ -540,9 +505,7 @@ def main() -> int:
         args.start,
     )
     print(json.dumps(audit, indent=2, sort_keys=True))
-    ready_for_gate = (
-        audit["canary_ready"] if args.gate == "canary" else audit["acceptance_ready"]
-    )
+    ready_for_gate = audit["canary_ready"] if args.gate == "canary" else audit["acceptance_ready"]
     return 0 if ready_for_gate else 2
 
 

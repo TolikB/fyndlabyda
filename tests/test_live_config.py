@@ -17,13 +17,18 @@ def _live_values() -> dict[str, object]:
         "LIVE_ARMED": True,
         "LIVE_AUTOTRADE": True,
         "LIVE_TRADING_CONFIRM": "I_UNDERSTAND_THIS_SENDS_REAL_ORDERS",
-        "LIVE_VENUES": "bybit,gate,mexc",
+        "LIVE_VENUES": "bybit,gate,mexc,kucoin,htx",
         "BYBIT_API_KEY": "bybit-key",
         "BYBIT_API_SECRET": "bybit-secret",
         "GATE_API_KEY": "gate-key",
         "GATE_API_SECRET": "gate-secret",
         "MEXC_API_KEY": "mexc-key",
         "MEXC_API_SECRET": "mexc-secret",
+        "KUCOIN_API_KEY": "kucoin-key",
+        "KUCOIN_API_SECRET": "kucoin-secret",
+        "KUCOIN_API_PASSPHRASE": "kucoin-passphrase",
+        "HTX_API_KEY": "htx-key",
+        "HTX_API_SECRET": "htx-secret",
         "TELEGRAM_ENABLED": True,
         "TELEGRAM_BOT_TOKEN": "telegram-secret",
         "TELEGRAM_CHAT_ID": "123",
@@ -43,12 +48,27 @@ def test_live_mode_requires_explicit_confirmation_and_credentials() -> None:
         Settings(_env_file=None, **values)
 
 
+@pytest.mark.parametrize(
+    ("field", "venue"),
+    [
+        ("KUCOIN_API_PASSPHRASE", "kucoin"),
+        ("HTX_API_SECRET", "htx"),
+    ],
+)
+def test_live_mode_requires_complete_kucoin_and_htx_credentials(field: str, venue: str) -> None:
+    values = _live_values()
+    values.pop(field)
+
+    with pytest.raises(ValidationError, match=f"missing live credentials for: {venue}"):
+        Settings(_env_file=None, **values)
+
+
 def test_live_mode_accepts_complete_minimal_configuration_and_masks_secrets() -> None:
     settings = Settings(_env_file=None, **_live_values())
 
     assert settings.run_mode == "live"
     assert settings.execution_mode == "live"
-    assert settings.live_venue_values == ("bybit", "gate", "mexc")
+    assert settings.live_venue_values == ("bybit", "gate", "mexc", "kucoin", "htx")
     assert settings.live_default_position_size_usd == Decimal("100")
     assert settings.live_credentials("bybit") == {
         "apiKey": "bybit-key",
@@ -58,8 +78,19 @@ def test_live_mode_accepts_complete_minimal_configuration_and_masks_secrets() ->
         "apiKey": "mexc-key",
         "secret": "mexc-secret",
     }
+    assert settings.live_credentials("kucoin") == {
+        "apiKey": "kucoin-key",
+        "secret": "kucoin-secret",
+        "password": "kucoin-passphrase",
+    }
+    assert settings.live_credentials("htx") == {
+        "apiKey": "htx-key",
+        "secret": "htx-secret",
+    }
     assert "bybit-secret" not in repr(settings)
     assert "mexc-secret" not in repr(settings)
+    assert "kucoin-passphrase" not in repr(settings)
+    assert "htx-secret" not in repr(settings)
 
 
 def test_live_telegram_alerts_require_both_credentials_and_mask_token() -> None:
@@ -116,6 +147,16 @@ def test_live_execution_cannot_be_enabled_from_api_or_paper_mode() -> None:
             "https://example.invalid/api/v4",
             "GATE_BASE_URL must be the official",
         ),
+        (
+            "KUCOIN_FUTURES_BASE_URL",
+            "https://example.invalid",
+            "KUCOIN_FUTURES_BASE_URL must be the official",
+        ),
+        (
+            "HTX_FUTURES_WS_URL",
+            "wss://example.invalid/ws",
+            "HTX_FUTURES_WS_URL must be the official",
+        ),
     ],
 )
 def test_live_mode_rejects_unsafe_runtime_boundaries(
@@ -140,11 +181,11 @@ def test_database_and_redis_credentials_are_not_in_settings_repr() -> None:
     assert "redis-secret" not in rendered
 
 
-def test_mexc_live_sandbox_is_rejected_in_favor_of_public_paper_mode() -> None:
+def test_venues_without_supported_live_sandbox_are_rejected() -> None:
     values = _live_values()
     values["LIVE_SANDBOX"] = True
 
-    with pytest.raises(ValidationError, match="MEXC live sandbox is not supported"):
+    with pytest.raises(ValidationError, match="live sandbox is not supported for: htx,kucoin,mexc"):
         Settings(_env_file=None, **values)
 
 
@@ -152,9 +193,7 @@ def test_live_example_is_complete_after_only_secrets_are_supplied() -> None:
     settings = Settings(
         _env_file=".env.live.example",
         POSTGRES_PASSWORD="database-secret",
-        DATABASE_URL=(
-            "postgresql+asyncpg://funding:database-secret@postgres:5432/funding"
-        ),
+        DATABASE_URL=("postgresql+asyncpg://funding:database-secret@postgres:5432/funding"),
         BYBIT_API_KEY="key",
         BYBIT_API_SECRET="secret",
         GATE_API_KEY="key",
@@ -168,6 +207,11 @@ def test_live_example_is_complete_after_only_secrets_are_supplied() -> None:
         HYPERLIQUID_PRIVATE_KEY="0x" + "2" * 64,
         MEXC_API_KEY="key",
         MEXC_API_SECRET="secret",
+        KUCOIN_API_KEY="key",
+        KUCOIN_API_SECRET="secret",
+        KUCOIN_API_PASSPHRASE="passphrase",
+        HTX_API_KEY="key",
+        HTX_API_SECRET="secret",
         TELEGRAM_BOT_TOKEN="telegram-token",
         TELEGRAM_CHAT_ID="123",
     )

@@ -6,19 +6,13 @@ import yaml
 COMPOSE_PATH = Path(__file__).resolve().parents[1] / "docker-compose.yml"
 DOCKERFILE_PATH = Path(__file__).resolve().parents[1] / "Dockerfile"
 REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements.lock"
-LINUX_REQUIREMENTS_LOCK_PATH = (
-    Path(__file__).resolve().parents[1] / "requirements-linux.lock"
-)
-DEV_REQUIREMENTS_LOCK_PATH = (
-    Path(__file__).resolve().parents[1] / "requirements-dev.lock"
-)
+LINUX_REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements-linux.lock"
+DEV_REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements-dev.lock"
 LINUX_DEV_REQUIREMENTS_LOCK_PATH = (
     Path(__file__).resolve().parents[1] / "requirements-dev-linux.lock"
 )
 DOCKERIGNORE_PATH = Path(__file__).resolve().parents[1] / ".dockerignore"
-LIVE_RUNBOOK_PATH = (
-    Path(__file__).resolve().parents[1] / "ops" / "LIVE_TRADING_RUNBOOK.md"
-)
+LIVE_RUNBOOK_PATH = Path(__file__).resolve().parents[1] / "ops" / "LIVE_TRADING_RUNBOOK.md"
 LIVE_ENV_EXAMPLE_PATH = Path(__file__).resolve().parents[1] / ".env.live.example"
 FORBIDDEN_HOST_PORTS = {5432, 9108, 9109}
 
@@ -169,15 +163,12 @@ def test_development_dependency_lock_is_hash_enforced() -> None:
             assert re.search(r"--hash=sha256:[0-9a-f]{64}", block), first_line
             requirements.add(first_line.split("==", 1)[0].lower())
 
-        assert {"mypy", "pip-audit", "pytest", "ruff", event_loop}.issubset(
-            requirements
-        )
+        assert {"mypy", "pip-audit", "pytest", "ruff", event_loop}.issubset(requirements)
         runtime_versions = _locked_versions(runtime_path)
         development_versions = _locked_versions(dev_path)
         assert runtime_versions
         assert all(
-            development_versions.get(name) == version
-            for name, version in runtime_versions.items()
+            development_versions.get(name) == version for name, version in runtime_versions.items()
         )
 
 
@@ -188,17 +179,12 @@ def test_docker_context_excludes_local_secrets_and_runtime_state() -> None:
         if line.strip() and not line.lstrip().startswith("#")
     }
 
-    assert {".git", ".env", ".env.*", ".runtime", ".venv", ".venv*"}.issubset(
-        patterns
-    )
+    assert {".git", ".env", ".env.*", ".runtime", ".venv", ".venv*"}.issubset(patterns)
 
 
 def test_release_workflow_pins_actions_and_has_no_deployment_step() -> None:
     workflow = (
-        Path(__file__).resolve().parents[1]
-        / ".github"
-        / "workflows"
-        / "release-gate.yml"
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release-gate.yml"
     ).read_text(encoding="utf-8")
 
     action_refs = re.findall(r"uses:\s+[^@\s]+@([^\s]+)", workflow)
@@ -239,6 +225,19 @@ def test_live_example_uses_current_official_mexc_endpoints() -> None:
     assert values["MEXC_BASE_URL"] == "https://api.mexc.com"
     assert values["MEXC_FUTURES_BASE_URL"] == "https://api.mexc.com"
     assert values["MEXC_FUTURES_WS_URL"] == "wss://contract.mexc.com/edge"
-    assert "https://contract.mexc.com` origin" not in LIVE_RUNBOOK_PATH.read_text(
-        encoding="utf-8"
+    assert "https://contract.mexc.com` origin" not in LIVE_RUNBOOK_PATH.read_text(encoding="utf-8")
+
+
+def test_live_example_uses_official_kucoin_and_htx_endpoints() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
     )
+
+    assert values["KUCOIN_SPOT_BASE_URL"] == "https://api.kucoin.com"
+    assert values["KUCOIN_FUTURES_BASE_URL"] == "https://api-futures.kucoin.com"
+    assert values["KUCOIN_FUTURES_WS_URL"] == "wss://ws-api-futures.kucoin.com"
+    assert values["HTX_SPOT_BASE_URL"] == "https://api.huobi.pro"
+    assert values["HTX_FUTURES_BASE_URL"] == "https://api.hbdm.com"
+    assert values["HTX_FUTURES_WS_URL"] == "wss://api.hbdm.com/linear-swap-ws"

@@ -35,6 +35,16 @@ mexc:
   futures_base_url: https://api.mexc.com
   futures_websocket_url: wss://contract.mexc.com/edge
   spot_websocket_url: wss://wbs-api.mexc.com/ws
+kucoin:
+  spot_base_url: https://api.kucoin.com
+  futures_base_url: https://api-futures.kucoin.com
+  spot_websocket_url: wss://ws-api-spot.kucoin.com
+  futures_websocket_url: wss://ws-api-futures.kucoin.com
+htx:
+  spot_base_url: https://api.huobi.pro
+  futures_base_url: https://api.hbdm.com
+  spot_websocket_url: wss://api.huobi.pro/ws
+  futures_websocket_url: wss://api.hbdm.com/linear-swap-ws
 market_data:
   stale_seconds: 30
 scanner:
@@ -92,3 +102,6 @@ fees:
   hyperliquid: {maker_fee: 0.00015, taker_fee: 0.00035}
   # Conservative API fee defaults; live preflight reads the account-specific fee.
   mexc: {maker_fee: 0.00060, taker_fee: 0.00080}
+  # Conservative paper defaults; authenticated live preflight reads exact account fees.
+  kucoin: {maker_fee: 0.00100, taker_fee: 0.00100}
+  htx: {maker_fee: 0.00200, taker_fee: 0.00200}

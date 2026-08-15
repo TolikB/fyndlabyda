@@ -28,9 +28,7 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
         repr=False,
     )
-    redis_url: str = Field(
-        default="redis://localhost:6379/0", alias="REDIS_URL", repr=False
-    )
+    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL", repr=False)
     bybit_base_url: str = Field(default="https://api.bybit.com", alias="BYBIT_BASE_URL")
     bybit_ws_url: str = Field(
         default="wss://stream.bybit.com/v5/public/linear", alias="BYBIT_WS_URL"
@@ -62,15 +60,31 @@ class Settings(BaseSettings):
     mexc_futures_ws_url: str = Field(
         default="wss://contract.mexc.com/edge", alias="MEXC_FUTURES_WS_URL"
     )
-    mexc_spot_ws_url: str = Field(
-        default="wss://wbs-api.mexc.com/ws", alias="MEXC_SPOT_WS_URL"
+    mexc_spot_ws_url: str = Field(default="wss://wbs-api.mexc.com/ws", alias="MEXC_SPOT_WS_URL")
+    kucoin_spot_base_url: str = Field(
+        default="https://api.kucoin.com", alias="KUCOIN_SPOT_BASE_URL"
+    )
+    kucoin_futures_base_url: str = Field(
+        default="https://api-futures.kucoin.com", alias="KUCOIN_FUTURES_BASE_URL"
+    )
+    kucoin_spot_ws_url: str = Field(
+        default="wss://ws-api-spot.kucoin.com", alias="KUCOIN_SPOT_WS_URL"
+    )
+    kucoin_futures_ws_url: str = Field(
+        default="wss://ws-api-futures.kucoin.com", alias="KUCOIN_FUTURES_WS_URL"
+    )
+    htx_spot_base_url: str = Field(default="https://api.huobi.pro", alias="HTX_SPOT_BASE_URL")
+    htx_futures_base_url: str = Field(default="https://api.hbdm.com", alias="HTX_FUTURES_BASE_URL")
+    htx_spot_ws_url: str = Field(default="wss://api.huobi.pro/ws", alias="HTX_SPOT_WS_URL")
+    htx_futures_ws_url: str = Field(
+        default="wss://api.hbdm.com/linear-swap-ws", alias="HTX_FUTURES_WS_URL"
     )
     live_armed: bool = Field(default=False, alias="LIVE_ARMED")
     live_trading_confirm: str = Field(default="", alias="LIVE_TRADING_CONFIRM")
     live_autotrade: bool = Field(default=False, alias="LIVE_AUTOTRADE")
     live_sandbox: bool = Field(default=False, alias="LIVE_SANDBOX")
     live_venues: str = Field(
-        default="bybit,gate,okx,binance,hyperliquid,mexc", alias="LIVE_VENUES"
+        default="bybit,gate,okx,binance,hyperliquid,mexc,kucoin,htx", alias="LIVE_VENUES"
     )
     live_allowed_assets: str = Field(default="BTC,ETH,SOL", alias="LIVE_ALLOWED_ASSETS")
     live_allowed_strategies: str = Field(
@@ -107,9 +121,7 @@ class Settings(BaseSettings):
         default=Decimal("300"), alias="LIVE_MAX_CORRELATED_NOTIONAL_USD"
     )
     live_max_open_positions: int = Field(default=2, alias="LIVE_MAX_OPEN_POSITIONS")
-    live_max_daily_loss_usd: Decimal = Field(
-        default=Decimal("50"), alias="LIVE_MAX_DAILY_LOSS_USD"
-    )
+    live_max_daily_loss_usd: Decimal = Field(default=Decimal("50"), alias="LIVE_MAX_DAILY_LOSS_USD")
     live_max_drawdown_percent: Decimal = Field(
         default=Decimal("0.02"), alias="LIVE_MAX_DRAWDOWN_PERCENT"
     )
@@ -134,28 +146,18 @@ class Settings(BaseSettings):
     live_max_adverse_basis_percent: Decimal = Field(
         default=Decimal("0.005"), alias="LIVE_MAX_ADVERSE_BASIS_PERCENT"
     )
-    live_order_timeout_seconds: float = Field(
-        default=20.0, alias="LIVE_ORDER_TIMEOUT_SECONDS"
-    )
+    live_order_timeout_seconds: float = Field(default=20.0, alias="LIVE_ORDER_TIMEOUT_SECONDS")
     live_reconciliation_interval_seconds: float = Field(
         default=30.0, alias="LIVE_RECONCILIATION_INTERVAL_SECONDS"
     )
-    live_loop_interval_seconds: float = Field(
-        default=10.0, alias="LIVE_LOOP_INTERVAL_SECONDS"
-    )
+    live_loop_interval_seconds: float = Field(default=10.0, alias="LIVE_LOOP_INTERVAL_SECONDS")
     live_max_hold_seconds: int = Field(default=32400, alias="LIVE_MAX_HOLD_SECONDS")
-    live_exit_edge_miss_cycles: int = Field(
-        default=2, alias="LIVE_EXIT_EDGE_MISS_CYCLES"
-    )
-    live_entry_window_hours: Decimal = Field(
-        default=Decimal("2"), alias="LIVE_ENTRY_WINDOW_HOURS"
-    )
+    live_exit_edge_miss_cycles: int = Field(default=2, alias="LIVE_EXIT_EDGE_MISS_CYCLES")
+    live_entry_window_hours: Decimal = Field(default=Decimal("2"), alias="LIVE_ENTRY_WINDOW_HOURS")
     live_min_settlement_cost_coverage: Decimal = Field(
         default=Decimal("2"), alias="LIVE_MIN_SETTLEMENT_COST_COVERAGE"
     )
-    live_settlement_grace_seconds: int = Field(
-        default=90, alias="LIVE_SETTLEMENT_GRACE_SECONDS"
-    )
+    live_settlement_grace_seconds: int = Field(default=90, alias="LIVE_SETTLEMENT_GRACE_SECONDS")
     live_market_persist_interval_seconds: int = Field(
         default=60, alias="LIVE_MARKET_PERSIST_INTERVAL_SECONDS"
     )
@@ -169,22 +171,16 @@ class Settings(BaseSettings):
     live_require_dedicated_accounts: bool = Field(
         default=True, alias="LIVE_REQUIRE_DEDICATED_ACCOUNTS"
     )
-    live_liquidate_on_pause: bool = Field(
-        default=True, alias="LIVE_LIQUIDATE_ON_PAUSE"
-    )
+    live_liquidate_on_pause: bool = Field(default=True, alias="LIVE_LIQUIDATE_ON_PAUSE")
     bybit_api_key: SecretStr = Field(default=SecretStr(""), alias="BYBIT_API_KEY")
     bybit_api_secret: SecretStr = Field(default=SecretStr(""), alias="BYBIT_API_SECRET")
     gate_api_key: SecretStr = Field(default=SecretStr(""), alias="GATE_API_KEY")
     gate_api_secret: SecretStr = Field(default=SecretStr(""), alias="GATE_API_SECRET")
     okx_api_key: SecretStr = Field(default=SecretStr(""), alias="OKX_API_KEY")
     okx_api_secret: SecretStr = Field(default=SecretStr(""), alias="OKX_API_SECRET")
-    okx_api_passphrase: SecretStr = Field(
-        default=SecretStr(""), alias="OKX_API_PASSPHRASE"
-    )
+    okx_api_passphrase: SecretStr = Field(default=SecretStr(""), alias="OKX_API_PASSPHRASE")
     binance_api_key: SecretStr = Field(default=SecretStr(""), alias="BINANCE_API_KEY")
-    binance_api_secret: SecretStr = Field(
-        default=SecretStr(""), alias="BINANCE_API_SECRET"
-    )
+    binance_api_secret: SecretStr = Field(default=SecretStr(""), alias="BINANCE_API_SECRET")
     hyperliquid_wallet_address: SecretStr = Field(
         default=SecretStr(""), alias="HYPERLIQUID_WALLET_ADDRESS"
     )
@@ -193,12 +189,17 @@ class Settings(BaseSettings):
     )
     mexc_api_key: SecretStr = Field(default=SecretStr(""), alias="MEXC_API_KEY")
     mexc_api_secret: SecretStr = Field(default=SecretStr(""), alias="MEXC_API_SECRET")
+    kucoin_api_key: SecretStr = Field(default=SecretStr(""), alias="KUCOIN_API_KEY")
+    kucoin_api_secret: SecretStr = Field(default=SecretStr(""), alias="KUCOIN_API_SECRET")
+    kucoin_api_passphrase: SecretStr = Field(default=SecretStr(""), alias="KUCOIN_API_PASSPHRASE")
+    htx_api_key: SecretStr = Field(default=SecretStr(""), alias="HTX_API_KEY")
+    htx_api_secret: SecretStr = Field(default=SecretStr(""), alias="HTX_API_SECRET")
     market_data_stale_seconds: int = Field(default=30, alias="MARKET_DATA_STALE_SECONDS")
     paper_initial_balance_usd: Decimal = Field(
         default=Decimal("15000"), alias="PAPER_INITIAL_BALANCE_USD"
     )
     paper_venues: str = Field(
-        default="bybit,gate,okx,binance,hyperliquid,mexc", alias="PAPER_VENUES"
+        default="bybit,gate,okx,binance,hyperliquid,mexc,kucoin,htx", alias="PAPER_VENUES"
     )
     paper_reserve_percent: Decimal = Field(default=Decimal("20"), alias="PAPER_RESERVE_PERCENT")
     paper_max_single_opportunity_percent: Decimal = Field(
@@ -227,9 +228,7 @@ class Settings(BaseSettings):
     paper_autotrade_start_utc: datetime | None = Field(
         default=None, alias="PAPER_AUTOTRADE_START_UTC"
     )
-    paper_loop_interval_seconds: float = Field(
-        default=10.0, alias="PAPER_LOOP_INTERVAL_SECONDS"
-    )
+    paper_loop_interval_seconds: float = Field(default=10.0, alias="PAPER_LOOP_INTERVAL_SECONDS")
     paper_confirmation_seconds: int = Field(default=30, alias="PAPER_CONFIRMATION_SECONDS")
     paper_max_hold_seconds: int = Field(default=900, alias="PAPER_MAX_HOLD_SECONDS")
     paper_position_size_usd: Decimal = Field(
@@ -239,35 +238,25 @@ class Settings(BaseSettings):
     paper_settlement_interval_seconds: int = Field(
         default=28800, alias="PAPER_SETTLEMENT_INTERVAL_SECONDS"
     )
-    paper_history_refresh_seconds: int = Field(
-        default=3600, alias="PAPER_HISTORY_REFRESH_SECONDS"
-    )
-    paper_orderbook_symbol_limit: int = Field(
-        default=10, alias="PAPER_ORDERBOOK_SYMBOL_LIMIT"
-    )
+    paper_history_refresh_seconds: int = Field(default=3600, alias="PAPER_HISTORY_REFRESH_SECONDS")
+    paper_orderbook_symbol_limit: int = Field(default=10, alias="PAPER_ORDERBOOK_SYMBOL_LIMIT")
     paper_market_asset_limit: int = Field(default=12, alias="PAPER_MARKET_ASSET_LIMIT")
     paper_history_symbol_limit: int = Field(default=5, alias="PAPER_HISTORY_SYMBOL_LIMIT")
     paper_market_persist_interval_seconds: int = Field(
         default=300, alias="PAPER_MARKET_PERSIST_INTERVAL_SECONDS"
     )
-    paper_auto_init_database: bool = Field(
-        default=False, alias="PAPER_AUTO_INIT_DATABASE"
-    )
+    paper_auto_init_database: bool = Field(default=False, alias="PAPER_AUTO_INIT_DATABASE")
     paper_simulation_version: str = Field(
         default="v31-oos-candidate", alias="PAPER_SIMULATION_VERSION"
     )
     paper_strategy_profile: Literal["baseline", "candidate"] = Field(
         default="candidate", alias="PAPER_STRATEGY_PROFILE"
     )
-    paper_comparison_enabled: bool = Field(
-        default=False, alias="PAPER_COMPARISON_ENABLED"
-    )
+    paper_comparison_enabled: bool = Field(default=False, alias="PAPER_COMPARISON_ENABLED")
     paper_baseline_simulation_version: str = Field(
         default="v31-oos-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
     )
-    paper_exit_edge_miss_cycles: int = Field(
-        default=2, alias="PAPER_EXIT_EDGE_MISS_CYCLES"
-    )
+    paper_exit_edge_miss_cycles: int = Field(default=2, alias="PAPER_EXIT_EDGE_MISS_CYCLES")
     paper_funding_horizon_hours: Decimal = Field(
         default=Decimal("24"), alias="PAPER_FUNDING_HORIZON_HOURS"
     )
@@ -281,9 +270,7 @@ class Settings(BaseSettings):
         default=Decimal("0.005"), alias="PAPER_MAX_ADVERSE_BASIS_PERCENT"
     )
     telegram_enabled: bool = Field(default=False, alias="TELEGRAM_ENABLED")
-    telegram_bot_token: SecretStr = Field(
-        default=SecretStr(""), alias="TELEGRAM_BOT_TOKEN"
-    )
+    telegram_bot_token: SecretStr = Field(default=SecretStr(""), alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
     telegram_api_base_url: str = Field(
         default="https://api.telegram.org", alias="TELEGRAM_API_BASE_URL"
@@ -309,9 +296,7 @@ class Settings(BaseSettings):
     scanner_minimum_duration_seconds: int = Field(
         default=30, alias="SCANNER_MINIMUM_DURATION_SECONDS"
     )
-    scanner_allow_spot_short: bool = Field(
-        default=False, alias="SCANNER_ALLOW_SPOT_SHORT"
-    )
+    scanner_allow_spot_short: bool = Field(default=False, alias="SCANNER_ALLOW_SPOT_SHORT")
     scanner_borrowing_cost_daily: Decimal = Field(
         default=Decimal("0"), alias="SCANNER_BORROWING_COST_DAILY"
     )
@@ -331,6 +316,10 @@ class Settings(BaseSettings):
     )
     mexc_maker_fee: Decimal = Field(default=Decimal("0.0006"), alias="MEXC_MAKER_FEE")
     mexc_taker_fee: Decimal = Field(default=Decimal("0.0008"), alias="MEXC_TAKER_FEE")
+    kucoin_maker_fee: Decimal = Field(default=Decimal("0.001"), alias="KUCOIN_MAKER_FEE")
+    kucoin_taker_fee: Decimal = Field(default=Decimal("0.001"), alias="KUCOIN_TAKER_FEE")
+    htx_maker_fee: Decimal = Field(default=Decimal("0.002"), alias="HTX_MAKER_FEE")
+    htx_taker_fee: Decimal = Field(default=Decimal("0.002"), alias="HTX_TAKER_FEE")
     request_timeout_seconds: float = Field(default=15.0, alias="REQUEST_TIMEOUT_SECONDS")
     rate_limit_requests_per_second: float = Field(
         default=8.0, alias="RATE_LIMIT_REQUESTS_PER_SECOND"
@@ -353,9 +342,7 @@ class Settings(BaseSettings):
     @property
     def live_venue_values(self) -> tuple[str, ...]:
         return tuple(
-            value.strip().lower()
-            for value in self.live_venues.split(",")
-            if value.strip()
+            value.strip().lower() for value in self.live_venues.split(",") if value.strip()
         )
 
     @property
@@ -375,9 +362,7 @@ class Settings(BaseSettings):
     @property
     def live_reserve_asset_values(self) -> frozenset[str]:
         return frozenset(
-            value.strip().upper()
-            for value in self.live_reserve_assets.split(",")
-            if value.strip()
+            value.strip().upper() for value in self.live_reserve_assets.split(",") if value.strip()
         )
 
     def live_credentials(self, venue: str) -> dict[str, str]:
@@ -398,20 +383,19 @@ class Settings(BaseSettings):
                 "privateKey": self.hyperliquid_private_key,
             },
             "mexc": {"apiKey": self.mexc_api_key, "secret": self.mexc_api_secret},
+            "kucoin": {
+                "apiKey": self.kucoin_api_key,
+                "secret": self.kucoin_api_secret,
+                "password": self.kucoin_api_passphrase,
+            },
+            "htx": {"apiKey": self.htx_api_key, "secret": self.htx_api_secret},
         }
-        return {
-            key: value.get_secret_value()
-            for key, value in credentials.get(venue, {}).items()
-        }
+        return {key: value.get_secret_value() for key, value in credentials.get(venue, {}).items()}
 
     @property
     def paper_correlation_group_values(self) -> tuple[frozenset[str], ...]:
         return tuple(
-            frozenset(
-                asset.strip().upper()
-                for asset in group.split(",")
-                if asset.strip()
-            )
+            frozenset(asset.strip().upper() for asset in group.split(",") if asset.strip())
             for group in self.paper_correlation_groups.split(";")
             if group.strip()
         )
@@ -425,6 +409,8 @@ class Settings(BaseSettings):
             "binance": (self.binance_maker_fee, self.binance_taker_fee),
             "hyperliquid": (self.hyperliquid_maker_fee, self.hyperliquid_taker_fee),
             "mexc": (self.mexc_maker_fee, self.mexc_taker_fee),
+            "kucoin": (self.kucoin_maker_fee, self.kucoin_taker_fee),
+            "htx": (self.htx_maker_fee, self.htx_taker_fee),
         }
 
 
@@ -474,6 +460,18 @@ def get_settings() -> Settings:
                 "futures_base_url": "mexc_futures_base_url",
                 "futures_websocket_url": "mexc_futures_ws_url",
                 "spot_websocket_url": "mexc_spot_ws_url",
+            },
+            "kucoin": {
+                "spot_base_url": "kucoin_spot_base_url",
+                "futures_base_url": "kucoin_futures_base_url",
+                "spot_websocket_url": "kucoin_spot_ws_url",
+                "futures_websocket_url": "kucoin_futures_ws_url",
+            },
+            "htx": {
+                "spot_base_url": "htx_spot_base_url",
+                "futures_base_url": "htx_futures_base_url",
+                "spot_websocket_url": "htx_spot_ws_url",
+                "futures_websocket_url": "htx_futures_ws_url",
             },
         }
         for section, fields in section_fields.items():
@@ -558,9 +556,7 @@ def _validate_safe_values(settings: Settings) -> None:
         if settings.app_env != "production":
             raise ValueError("live run mode requires APP_ENV=production")
         if not settings.database_url.startswith("postgresql+asyncpg://"):
-            raise ValueError(
-                "live run mode requires PostgreSQL via postgresql+asyncpg"
-            )
+            raise ValueError("live run mode requires PostgreSQL via postgresql+asyncpg")
         if settings.execution_mode != "live":
             raise ValueError("live run mode requires EXECUTION_MODE=live")
         if settings.market_data_mode != "live_public":
@@ -569,18 +565,31 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError("live run mode requires LIVE_ARMED=true")
         if settings.live_trading_confirm != "I_UNDERSTAND_THIS_SENDS_REAL_ORDERS":
             raise ValueError(
-                "live run mode requires LIVE_TRADING_CONFIRM="
-                "I_UNDERSTAND_THIS_SENDS_REAL_ORDERS"
+                "live run mode requires LIVE_TRADING_CONFIRM=I_UNDERSTAND_THIS_SENDS_REAL_ORDERS"
             )
-        supported_venues = {"bybit", "gate", "okx", "binance", "hyperliquid", "mexc"}
+        supported_venues = {
+            "bybit",
+            "gate",
+            "okx",
+            "binance",
+            "hyperliquid",
+            "mexc",
+            "kucoin",
+            "htx",
+        }
         unknown_venues = set(settings.live_venue_values) - supported_venues
         if unknown_venues:
             raise ValueError(f"unsupported LIVE_VENUES: {sorted(unknown_venues)}")
         if not settings.live_venue_values:
             raise ValueError("LIVE_VENUES must contain at least one venue")
-        if settings.live_sandbox and "mexc" in settings.live_venue_values:
+        unsupported_sandbox_venues = sorted(
+            set(settings.live_venue_values) & {"mexc", "kucoin", "htx"}
+        )
+        if settings.live_sandbox and unsupported_sandbox_venues:
             raise ValueError(
-                "MEXC live sandbox is not supported; use paper_test with live_public data"
+                "live sandbox is not supported for: "
+                + ",".join(unsupported_sandbox_venues)
+                + "; use paper_test with live_public data"
             )
         if not settings.live_require_dedicated_accounts:
             raise ValueError("live run mode requires dedicated exchange accounts")
@@ -669,6 +678,50 @@ def _validate_safe_values(settings: Settings) -> None:
                     "MEXC_SPOT_WS_URL",
                 ),
             ),
+            "kucoin": (
+                (
+                    settings.kucoin_spot_base_url,
+                    "https://api.kucoin.com",
+                    "KUCOIN_SPOT_BASE_URL",
+                ),
+                (
+                    settings.kucoin_futures_base_url,
+                    "https://api-futures.kucoin.com",
+                    "KUCOIN_FUTURES_BASE_URL",
+                ),
+                (
+                    settings.kucoin_spot_ws_url,
+                    "wss://ws-api-spot.kucoin.com",
+                    "KUCOIN_SPOT_WS_URL",
+                ),
+                (
+                    settings.kucoin_futures_ws_url,
+                    "wss://ws-api-futures.kucoin.com",
+                    "KUCOIN_FUTURES_WS_URL",
+                ),
+            ),
+            "htx": (
+                (
+                    settings.htx_spot_base_url,
+                    "https://api.huobi.pro",
+                    "HTX_SPOT_BASE_URL",
+                ),
+                (
+                    settings.htx_futures_base_url,
+                    "https://api.hbdm.com",
+                    "HTX_FUTURES_BASE_URL",
+                ),
+                (
+                    settings.htx_spot_ws_url,
+                    "wss://api.huobi.pro/ws",
+                    "HTX_SPOT_WS_URL",
+                ),
+                (
+                    settings.htx_futures_ws_url,
+                    "wss://api.hbdm.com/linear-swap-ws",
+                    "HTX_FUTURES_WS_URL",
+                ),
+            ),
         }
         for venue in settings.live_venue_values:
             for value, expected, label in official_market_endpoints[venue]:
@@ -704,9 +757,7 @@ def _validate_safe_values(settings: Settings) -> None:
             not settings.telegram_bot_token.get_secret_value()
             or not settings.telegram_chat_id.strip()
         ):
-            raise ValueError(
-                "live Telegram alerts require TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
-            )
+            raise ValueError("live Telegram alerts require TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
     elif settings.execution_mode == "live":
         raise ValueError("EXECUTION_MODE=live requires RUN_MODE=live")
     if not settings.live_client_order_prefix.isalnum():
@@ -728,13 +779,9 @@ def _validate_safe_values(settings: Settings) -> None:
         if getattr(settings, field_name) <= 0:
             raise ValueError(f"{field_name.upper()} must be positive")
     if settings.live_default_position_size_usd > settings.live_max_order_notional_usd:
-        raise ValueError(
-            "LIVE_DEFAULT_POSITION_SIZE_USD cannot exceed LIVE_MAX_ORDER_NOTIONAL_USD"
-        )
+        raise ValueError("LIVE_DEFAULT_POSITION_SIZE_USD cannot exceed LIVE_MAX_ORDER_NOTIONAL_USD")
     if settings.live_max_order_notional_usd * 2 > settings.live_max_total_notional_usd:
-        raise ValueError(
-            "LIVE_MAX_TOTAL_NOTIONAL_USD must cover both legs of one maximum order"
-        )
+        raise ValueError("LIVE_MAX_TOTAL_NOTIONAL_USD must cover both legs of one maximum order")
     if not settings.live_reserve_asset_values:
         raise ValueError("LIVE_RESERVE_ASSETS must contain at least one asset")
     if settings.live_max_open_positions <= 0:
@@ -781,9 +828,7 @@ def _validate_safe_values(settings: Settings) -> None:
     ):
         raise ValueError("PAPER_AUTOTRADE_START_UTC must include a timezone")
     if settings.paper_autotrade_start_utc is not None:
-        settings.paper_autotrade_start_utc = (
-            settings.paper_autotrade_start_utc.astimezone(UTC)
-        )
+        settings.paper_autotrade_start_utc = settings.paper_autotrade_start_utc.astimezone(UTC)
     if not settings.paper_simulation_version.strip():
         raise ValueError("PAPER_SIMULATION_VERSION must not be blank")
     if not settings.paper_baseline_simulation_version.strip():

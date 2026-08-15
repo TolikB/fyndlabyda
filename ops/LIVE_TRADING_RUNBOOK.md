@@ -35,6 +35,19 @@ feeds, exact per-contract funding cycles, next settlement timestamps, and
 contract-size conversion. MEXC live mode uses the authenticated spot V3 and
 contract V1 APIs with deterministic client order IDs and REST reconciliation.
 
+For KuCoin, create a Classic-account API key with General/read, Spot trading,
+and Futures trading permissions. Record the key, secret, and API passphrase;
+all three are required. Bind it to the server IP and disable withdrawal and
+transfer permissions. The service keeps spot and futures clients separate and
+queries funding payments per `LIVE_ALLOWED_ASSETS` symbol.
+
+For HTX, create a dedicated API key with read and trade permissions for Spot
+and USDT-M Futures only. Bind it to the server IP and do not enable withdrawals
+or transfers. HTX live execution is restricted to isolated linear swaps; the
+service verifies account fees through `/linear-swap-api/v1/swap_fee`, polls
+funding bills by allowlisted symbol, and hashes each durable client ID into the
+required signed 64-bit numeric form.
+
 ## Configuration and preflight
 
 Copy `.env.live.example` to `.env`, replace the database password, choose the
@@ -54,8 +67,9 @@ dedicated accounts, enabled Telegram alerts, and the official HTTPS Telegram
 endpoint. All enabled exchange REST/WebSocket endpoints must exactly match the
 code allowlist. MEXC spot and futures REST APIs both use the official
 `https://api.mexc.com` origin; the futures WebSocket remains
-`wss://contract.mexc.com/edge`. These are code-enforced boundaries, not
-optional operator conventions.
+`wss://contract.mexc.com/edge`. KuCoin is pinned to `api.kucoin.com` and
+`api-futures.kucoin.com`; HTX is pinned to `api.huobi.pro` and `api.hbdm.com`.
+These are code-enforced boundaries, not optional operator conventions.
 
 Only release an immutable commit whose GitHub **Release gate** passed. The gate
 uses the hash-locked development environment, runs compile/Ruff/mypy/pytest and
@@ -143,7 +157,7 @@ Daily and total PnL are calculated from authenticated account equity, including
 venue fees and unrealized PnL. External transfers contaminate equity-delta PnL;
 do not move funds during a reporting period without recording a new baseline.
 
-MEXC does not provide a separate exchange sandbox through this service. Test
-the same strategy in `RUN_MODE=paper_test`, `MARKET_DATA_MODE=live_public`, and
-`EXECUTION_MODE=paper`; only the explicit live interlocks above can activate
-authenticated order submission.
+MEXC, KuCoin, and HTX do not provide a separate exchange sandbox through this
+service. Test the same strategy in `RUN_MODE=paper_test`,
+`MARKET_DATA_MODE=live_public`, and `EXECUTION_MODE=paper`; only the explicit
+live interlocks above can activate authenticated order submission.

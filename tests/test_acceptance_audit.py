@@ -47,7 +47,7 @@ def test_operator_gate_requires_clean_boundary_and_exact_versions() -> None:
 
 
 def _operational(**updates: object) -> dict[str, object]:
-    venues = ("binance", "bybit", "gate", "hyperliquid", "mexc", "okx")
+    venues = ("binance", "bybit", "gate", "htx", "hyperliquid", "kucoin", "mexc", "okx")
     values: dict[str, object] = {
         "paper_runner_cycles": 10,
         "paper_runner_errors": 0,
@@ -57,9 +57,7 @@ def _operational(**updates: object) -> dict[str, object]:
         "history_coverage": {venue: 1.0 for venue in venues},
         "orderbook_coverage": {venue: 1.0 for venue in venues},
         "stale_or_missing_orderbooks": {venue: 0.0 for venue in venues},
-        "stream_message_ages": {
-            venue: {"ticker": 5.0, "orderbook": 5.0} for venue in venues
-        },
+        "stream_message_ages": {venue: {"ticker": 5.0, "orderbook": 5.0} for venue in venues},
     }
     values.update(updates)
     return values
@@ -107,7 +105,16 @@ def _audit(execution_mode: str = "paper") -> dict[str, object]:
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
+            "healthy_venues": [
+                "binance",
+                "bybit",
+                "gate",
+                "htx",
+                "hyperliquid",
+                "kucoin",
+                "mexc",
+                "okx",
+            ],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -191,7 +198,16 @@ def test_acceptance_audit_fails_closed_without_continuous_snapshot_evidence() ->
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
+            "healthy_venues": [
+                "binance",
+                "bybit",
+                "gate",
+                "htx",
+                "hyperliquid",
+                "kucoin",
+                "mexc",
+                "okx",
+            ],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -294,7 +310,16 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
+            "healthy_venues": [
+                "binance",
+                "bybit",
+                "gate",
+                "htx",
+                "hyperliquid",
+                "kucoin",
+                "mexc",
+                "okx",
+            ],
         },
         {
             "canary": {"ready": True},
@@ -313,18 +338,13 @@ def test_acceptance_audit_rejects_duplicate_or_unkeyed_open_exposure() -> None:
     assert result["runtime_checks"]["candidate_open_exposure_keys_verifiable"] is False
     assert result["runtime_checks"]["candidate_open_exposure_keys_canonical"] is False
     assert result["runtime_checks"]["candidate_duplicate_open_exposures_zero"] is False
-    assert (
-        result["runtime_checks"]["candidate_overlapping_exposure_intervals_zero"]
-        is False
-    )
+    assert result["runtime_checks"]["candidate_overlapping_exposure_intervals_zero"] is False
     assert result["runtime_safe"] is False
     assert result["canary_ready"] is False
 
 
 def test_open_exposure_safety_counts_missing_and_excess_positions() -> None:
-    canonical = (
-        "exposure|COTI|bybit|COTIUSDT|PERPETUAL|gate|COTI_USDT|PERPETUAL"
-    )
+    canonical = "exposure|COTI|bybit|COTIUSDT|PERPETUAL|gate|COTI_USDT|PERPETUAL"
     valid_payload = {
         "asset": "COTI",
         "exposure_key": canonical,
@@ -357,9 +377,7 @@ def test_open_exposure_safety_counts_missing_and_excess_positions() -> None:
 
 
 def test_historical_exposure_safety_detects_closed_interval_overlap() -> None:
-    canonical = (
-        "exposure|COTI|bybit|COTIUSDT|PERPETUAL|gate|COTI_USDT|PERPETUAL"
-    )
+    canonical = "exposure|COTI|bybit|COTIUSDT|PERPETUAL|gate|COTI_USDT|PERPETUAL"
     payload = {
         "asset": "COTI",
         "exposure_key": canonical,
@@ -416,7 +434,16 @@ def test_acceptance_audit_rejects_wrong_or_inactive_autotrade_boundary() -> None
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
+            "healthy_venues": [
+                "binance",
+                "bybit",
+                "gate",
+                "htx",
+                "hyperliquid",
+                "kucoin",
+                "mexc",
+                "okx",
+            ],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -449,7 +476,16 @@ def test_acceptance_audit_rejects_cycle_errors_or_incomplete_market_data() -> No
         {
             "status": "ready",
             "comparison_enabled": True,
-            "healthy_venues": ["binance", "bybit", "gate", "hyperliquid", "mexc", "okx"],
+            "healthy_venues": [
+                "binance",
+                "bybit",
+                "gate",
+                "htx",
+                "hyperliquid",
+                "kucoin",
+                "mexc",
+                "okx",
+            ],
         },
         {
             "canary": {"ready": True, "checks": {}},
@@ -500,7 +536,9 @@ def test_acceptance_audit_rejects_missing_or_stale_websocket_stream() -> None:
                 "binance",
                 "bybit",
                 "gate",
+                "htx",
                 "hyperliquid",
+                "kucoin",
                 "mexc",
                 "okx",
             ],
@@ -549,16 +587,12 @@ funding_exchange_stream_last_message_timestamp{exchange="gate",stream="orderbook
         "paper_runner_cycles": 4.0,
         "paper_runner_errors": 0.0,
         "market_cycles_skipped": {"incomplete_venue": 2.0},
-        "trade_rejections": {
-            "candidate": {"settlement_cost_coverage": 3.0}
-        },
+        "trade_rejections": {"candidate": {"settlement_cost_coverage": 3.0}},
         "last_cycle_age_seconds": 10.0,
         "history_coverage": {"gate": 1.0},
         "orderbook_coverage": {"gate": 1.0},
         "stale_or_missing_orderbooks": {"gate": 0.0},
-        "stream_message_ages": {
-            "gate": {"ticker": 2.0, "orderbook": 3.0}
-        },
+        "stream_message_ages": {"gate": {"ticker": 2.0, "orderbook": 3.0}},
     }
 
 

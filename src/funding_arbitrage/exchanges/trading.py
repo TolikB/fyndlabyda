@@ -76,6 +76,15 @@ class CcxtTradingAdapter(TradingAdapter):
             profiles = ({"type": "spot"}, {"type": "swap", "settle": "usdt"})
         elif self.name == "hyperliquid":
             profiles = ({"type": "swap"}, {"type": "spot"})
+        elif self.name == "htx":
+            profiles = (
+                {"type": "spot"},
+                {
+                    "type": "swap",
+                    "subType": "linear",
+                    "marginMode": self.margin_mode,
+                },
+            )
         else:
             profiles = ({},)
         results = await asyncio.gather(
@@ -100,14 +109,11 @@ class CcxtTradingAdapter(TradingAdapter):
                 for currency, value in values.items():
                     amount = _decimal(value)
                     if amount != 0:
-                        target[str(currency).upper()] = target.get(
-                            str(currency).upper(), Decimal("0")
-                        ) + amount
+                        target[str(currency).upper()] = (
+                            target.get(str(currency).upper(), Decimal("0")) + amount
+                        )
         stable_free = sum(
-            (
-                free.get(currency, Decimal("0"))
-                for currency in ("USD", "USDT", "USDC")
-            ),
+            (free.get(currency, Decimal("0")) for currency in ("USD", "USDT", "USDC")),
             Decimal("0"),
         )
         free_override = self._usd_free_override(successful)
@@ -139,9 +145,7 @@ class CcxtTradingAdapter(TradingAdapter):
             total=total,
             spot_free=spot_free,
             equity_usd=self._usd_equity_override(successful),
-            free_collateral_usd=(
-                free_override if free_override is not None else stable_free
-            ),
+            free_collateral_usd=(free_override if free_override is not None else stable_free),
             derivative_free_collateral_usd=derivative_free,
             unrealized_pnl_usd=self._usd_unrealized_adjustment(successful),
         )
@@ -149,7 +153,8 @@ class CcxtTradingAdapter(TradingAdapter):
     async def fetch_positions(self) -> list[VenuePosition]:
         if not self.exchange.has.get("fetchPositions"):
             return []
-        rows = await self.exchange.fetch_positions()
+        params = {"subType": "linear", "marginMode": self.margin_mode} if self.name == "htx" else {}
+        rows = await self.exchange.fetch_positions(params=params)
         result: list[VenuePosition] = []
         for row in rows:
             contracts = _decimal(row.get("contracts"))
@@ -195,6 +200,15 @@ class CcxtTradingAdapter(TradingAdapter):
             profiles = ({"type": "spot"}, {"type": "swap"})
         elif self.name == "bybit":
             profiles = ({"category": "spot"}, {"category": "linear"})
+        elif self.name == "htx":
+            profiles = (
+                {"type": "spot"},
+                {
+                    "type": "swap",
+                    "subType": "linear",
+                    "marginMode": self.margin_mode,
+                },
+            )
         else:
             profiles = ({},)
         results = await asyncio.gather(
@@ -212,14 +226,11 @@ class CcxtTradingAdapter(TradingAdapter):
             if isinstance(row, dict)
         ]
         unique = {
-            (str(row.get("id") or ""), str(row.get("clientOrderId") or "")): row
-            for row in rows
+            (str(row.get("id") or ""), str(row.get("clientOrderId") or "")): row for row in rows
         }
         return [self._parse_order(row) for row in unique.values()]
 
-    async def fetch_funding_payments(
-        self, since: datetime
-    ) -> list[VenueFundingPayment]:
+    async def fetch_funding_payments(self, since: datetime) -> list[VenueFundingPayment]:
         if not self.exchange.has.get("fetchFundingHistory"):
             raise RuntimeError(f"{self.name} does not support funding-payment history")
         rows = await self.exchange.fetch_funding_history(
@@ -227,22 +238,34 @@ class CcxtTradingAdapter(TradingAdapter):
             int(since.timestamp() * 1000),
             100,
         )
+        return self._funding_rows_to_payments(rows)
+
+    def _funding_rows_to_payments(self, rows: list[dict[str, Any]]) -> list[VenueFundingPayment]:
         result: list[VenueFundingPayment] = []
         for row in rows:
             timestamp_ms = row.get("timestamp")
             if timestamp_ms is None:
                 continue
             timestamp = datetime.fromtimestamp(float(timestamp_ms) / 1000, tz=UTC)
-            symbol = str(row.get("symbol") or row.get("code") or "UNKNOWN")
+            raw_info = row.get("info")
+            info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
+            symbol = str(
+                row.get("symbol")
+                or info.get("contract_code")
+                or info.get("symbol")
+                or row.get("code")
+                or "UNKNOWN"
+            )
             market = self._market_from_symbol(row.get("symbol"))
             exchange_symbol = str(market["id"]) if market is not None else symbol
             amount = _decimal(row.get("amount"))
-            currency = str(row.get("code") or "USDT").upper()
-            source_id = str(row.get("id") or "")
+            currency = str(
+                row.get("code") or info.get("currency") or info.get("settleCurrency") or "USDT"
+            ).upper()
+            source_id = str(info.get("id") or info.get("query_id") or row.get("id") or "")
             external_id = hashlib.sha256(
                 (
-                    f"{self.name}:{source_id}:{exchange_symbol}:"
-                    f"{timestamp.isoformat()}:{amount}"
+                    f"{self.name}:{source_id}:{exchange_symbol}:{timestamp.isoformat()}:{amount}"
                 ).encode()
             ).hexdigest()
             result.append(
@@ -320,15 +343,15 @@ class CcxtTradingAdapter(TradingAdapter):
         self._validate_order_limits(market, precise_amount, price)
         params: dict[str, object] = {
             "timeInForce": "IOC",
-            "clientOrderId": request.client_order_id,
+            "clientOrderId": self._venue_client_order_id(request.client_order_id),
         }
         if request.instrument_type is not InstrumentType.SPOT:
             params["reduceOnly"] = request.reduce_only
+            if self.name == "htx":
+                params["marginMode"] = self.margin_mode
         if self.name == "okx":
             params["tdMode"] = (
-                "cash"
-                if request.instrument_type is InstrumentType.SPOT
-                else self.margin_mode
+                "cash" if request.instrument_type is InstrumentType.SPOT else self.margin_mode
             )
         elif self.name == "bybit" and request.instrument_type is not InstrumentType.SPOT:
             params["positionIdx"] = 0
@@ -346,13 +369,9 @@ class CcxtTradingAdapter(TradingAdapter):
                 params,
             )
         except Exception as exc:
-            recovered = await self._find_by_client_id(
-                request.client_order_id, market["symbol"]
-            )
+            recovered = await self._find_by_client_id(request.client_order_id, market["symbol"])
             if recovered is not None:
-                return self._parse_order(
-                    recovered, request=normalized_request, market=market
-                )
+                return self._parse_order(recovered, request=normalized_request, market=market)
             if self._is_definitive_rejection(exc):
                 return TradingOrderResult(
                     exchange=self.name,
@@ -466,9 +485,7 @@ class CcxtTradingAdapter(TradingAdapter):
         except Exception:
             return None
 
-    async def _find_by_client_id(
-        self, client_order_id: str, symbol: str
-    ) -> dict[str, Any] | None:
+    async def _find_by_client_id(self, client_order_id: str, symbol: str) -> dict[str, Any] | None:
         methods = ("fetch_open_orders", "fetch_closed_orders")
         for method_name in methods:
             if not self.exchange.has.get(
@@ -479,10 +496,18 @@ class CcxtTradingAdapter(TradingAdapter):
                 rows = await getattr(self.exchange, method_name)(symbol)
             except Exception:
                 continue
+            venue_client_order_id = self._venue_client_order_id(client_order_id)
             for row in rows:
-                if str(row.get("clientOrderId") or "") == client_order_id:
+                if str(row.get("clientOrderId") or "") == venue_client_order_id:
                     return row
         return None
+
+    def _venue_client_order_id(self, client_order_id: str) -> str:
+        if self.name != "htx":
+            return client_order_id
+        # HTX linear swaps accept only a signed 64-bit integer client_order_id.
+        digest = hashlib.sha256(client_order_id.encode()).digest()
+        return str(int.from_bytes(digest[:8], "big") % 9_000_000_000_000_000_000 + 1)
 
     def _parse_order(
         self,
@@ -518,9 +543,10 @@ class CcxtTradingAdapter(TradingAdapter):
         return TradingOrderResult(
             exchange=self.name,
             exchange_order_id=str(row["id"]) if row.get("id") is not None else None,
-            client_order_id=str(
-                row.get("clientOrderId")
-                or (request.client_order_id if request is not None else "")
+            client_order_id=(
+                request.client_order_id
+                if request is not None
+                else str(row.get("clientOrderId") or "")
             ),
             exchange_symbol=str(market["id"]),
             instrument_type=instrument_type,
@@ -535,9 +561,7 @@ class CcxtTradingAdapter(TradingAdapter):
             raw={"info": raw_info} if isinstance(raw_info, dict) else {},
         )
 
-    def _market(
-        self, exchange_symbol: str, instrument_type: InstrumentType
-    ) -> dict[str, Any]:
+    def _market(self, exchange_symbol: str, instrument_type: InstrumentType) -> dict[str, Any]:
         candidates = self.exchange.markets_by_id.get(exchange_symbol)
         if isinstance(candidates, dict):
             candidates = [candidates]
@@ -554,9 +578,7 @@ class CcxtTradingAdapter(TradingAdapter):
                 return market
             if instrument_type is InstrumentType.FUTURE and market.get("future"):
                 return market
-        raise ValueError(
-            f"{self.name} market not found: {exchange_symbol} {instrument_type.value}"
-        )
+        raise ValueError(f"{self.name} market not found: {exchange_symbol} {instrument_type.value}")
 
     def _market_from_symbol(self, symbol: object) -> dict[str, Any] | None:
         if symbol is None:
@@ -569,23 +591,20 @@ class CcxtTradingAdapter(TradingAdapter):
         return _decimal(market.get("contractSize"), Decimal("1"))
 
     @staticmethod
-    def _validate_order_limits(
-        market: dict[str, Any], amount: Decimal, price: Decimal
-    ) -> None:
+    def _validate_order_limits(market: dict[str, Any], amount: Decimal, price: Decimal) -> None:
         limits = market.get("limits") or {}
         minimum_amount = _decimal((limits.get("amount") or {}).get("min"))
         minimum_cost = _decimal((limits.get("cost") or {}).get("min"))
         if amount <= 0 or (minimum_amount > 0 and amount < minimum_amount):
             raise ValueError("order amount is below venue minimum")
-        if minimum_cost > 0 and amount * price * _decimal(
-            market.get("contractSize"), Decimal("1")
-        ) < minimum_cost:
+        if (
+            minimum_cost > 0
+            and amount * price * _decimal(market.get("contractSize"), Decimal("1")) < minimum_cost
+        ):
             raise ValueError("order notional is below venue minimum")
 
     @staticmethod
-    def _status(
-        raw_status: object, filled: Decimal, requested: Decimal
-    ) -> LiveOrderStatus:
+    def _status(raw_status: object, filled: Decimal, requested: Decimal) -> LiveOrderStatus:
         status = str(raw_status or "").lower()
         if status == "open":
             return LiveOrderStatus.OPEN
@@ -647,9 +666,7 @@ class CcxtTradingAdapter(TradingAdapter):
             if _decimal(value) != 0
         }
 
-    def _bybit_account_total(
-        self, results: list[dict[str, Any]], field: str
-    ) -> Decimal | None:
+    def _bybit_account_total(self, results: list[dict[str, Any]], field: str) -> Decimal | None:
         if self.name != "bybit":
             return None
         for result in results:
@@ -672,6 +689,8 @@ def create_trading_adapters(settings: Settings) -> dict[str, TradingAdapter]:
 
     import ccxt.async_support as ccxt  # type: ignore[import-untyped]
 
+    from funding_arbitrage.exchanges.htx.trading import HtxTradingAdapter
+    from funding_arbitrage.exchanges.kucoin.trading import KucoinTradingAdapter
     from funding_arbitrage.exchanges.mexc.trading import MexcTradingAdapter
 
     classes: dict[str, Any] = {
@@ -683,6 +702,27 @@ def create_trading_adapters(settings: Settings) -> dict[str, TradingAdapter]:
     }
     result: dict[str, TradingAdapter] = {}
     for venue in settings.live_venue_values:
+        if venue == "kucoin":
+            credentials = settings.live_credentials(venue)
+            common: dict[str, object] = {
+                **credentials,
+                "enableRateLimit": True,
+                "timeout": int(settings.request_timeout_seconds * 1000),
+            }
+            spot = ccxt.kucoin({**common, "options": {"defaultType": "spot", "uta": False}})
+            futures = ccxt.kucoinfutures(
+                {**common, "options": {"defaultType": "swap", "uta": False}}
+            )
+            if settings.live_sandbox:
+                spot.set_sandbox_mode(True)
+                futures.set_sandbox_mode(True)
+            result[venue] = KucoinTradingAdapter(
+                spot,
+                futures,
+                margin_mode=settings.live_margin_mode,
+                allowed_assets=settings.live_allowed_asset_values,
+            )
+            continue
         if venue == "mexc":
             credentials = settings.live_credentials(venue)
             result[venue] = MexcTradingAdapter(
@@ -693,6 +733,24 @@ def create_trading_adapters(settings: Settings) -> dict[str, TradingAdapter]:
                 timeout_seconds=settings.request_timeout_seconds,
                 margin_mode=settings.live_margin_mode,
                 leverage=settings.live_leverage,
+            )
+            continue
+        if venue == "htx":
+            exchange = ccxt.htx(
+                {
+                    **settings.live_credentials(venue),
+                    "enableRateLimit": True,
+                    "timeout": int(settings.request_timeout_seconds * 1000),
+                    "options": {"defaultType": "swap", "subType": "linear"},
+                }
+            )
+            exchange.urls["hostnames"]["contract"] = "api.hbdm.com"
+            if settings.live_sandbox:
+                exchange.set_sandbox_mode(True)
+            result[venue] = HtxTradingAdapter(
+                exchange,
+                margin_mode=settings.live_margin_mode,
+                allowed_assets=settings.live_allowed_asset_values,
             )
             continue
         config: dict[str, object] = {
@@ -708,10 +766,9 @@ def create_trading_adapters(settings: Settings) -> dict[str, TradingAdapter]:
             config["options"] = {"defaultType": "swap", "adjustForTimeDifference": True}
         elif venue == "okx":
             config["options"] = {"defaultType": "swap", "adjustForTimeDifference": True}
+
         exchange = classes[venue](config)
         if settings.live_sandbox:
             exchange.set_sandbox_mode(True)
-        result[venue] = CcxtTradingAdapter(
-            venue, exchange, margin_mode=settings.live_margin_mode
-        )
+        result[venue] = CcxtTradingAdapter(venue, exchange, margin_mode=settings.live_margin_mode)
     return result
