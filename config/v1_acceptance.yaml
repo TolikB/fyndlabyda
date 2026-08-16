@@ -237,8 +237,10 @@ requirements:
   - id: STRAT-007
     category: strategies
     title: Passive market making is inventory-, adverse-selection-, and fee-aware
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/market_making.py
+      - tests/test_market_making_strategy.py
   - id: STRAT-008
     category: strategies
     title: Liquid-altcoin universe selection is dynamic, quality-gated, and survivorship-safe

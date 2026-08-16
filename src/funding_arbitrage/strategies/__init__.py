@@ -27,6 +27,15 @@ from funding_arbitrage.strategies.lead_lag import (
     LeadLagFairValueEngine,
     VenueFairValueInput,
 )
+from funding_arbitrage.strategies.market_making import (
+    MarketMakingConfig,
+    MarketMakingContext,
+    MarketMakingCosts,
+    MarketMakingEvaluation,
+    MarketMakingInventory,
+    PassiveMarketMakingStrategy,
+    PassiveQuoteProposal,
+)
 from funding_arbitrage.strategies.options_volatility import (
     BlackScholesModel,
     OptionPosition,
@@ -59,6 +68,11 @@ __all__ = [
     "LeadLagCostModel",
     "LeadLagFairValue",
     "LeadLagFairValueEngine",
+    "MarketMakingConfig",
+    "MarketMakingContext",
+    "MarketMakingCosts",
+    "MarketMakingEvaluation",
+    "MarketMakingInventory",
     "ForecastFundingEvent",
     "LiquiditySweepReversionConfig",
     "LiquiditySweepReversionStrategy",
@@ -75,5 +89,7 @@ __all__ = [
     "OptionsVolatilityEvaluation",
     "OptionsVolatilityStrategy",
     "OptionValuation",
+    "PassiveMarketMakingStrategy",
+    "PassiveQuoteProposal",
     "VenueFairValueInput",
 ]
