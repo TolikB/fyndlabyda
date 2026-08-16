@@ -13,6 +13,9 @@ from typing import Any
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import BookEvent
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -28,6 +31,10 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBook,
     OrderBookLevel,
     Ticker,
+)
+from funding_arbitrage.exchanges.gate.orderbook import (
+    GateBookUpdate,
+    GateOrderBookNormalizer,
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
@@ -81,6 +88,7 @@ class GatePublicAdapter(ExchangeAdapter):
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
+        canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         if not self.base_url.endswith("/api/v4"):
@@ -99,6 +107,10 @@ class GatePublicAdapter(ExchangeAdapter):
         self._funding_intervals_hours: dict[str, Decimal] = {}
         self._next_funding_times: dict[str, datetime] = {}
         self._active_futures_symbols: set[str] | None = None
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[
+            tuple[str, InstrumentType], DomainInstrumentKey
+        ] = {}
 
     async def __aenter__(self) -> GatePublicAdapter:
         await self._ensure_http()
@@ -147,7 +159,20 @@ class GatePublicAdapter(ExchangeAdapter):
         }
         self._funding_metadata_refreshed_at = datetime.now(UTC)
         spot = [self._parse_spot_instrument(row) for row in spot_payload]
-        return futures + spot
+        instruments = futures + spot
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset or item.quote_asset,
+                expiry=item.expiry,
+            )
+            for item in instruments
+        }
+        return instruments
 
     def _remember_funding_schedule(self, row: dict[str, Any]) -> Decimal:
         symbol = str(row["name"])
@@ -715,6 +740,7 @@ class GatePublicAdapter(ExchangeAdapter):
             else "futures.order_book"
         )
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
+            states: dict[str, GateOrderBookNormalizer] = {}
             try:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as socket:
                     for symbol in symbols:
@@ -752,16 +778,80 @@ class GatePublicAdapter(ExchangeAdapter):
                         )
                         if payload.get("channel") != channel or not valid_event:
                             continue
-                        reconnects = 0
-                        yield self._parse_ws_orderbook(
-                            payload.get("result"), instrument_type, depth
+                        update = await self._process_ws_orderbook_update(
+                            payload.get("result"),
+                            states,
+                            instrument_type,
+                            depth,
                         )
+                        if update is None:
+                            continue
+                        symbol = update.event.payload.instrument.exchange_symbol
+                        book = states[symbol].legacy_book(update, instrument_type)
+                        reconnects = 0
+                        if book is not None:
+                            yield book
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("Gate orderbook WebSocket reconnect limit reached") from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    async def _process_ws_orderbook_update(
+        self,
+        payload: object,
+        states: dict[str, GateOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> GateBookUpdate | None:
+        update = self._apply_ws_orderbook_update(
+            payload, states, instrument_type, depth
+        )
+        if update is not None and self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return update
+
+    def _apply_ws_orderbook_update(
+        self,
+        payload: object,
+        states: dict[str, GateOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> GateBookUpdate | None:
+        if not isinstance(payload, dict):
+            raise InvalidResponseError("invalid Gate WebSocket orderbook payload")
+        symbol_key = "s" if instrument_type is InstrumentType.SPOT else "contract"
+        symbol = str(payload.get(symbol_key, "")).upper()
+        if not symbol:
+            raise InvalidResponseError("Gate WebSocket orderbook symbol is missing")
+        state = states.get(symbol)
+        if state is None:
+            state = GateOrderBookNormalizer(
+                self._canonical_instrument(symbol, instrument_type), depth=depth
+            )
+            states[symbol] = state
+        return state.apply(payload, instrument_type=instrument_type)
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        cached = self._canonical_instruments.get((symbol, instrument_type))
+        if cached is not None:
+            return cached
+        parts = symbol.split("_")
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            raise InvalidResponseError(
+                f"Gate instrument metadata is required for {symbol}"
+            )
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=symbol,
+            base_asset=parts[0],
+            quote_asset=parts[1],
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset=parts[1],
+        )
 
     def _parse_ws_orderbook(
         self,
