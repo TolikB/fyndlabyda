@@ -426,10 +426,12 @@ requirements:
   - id: DATA-001
     category: storage
     title: PostgreSQL operational schema covers instruments, intents, orders, fills, positions, balances, risk, reconciliation, and audit
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/database/models.py
-      - migrations/versions
+      - migrations/versions/0010_live_execution.py
+      - migrations/versions/0012_v1_operational_schema.py
+      - tests/test_v1_operational_schema.py
   - id: DATA-002
     category: storage
     title: ClickHouse stores raw market events, features, signals, and telemetry with retention
