@@ -366,8 +366,10 @@ requirements:
   - id: EXE-007
     category: execution
     title: On-chain MEV execution handles simulation, bundle policy, reorgs, private relay, and loss bounds
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/execution/mev.py
+      - tests/test_mev_execution.py
   - id: EXE-008
     category: execution
     title: Native low-latency path supports colocation-capable sub-10ms budgets with measured telemetry
