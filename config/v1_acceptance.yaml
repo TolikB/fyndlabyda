@@ -435,13 +435,19 @@ requirements:
   - id: DATA-002
     category: storage
     title: ClickHouse stores raw market events, features, signals, and telemetry with retention
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - docker/clickhouse/init/001_v1_analytics.sql
+      - src/funding_arbitrage/storage/clickhouse.py
+      - tests/test_analytics_storage.py
+      - docker-compose.yml
   - id: DATA-003
     category: storage
     title: Redis supports bounded ephemeral state without becoming accounting authority
-    status: partial
+    status: implemented
     evidence:
+      - src/funding_arbitrage/storage/ephemeral.py
+      - tests/test_analytics_storage.py
       - docker-compose.yml
   - id: DATA-004
     category: storage

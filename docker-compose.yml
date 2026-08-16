@@ -80,6 +80,16 @@ services:
 
   redis:
     image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
     cpus: "0.10"
     mem_limit: 96m
     logging: *bounded-logging
@@ -87,6 +97,39 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: ["analytics"]
+    environment:
+      CLICKHOUSE_DB: funding_analytics
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-funding_analytics}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./docker/clickhouse/init:/docker-entrypoint-initdb.d:ro
+    expose:
+      - "8123"
+      - "9000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    cpus: "0.50"
+    mem_limit: 768m
+    logging: *bounded-logging
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          clickhouse-client --user "$${CLICKHOUSE_USER}"
+          --password "$${CLICKHOUSE_PASSWORD}" --query "SELECT 1"
+      interval: 10s
+      timeout: 5s
       retries: 10
     restart: unless-stopped
 
@@ -115,5 +158,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  clickhouse_data:
   postgres_data:
   runtime_state:
