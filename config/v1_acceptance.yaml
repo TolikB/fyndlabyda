@@ -251,8 +251,10 @@ requirements:
   - id: STRAT-009
     category: strategies
     title: Martingale, grid, and loss-averaging research modules are configurable and fail-closed for live use
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/dangerous_research.py
+      - tests/test_dangerous_research_strategies.py
   - id: AI-001
     category: strategies
     title: ML meta-labeling has versioned datasets, leakage controls, calibration, drift, and fallback

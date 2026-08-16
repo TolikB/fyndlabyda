@@ -1,5 +1,15 @@
 """Strategy modules that emit declarative signal intents only."""
 
+from funding_arbitrage.strategies.dangerous_research import (
+    DangerousResearchContext,
+    DangerousStrategyEvaluation,
+    GridConfig,
+    GridResearchStrategy,
+    LossAveragingConfig,
+    LossAveragingResearchStrategy,
+    MartingaleConfig,
+    MartingaleResearchStrategy,
+)
 from funding_arbitrage.strategies.dated_basis import (
     BasisMarketLeg,
     DatedBasisConfig,
@@ -62,6 +72,8 @@ from funding_arbitrage.strategies.universe import (
 __all__ = [
     "BasisMarketLeg",
     "BlackScholesModel",
+    "DangerousResearchContext",
+    "DangerousStrategyEvaluation",
     "DirectionalStrategyContext",
     "DirectionalStrategyEvaluation",
     "CrossExchangeLeadLagEvaluation",
@@ -83,8 +95,14 @@ __all__ = [
     "MarketMakingEvaluation",
     "MarketMakingInventory",
     "ForecastFundingEvent",
+    "GridConfig",
+    "GridResearchStrategy",
     "LiquiditySweepReversionConfig",
     "LiquiditySweepReversionStrategy",
+    "LossAveragingConfig",
+    "LossAveragingResearchStrategy",
+    "MartingaleConfig",
+    "MartingaleResearchStrategy",
     "OrderFlowBreakoutConfig",
     "OrderFlowBreakoutStrategy",
     "OptionPosition",
