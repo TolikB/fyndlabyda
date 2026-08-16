@@ -287,31 +287,38 @@ requirements:
   - id: RISK-001
     category: risk
     title: Portfolio risk is the sole authority that approves, resizes, or rejects intents
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/risk
+      - src/funding_arbitrage/risk/portfolio.py
+      - tests/test_portfolio_risk_authority.py
   - id: RISK-002
     category: risk
     title: Risk hierarchy covers order, position, asset, strategy, venue, correlation group, and portfolio
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/risk/engine.py
+      - src/funding_arbitrage/risk/portfolio.py
+      - tests/test_portfolio_risk_authority.py
   - id: RISK-003
     category: risk
     title: Kill switches cover strategy, venue, portfolio, stale data, loss, reconciliation, and operator control
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/risk/live.py
+      - src/funding_arbitrage/risk/portfolio.py
+      - tests/test_portfolio_risk_authority.py
   - id: RISK-004
     category: risk
     title: Sizing includes stop distance, liquidity, volatility, correlation, margin, and delta exposure
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/risk/portfolio.py
+      - tests/test_portfolio_risk_authority.py
   - id: RISK-005
     category: risk
     title: Portfolio-margin simulation and venue-specific margin/liquidation risk are implemented
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/risk/margin.py
+      - tests/test_portfolio_margin.py
   - id: EXE-001
     category: execution
     title: Durable OMS state machine covers new, acknowledged, partial, filled, cancel, rejected, expired, unknown, and reconciling
