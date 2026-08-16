@@ -11,6 +11,16 @@ from funding_arbitrage.execution.dex import (
     JsonlDexJournal,
     TokenAllowance,
 )
+from funding_arbitrage.execution.low_latency import (
+    LatencySnapshot,
+    NativeDecisionStatus,
+    NativeLatencyPolicy,
+    NativeLatencyTelemetry,
+    NativeLowLatencyGateway,
+    NativeOrderDecision,
+    NativeOrderIntent,
+    UdpNativeTransport,
+)
 from funding_arbitrage.execution.mev import (
     JsonlMevJournal,
     MevBundleCandidate,
@@ -63,6 +73,14 @@ __all__ = [
     "MevBundleTransaction",
     "MevExecutionEngine",
     "MevExecutionPolicy",
+    "LatencySnapshot",
+    "NativeDecisionStatus",
+    "NativeLatencyPolicy",
+    "NativeLatencyTelemetry",
+    "NativeLowLatencyGateway",
+    "NativeOrderDecision",
+    "NativeOrderIntent",
+    "UdpNativeTransport",
     "DurableOMS",
     "JsonlOMSJournal",
     "OMSEventType",

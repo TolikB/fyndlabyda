@@ -62,6 +62,13 @@ jobs:
           python scripts/v1_acceptance_audit.py
           python -m pytest -q
 
+      - name: Build and benchmark native low-latency gate
+        run: |
+          cc -O3 -std=c11 -Wall -Wextra -Werror \
+            native/low_latency/native_low_latency.c \
+            -o /tmp/funding-native-low-latency
+          /tmp/funding-native-low-latency --self-test 200000
+
       - name: Audit production dependencies
         run: python -m pip_audit --requirement requirements-linux.lock --disable-pip
 

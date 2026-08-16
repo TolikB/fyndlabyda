@@ -373,8 +373,13 @@ requirements:
   - id: EXE-008
     category: execution
     title: Native low-latency path supports colocation-capable sub-10ms budgets with measured telemetry
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - native/low_latency/native_low_latency.c
+      - src/funding_arbitrage/execution/low_latency.py
+      - tests/test_native_low_latency.py
+      - .github/workflows/release-gate.yml
+      - Dockerfile
   - id: PORT-001
     category: portfolio
     title: Double-entry ledger reconciles cash, collateral, positions, realized, unrealized, fees, funding, borrow, gas, and transfers

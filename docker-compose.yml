@@ -5,6 +5,25 @@ x-logging: &bounded-logging
     max-file: "3"
 
 services:
+  low-latency:
+    build: .
+    profiles: ["low-latency"]
+    user: "10001:10001"
+    init: true
+    read_only: true
+    command: ["funding-native-low-latency", "--listen", "0.0.0.0:9010"]
+    expose:
+      - "9010/udp"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 32
+    cpus: "0.25"
+    mem_limit: 32m
+    logging: *bounded-logging
+    restart: unless-stopped
+
   app: &paper-app
     build: .
     user: "10001:10001"
