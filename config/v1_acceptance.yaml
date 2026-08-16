@@ -244,8 +244,10 @@ requirements:
   - id: STRAT-008
     category: strategies
     title: Liquid-altcoin universe selection is dynamic, quality-gated, and survivorship-safe
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/universe.py
+      - tests/test_universe_selector.py
   - id: STRAT-009
     category: strategies
     title: Martingale, grid, and loss-averaging research modules are configurable and fail-closed for live use

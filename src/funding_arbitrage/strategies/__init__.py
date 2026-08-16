@@ -50,6 +50,14 @@ from funding_arbitrage.strategies.options_volatility import (
     OptionsVolatilityStrategy,
     OptionValuation,
 )
+from funding_arbitrage.strategies.universe import (
+    LiquidAltcoinUniverseSelector,
+    UniverseCandidate,
+    UniverseExclusion,
+    UniverseScore,
+    UniverseSelection,
+    UniverseSelectorConfig,
+)
 
 __all__ = [
     "BasisMarketLeg",
@@ -68,6 +76,7 @@ __all__ = [
     "LeadLagCostModel",
     "LeadLagFairValue",
     "LeadLagFairValueEngine",
+    "LiquidAltcoinUniverseSelector",
     "MarketMakingConfig",
     "MarketMakingContext",
     "MarketMakingCosts",
@@ -91,5 +100,10 @@ __all__ = [
     "OptionValuation",
     "PassiveMarketMakingStrategy",
     "PassiveQuoteProposal",
+    "UniverseCandidate",
+    "UniverseExclusion",
+    "UniverseScore",
+    "UniverseSelection",
+    "UniverseSelectorConfig",
     "VenueFairValueInput",
 ]
