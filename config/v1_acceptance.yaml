@@ -230,8 +230,10 @@ requirements:
   - id: STRAT-006
     category: strategies
     title: Options volatility strategies and options risk models are implemented
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/options_volatility.py
+      - tests/test_options_volatility.py
   - id: STRAT-007
     category: strategies
     title: Passive market making is inventory-, adverse-selection-, and fee-aware

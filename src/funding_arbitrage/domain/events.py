@@ -39,6 +39,11 @@ class InstrumentType(StrEnum):
     DEX_POOL = "DEX_POOL"
 
 
+class OptionRight(StrEnum):
+    CALL = "CALL"
+    PUT = "PUT"
+
+
 class Side(StrEnum):
     BUY = "BUY"
     SELL = "SELL"
@@ -111,6 +116,8 @@ class InstrumentKey(BaseModel):
     instrument_type: InstrumentType
     settlement_asset: str | None = None
     expiry: datetime | None = None
+    strike_price: Decimal | None = Field(default=None, gt=0)
+    option_right: OptionRight | None = None
 
     @field_validator("venue", "exchange_symbol", "base_asset", "quote_asset", "settlement_asset")
     @classmethod
@@ -127,10 +134,28 @@ class InstrumentKey(BaseModel):
     def normalize_expiry(cls, value: datetime | None) -> datetime | None:
         return _utc(value) if value is not None else None
 
+    @model_validator(mode="after")
+    def validate_derivative_identity(self) -> InstrumentKey:
+        option_fields = (self.expiry, self.strike_price, self.option_right)
+        if self.instrument_type is InstrumentType.OPTION:
+            if any(value is None for value in option_fields):
+                raise ValueError("option identity requires expiry, strike_price, and option_right")
+        elif self.strike_price is not None or self.option_right is not None:
+            raise ValueError("option identity fields are only valid for options")
+        return self
+
     @property
     def canonical_id(self) -> str:
         suffix = self.instrument_type.value
-        if self.expiry is not None:
+        if self.instrument_type is InstrumentType.OPTION:
+            assert self.expiry is not None
+            assert self.strike_price is not None
+            assert self.option_right is not None
+            strike = format(self.strike_price.normalize(), "f")
+            suffix = (
+                f"{suffix}:{self.expiry.isoformat()}:{strike}:{self.option_right.value}"
+            )
+        elif self.expiry is not None:
             suffix = f"{suffix}:{self.expiry.isoformat()}"
         return f"{self.venue}:{self.base_asset}-{self.quote_asset}:{suffix}"
 

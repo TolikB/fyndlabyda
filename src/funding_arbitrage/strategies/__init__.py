@@ -27,9 +27,24 @@ from funding_arbitrage.strategies.lead_lag import (
     LeadLagFairValueEngine,
     VenueFairValueInput,
 )
+from funding_arbitrage.strategies.options_volatility import (
+    BlackScholesModel,
+    OptionPosition,
+    OptionQuote,
+    OptionsRiskAssessment,
+    OptionsRiskEngine,
+    OptionsRiskLimits,
+    OptionsRiskSnapshot,
+    OptionsVolatilityConfig,
+    OptionsVolatilityContext,
+    OptionsVolatilityEvaluation,
+    OptionsVolatilityStrategy,
+    OptionValuation,
+)
 
 __all__ = [
     "BasisMarketLeg",
+    "BlackScholesModel",
     "DirectionalStrategyContext",
     "DirectionalStrategyEvaluation",
     "CrossExchangeLeadLagEvaluation",
@@ -49,5 +64,16 @@ __all__ = [
     "LiquiditySweepReversionStrategy",
     "OrderFlowBreakoutConfig",
     "OrderFlowBreakoutStrategy",
+    "OptionPosition",
+    "OptionQuote",
+    "OptionsRiskAssessment",
+    "OptionsRiskEngine",
+    "OptionsRiskLimits",
+    "OptionsRiskSnapshot",
+    "OptionsVolatilityConfig",
+    "OptionsVolatilityContext",
+    "OptionsVolatilityEvaluation",
+    "OptionsVolatilityStrategy",
+    "OptionValuation",
     "VenueFairValueInput",
 ]

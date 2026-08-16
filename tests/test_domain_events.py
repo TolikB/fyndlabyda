@@ -24,6 +24,7 @@ from funding_arbitrage.domain.events import (
     InstrumentType,
     LiquidityRole,
     OpenInterestSnapshot,
+    OptionRight,
     OrderStatus,
     OrderType,
     OrderUpdate,
@@ -219,3 +220,37 @@ def test_all_specified_canonical_payloads_validate() -> None:
 
     assert len(payloads) == 7
     assert all(payload.exchange_timestamp.tzinfo is UTC for payload in payloads)
+
+
+def test_option_identity_includes_expiry_strike_and_right() -> None:
+    expiry = datetime(2026, 9, 25, 8, tzinfo=UTC)
+    call = InstrumentKey(
+        venue="deribit",
+        exchange_symbol="BTC-25SEP26-60000-C",
+        base_asset="btc",
+        quote_asset="usd",
+        settlement_asset="btc",
+        instrument_type=InstrumentType.OPTION,
+        expiry=expiry,
+        strike_price=Decimal("60000.0"),
+        option_right=OptionRight.CALL,
+    )
+    put = call.model_copy(
+        update={
+            "exchange_symbol": "BTC-25SEP26-60000-P",
+            "option_right": OptionRight.PUT,
+        }
+    )
+
+    assert call.canonical_id.endswith(":OPTION:2026-09-25T08:00:00+00:00:60000:CALL")
+    assert put.canonical_id.endswith(":OPTION:2026-09-25T08:00:00+00:00:60000:PUT")
+    assert call.canonical_id != put.canonical_id
+
+    with pytest.raises(ValidationError, match="option identity requires"):
+        InstrumentKey(
+            venue="DERIBIT",
+            exchange_symbol="BROKEN",
+            base_asset="BTC",
+            quote_asset="USD",
+            instrument_type=InstrumentType.OPTION,
+        )
