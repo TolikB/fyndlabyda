@@ -12,6 +12,9 @@ from typing import Any
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import BookEvent
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -27,6 +30,11 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBook,
     OrderBookLevel,
     Ticker,
+)
+from funding_arbitrage.exchanges.binance.orderbook import (
+    BinanceBookUpdate,
+    BinanceOrderBookNormalizer,
+    BinanceOrderBookSequenceGap,
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
@@ -69,6 +77,7 @@ class BinancePublicAdapter(ExchangeAdapter):
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
+        canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.spot_base_url = spot_base_url.rstrip("/")
         self.futures_base_url = futures_base_url.rstrip("/")
@@ -83,6 +92,10 @@ class BinancePublicAdapter(ExchangeAdapter):
         self._sleep = sleep
         self.max_reconnects = max_reconnects
         self._funding_intervals_hours: dict[str, Decimal] = {}
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[
+            tuple[str, InstrumentType], DomainInstrumentKey
+        ] = {}
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -121,9 +134,24 @@ class BinancePublicAdapter(ExchangeAdapter):
             raise InvalidResponseError("Binance exchangeInfo responses must be objects")
         self._update_funding_intervals(funding_info)
         self._funding_metadata_refreshed_at = datetime.now(UTC)
-        return [self._parse_instrument(row, False) for row in futures.get("symbols", [])] + [
+        instruments = [
+            self._parse_instrument(row, False) for row in futures.get("symbols", [])
+        ] + [
             self._parse_instrument(row, True) for row in spot.get("symbols", [])
         ]
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset or item.quote_asset,
+                expiry=item.expiry,
+            )
+            for item in instruments
+        }
+        return instruments
 
     def _parse_instrument(self, row: object, spot: bool) -> NormalizedInstrument:
         if not isinstance(row, dict):
@@ -626,56 +654,63 @@ class BinancePublicAdapter(ExchangeAdapter):
         depth: int,
     ) -> AsyncIterator[OrderBook]:
         reconnects = 0
-        stream_depth = 20 if depth > 10 else 10 if depth > 5 else 5
-        spot = instrument_type is InstrumentType.SPOT
-        connection_url = url
-        if spot:
-            streams = "/".join(
-                f"{symbol.lower()}@depth{stream_depth}@100ms" for symbol in symbols
-            )
-            connection_url = f"{url.removesuffix('/ws')}/stream?streams={streams}"
+        reconstruction_depth = 1000
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
+            states: dict[str, BinanceOrderBookNormalizer] = {}
             try:
                 async with websockets.connect(
-                    connection_url, ping_interval=20, ping_timeout=20
+                    url, ping_interval=20, ping_timeout=20
                 ) as socket:
-                    if not spot:
-                        await socket.send(
-                            json.dumps(
-                                {
-                                    "method": "SUBSCRIBE",
-                                    "params": [
-                                        f"{symbol.lower()}@depth{stream_depth}@100ms"
-                                        for symbol in symbols
-                                    ],
-                                    "id": 2,
-                                }
-                            )
+                    await socket.send(
+                        json.dumps(
+                            {
+                                "method": "SUBSCRIBE",
+                                "params": [
+                                    f"{symbol.lower()}@depth@100ms"
+                                    for symbol in symbols
+                                ],
+                                "id": 2,
+                            }
                         )
+                    )
+                    async with asyncio.timeout(self.timeout):
+                        buffered_payloads = await self._wait_for_orderbook_subscription(
+                            socket, request_id=2
+                        )
+                    bootstrapped = await asyncio.gather(
+                        *(
+                            self._bootstrap_ws_orderbook(
+                                symbol,
+                                instrument_type,
+                                depth,
+                                reconstruction_depth,
+                            )
+                            for symbol in symbols
+                        )
+                    )
+                    states.update(zip(symbols, bootstrapped, strict=True))
+                    for payload in buffered_payloads:
+                        book = await self._consume_ws_orderbook_payload(
+                            payload, states, instrument_type
+                        )
+                        if book is not None:
+                            reconnects = 0
+                            yield book
                     async for message in socket:
-                        payload = json.loads(
-                            message.decode() if isinstance(message, bytes) else message
+                        decoded_payload = self._decode_ws_payload(message)
+                        book = await self._consume_ws_orderbook_payload(
+                            decoded_payload, states, instrument_type
                         )
-                        if isinstance(payload, dict) and payload.get("code") is not None:
-                            raise InvalidResponseError(
-                                f"Binance orderbook subscription failed: {payload}"
-                            )
-                        if not isinstance(payload, dict):
-                            continue
-                        if spot and isinstance(payload.get("data"), dict):
-                            stream = str(payload.get("stream", ""))
-                            payload = dict(payload["data"])
-                            payload["s"] = stream.partition("@")[0].upper()
-                        is_update = (
-                            "lastUpdateId" in payload
-                            if spot
-                            else payload.get("e") == "depthUpdate"
-                        )
-                        if not is_update:
-                            continue
-                        reconnects = 0
-                        yield self._parse_ws_orderbook(payload, instrument_type, depth)
-            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                        if book is not None:
+                            reconnects = 0
+                            yield book
+            except (
+                BinanceOrderBookSequenceGap,
+                NetworkError,
+                TimeoutError,
+                OSError,
+                websockets.WebSocketException,
+            ) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
@@ -683,6 +718,116 @@ class BinancePublicAdapter(ExchangeAdapter):
                         "Binance orderbook WebSocket reconnect limit reached"
                     ) from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    async def _wait_for_orderbook_subscription(
+        self, socket: Any, *, request_id: int
+    ) -> list[dict[str, Any]]:
+        buffered: list[dict[str, Any]] = []
+        while True:
+            payload = self._decode_ws_payload(await socket.recv())
+            if payload is None:
+                continue
+            if payload.get("id") == request_id:
+                if payload.get("result") is not None:
+                    raise InvalidResponseError(
+                        f"Binance orderbook subscription failed: {payload}"
+                    )
+                return buffered
+            if payload.get("e") == "depthUpdate":
+                buffered.append(payload)
+
+    def _decode_ws_payload(self, message: object) -> dict[str, Any] | None:
+        raw = message.decode() if isinstance(message, bytes) else message
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(payload, dict) and payload.get("code") is not None:
+            raise InvalidResponseError(
+                f"Binance orderbook subscription failed: {payload}"
+            )
+        if not isinstance(payload, dict):
+            return None
+        if isinstance(payload.get("data"), dict):
+            return dict(payload["data"])
+        return payload
+
+    async def _consume_ws_orderbook_payload(
+        self,
+        payload: dict[str, Any] | None,
+        states: dict[str, BinanceOrderBookNormalizer],
+        instrument_type: InstrumentType,
+    ) -> OrderBook | None:
+        if payload is None or payload.get("e") != "depthUpdate":
+            return None
+        symbol = str(payload.get("s", "")).upper()
+        state = states.get(symbol)
+        if state is None:
+            return None
+        update = await self._process_ws_orderbook_update(payload, state)
+        if update.result.status.value == "GAP":
+            raise BinanceOrderBookSequenceGap(
+                update.result.reason or "orderbook_sequence_gap"
+            )
+        return state.legacy_book(update, instrument_type)
+
+    async def _bootstrap_ws_orderbook(
+        self,
+        symbol: str,
+        instrument_type: InstrumentType,
+        output_depth: int,
+        reconstruction_depth: int,
+    ) -> BinanceOrderBookNormalizer:
+        state = BinanceOrderBookNormalizer(
+            self._canonical_instrument(symbol, instrument_type),
+            output_depth=output_depth,
+            reconstruction_depth=reconstruction_depth,
+        )
+        snapshot = await self.get_orderbook(
+            symbol, reconstruction_depth, instrument_type
+        )
+        update = state.bootstrap(snapshot)
+        if self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return state
+
+    async def _process_ws_orderbook_update(
+        self,
+        payload: object,
+        state: BinanceOrderBookNormalizer,
+    ) -> BinanceBookUpdate:
+        update = state.apply(payload)
+        if self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return update
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        normalized_symbol = symbol.upper()
+        cached = self._canonical_instruments.get(
+            (normalized_symbol, instrument_type)
+        )
+        if cached is not None:
+            return cached
+        quote_suffixes = ("USDT", "USDC", "FDUSD", "BTC", "ETH", "EUR", "USD")
+        quote = next(
+            (
+                suffix
+                for suffix in quote_suffixes
+                if normalized_symbol.endswith(suffix)
+            ),
+            None,
+        )
+        if quote is None or len(normalized_symbol) <= len(quote):
+            raise InvalidResponseError(
+                f"Binance instrument metadata is required for {symbol}"
+            )
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=normalized_symbol,
+            base_asset=normalized_symbol[: -len(quote)],
+            quote_asset=quote,
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset=quote,
+        )
 
     def _parse_ws_orderbook(
         self,
