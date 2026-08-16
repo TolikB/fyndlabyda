@@ -7,6 +7,14 @@ from funding_arbitrage.execution.oms import (
     OMSJournalEntry,
     OMSOrderSnapshot,
 )
+from funding_arbitrage.execution.protective import (
+    JsonlProtectiveJournal,
+    ProtectiveReconciliationResult,
+    ProtectiveStopManager,
+    ProtectiveStopSnapshot,
+    ProtectiveStopStatus,
+    VenueProtectiveOrder,
+)
 from funding_arbitrage.execution.router import (
     EmergencyFlattenResult,
     OpenExposure,
@@ -22,6 +30,12 @@ __all__ = [
     "OMSEventType",
     "OMSJournalEntry",
     "OMSOrderSnapshot",
+    "JsonlProtectiveJournal",
+    "ProtectiveReconciliationResult",
+    "ProtectiveStopManager",
+    "ProtectiveStopSnapshot",
+    "ProtectiveStopStatus",
+    "VenueProtectiveOrder",
     "EmergencyFlattenResult",
     "OpenExposure",
     "RouteChildOrder",

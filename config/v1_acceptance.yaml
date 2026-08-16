@@ -345,8 +345,10 @@ requirements:
   - id: EXE-004
     category: execution
     title: Exchange-side reduce-only protective stops survive process failure and reconcile after restart
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/execution/protective.py
+      - tests/test_protective_stops.py
   - id: EXE-005
     category: execution
     title: Smart order router optimizes all-in execution across venues and handles partial routing
