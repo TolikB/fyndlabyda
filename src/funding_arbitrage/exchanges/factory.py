@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from funding_arbitrage.config import Settings
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
+from funding_arbitrage.exchanges.bybit.orderbook import BybitBookEvent
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 from funding_arbitrage.exchanges.htx import HtxPublicAdapter
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
@@ -15,7 +18,11 @@ from funding_arbitrage.exchanges.mock import MockExchangeAdapter
 from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 
 
-def create_public_adapters(settings: Settings) -> dict[str, ExchangeAdapter]:
+def create_public_adapters(
+    settings: Settings,
+    *,
+    canonical_book_event_sink: Callable[[BybitBookEvent], Awaitable[None]] | None = None,
+) -> dict[str, ExchangeAdapter]:
     if settings.market_data_mode == "mock":
         return {
             name: MockExchangeAdapter(name)
@@ -38,6 +45,7 @@ def create_public_adapters(settings: Settings) -> dict[str, ExchangeAdapter]:
             timeout_seconds=settings.request_timeout_seconds,
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,
+            canonical_book_event_sink=canonical_book_event_sink,
         ),
         "gate": GatePublicAdapter(
             base_url=settings.gate_base_url,

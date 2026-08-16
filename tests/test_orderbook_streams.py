@@ -36,6 +36,7 @@ def test_bybit_orderbook_snapshot_and_delta_are_merged() -> None:
             "data": {
                 "s": "BTCUSDT",
                 "u": 10,
+                "seq": 100,
                 "b": [["99", "2"], ["98", "3"]],
                 "a": [["101", "4"], ["102", "5"]],
             },
@@ -52,6 +53,7 @@ def test_bybit_orderbook_snapshot_and_delta_are_merged() -> None:
             "data": {
                 "s": "BTCUSDT",
                 "u": 11,
+                "seq": 101,
                 "b": [["99", "0"], ["100", "1"]],
                 "a": [["101", "6"]],
             },

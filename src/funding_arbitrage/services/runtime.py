@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from collections.abc import Callable
 from decimal import Decimal
 from statistics import median
 
@@ -41,10 +42,12 @@ class RuntimeState:
         adapters: dict[str, ExchangeAdapter],
         *,
         emit_metrics: bool = True,
+        entry_health: Callable[[], tuple[bool, str | None]] | None = None,
     ) -> None:
         self.settings = settings
         self.adapters = adapters
         self.emit_metrics = emit_metrics
+        self.entry_health = entry_health
         self.opportunity_engine = OpportunityEngine(
             cost_engine=CostEngine(
                 fees={
@@ -185,3 +188,12 @@ class RuntimeState:
 
     def portfolio_value(self) -> Decimal:
         return self.portfolio.snapshot().equity
+
+    def entries_allowed(self) -> bool:
+        return self.entry_health is None or self.entry_health()[0]
+
+    def entry_block_reason(self) -> str | None:
+        if self.entry_health is None:
+            return None
+        healthy, reason = self.entry_health()
+        return None if healthy else (reason or "entry_health_failed")

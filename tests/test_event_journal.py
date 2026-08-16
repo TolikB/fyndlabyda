@@ -7,7 +7,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from funding_arbitrage.database.models import Base, CanonicalEventRecord
-from funding_arbitrage.database.repositories.events import append_event, load_events
+from funding_arbitrage.database.repositories.events import (
+    append_event,
+    append_events,
+    load_events,
+)
 from funding_arbitrage.domain.events import (
     EventEnvelope,
     EventKind,
@@ -107,3 +111,18 @@ async def test_journal_filters_by_source_correlation_and_half_open_time_range() 
     await engine.dispose()
 
     assert [event.metadata.sequence_id for event in replay] == ["1"]
+
+
+async def test_batch_append_deduplicates_inside_batch_and_against_journal() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _event(1)
+    second = _event(2)
+
+    async with factory() as session:
+        assert await append_events(session, [first, second, first]) == 2
+        assert await append_events(session, [first, second]) == 0
+
+    await engine.dispose()

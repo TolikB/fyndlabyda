@@ -224,7 +224,11 @@ class LiveTradingRunner:
         if reconciliation_due:
             await self._poll_funding_payments(snapshot.captured_at)
         await self._close_positions(opportunities, snapshot)
-        if not self.risk.paused and self.settings.live_autotrade:
+        if (
+            not self.risk.paused
+            and self.settings.live_autotrade
+            and self.runtime.entries_allowed()
+        ):
             self._balances = await self._fetch_fresh_balances()
             await self._open_positions(opportunities, snapshot)
         live_positions_open.set(

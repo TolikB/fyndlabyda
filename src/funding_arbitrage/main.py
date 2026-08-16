@@ -26,6 +26,7 @@ from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.exchanges.trading import create_trading_adapters
 from funding_arbitrage.logging import configure_logging
 from funding_arbitrage.monitoring.metrics import api_errors_total, api_request_latency_seconds
+from funding_arbitrage.services.event_writer import CanonicalEventWriter
 from funding_arbitrage.services.live_runner import LiveTradingRunner
 from funding_arbitrage.services.paper_runner import (
     PaperTestRunner,
@@ -37,8 +38,26 @@ from funding_arbitrage.services.runtime import RuntimeState
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
     engine, session_factory = create_database(active_settings)
-    adapters = create_public_adapters(active_settings)
-    runtime = RuntimeState(active_settings, adapters)
+    event_writer = CanonicalEventWriter(
+        session_factory,
+        queue_size=active_settings.canonical_event_queue_size,
+        batch_size=active_settings.canonical_event_batch_size,
+        flush_interval_seconds=(
+            active_settings.canonical_event_flush_interval_seconds
+        ),
+    )
+    adapters = create_public_adapters(
+        active_settings, canonical_book_event_sink=event_writer.publish
+    )
+    def entry_health() -> tuple[bool, str | None]:
+        reason = (
+            f"canonical_event_journal:{event_writer.failure_reason}"
+            if event_writer.failed
+            else None
+        )
+        return not event_writer.failed, reason
+
+    runtime = RuntimeState(active_settings, adapters, entry_health=entry_health)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -47,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.adapter = adapters["bybit"]
         app.state.session_factory = session_factory
         app.state.runtime = runtime
+        app.state.event_writer = event_writer
         runner: (
             PaperTestRunner
             | SharedMarketPaperComparisonRunner
@@ -56,9 +76,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         baseline_runtime: RuntimeState | None = None
         task: asyncio.Task[None] | None = None
         app.state.live_runner = None
+        if (
+            active_settings.run_mode == "paper_test"
+            and active_settings.paper_auto_init_database
+        ):
+            await init_database(engine)
+        event_writer.start()
         if active_settings.run_mode == "paper_test":
-            if active_settings.paper_auto_init_database:
-                await init_database(engine)
             candidate_runner = PaperTestRunner(active_settings, runtime, session_factory)
             if active_settings.paper_comparison_enabled:
                 baseline_settings = active_settings.model_copy(
@@ -71,7 +95,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }
                 )
                 baseline_runtime = RuntimeState(
-                    baseline_settings, adapters, emit_metrics=False
+                    baseline_settings,
+                    adapters,
+                    emit_metrics=False,
+                    entry_health=entry_health,
                 )
                 baseline_runner = PaperTestRunner(
                     baseline_settings,
@@ -127,7 +154,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await runner.close()
             for adapter in adapters.values():
                 await adapter.close()
-            await engine.dispose()
+            try:
+                await event_writer.stop()
+            finally:
+                await engine.dispose()
 
     app = FastAPI(title="Funding Arbitrage Bot", version="0.1.0", lifespan=lifespan)
 
@@ -236,6 +266,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(
                     status_code=503, detail="private reconciliation has not passed"
                 )
+        if event_writer.failed:
+            raise HTTPException(
+                status_code=503,
+                detail=f"canonical event journal failed: {event_writer.failure_reason}",
+            )
         return {
             "status": "ready",
             "run_mode": active_settings.run_mode,

@@ -79,6 +79,8 @@ requirements:
       - src/funding_arbitrage/database/repositories/events.py
       - migrations/versions/0011_canonical_events.py
       - tests/test_event_journal.py
+      - src/funding_arbitrage/services/event_writer.py
+      - tests/test_event_writer.py
   - id: MODE-001
     category: architecture
     title: BACKTEST, REPLAY, SHADOW, PAPER, LIMITED_LIVE, LIVE, and SAFE_MODE share explicit contracts
@@ -91,6 +93,11 @@ requirements:
     status: partial
     evidence:
       - src/funding_arbitrage/exchanges
+      - src/funding_arbitrage/exchanges/bybit/orderbook.py
+      - tests/test_bybit_canonical_orderbook.py
+      - tests/test_bybit_event_pipeline.py
+      - scripts/bybit_canonical_book_probe.py
+      - ops/BYBIT_CANONICAL_BOOK_EVIDENCE.md
   - id: MD-002
     category: market_data
     title: Private order, fill, position, balance, and account streams are normalized and reconciled

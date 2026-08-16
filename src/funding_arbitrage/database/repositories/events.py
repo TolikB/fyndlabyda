@@ -50,7 +50,7 @@ def _payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _record_values(event: EventEnvelope[BaseModel]) -> dict[str, Any]:
+def _record_values(event: EventEnvelope[Any]) -> dict[str, Any]:
     payload = event.payload.model_dump(mode="json")
     metadata = event.metadata
     return {
@@ -69,38 +69,50 @@ def _record_values(event: EventEnvelope[BaseModel]) -> dict[str, Any]:
     }
 
 
-async def append_event(session: AsyncSession, event: EventEnvelope[BaseModel]) -> bool:
+async def append_event(session: AsyncSession, event: EventEnvelope[Any]) -> bool:
     """Durably append once, returning false for a reconnect/replay duplicate."""
 
-    values = _record_values(event)
+    return await append_events(session, [event]) == 1
+
+
+async def append_events(
+    session: AsyncSession, events: Sequence[EventEnvelope[Any]]
+) -> int:
+    """Append a deduplicated batch in one transaction and return inserted rows."""
+
+    unique = {event.metadata.event_id: event for event in events}
+    rows = [_record_values(event) for event in unique.values()]
+    if not rows:
+        return 0
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         statement = (
             pg_insert(CanonicalEventRecord)
-            .values(**values)
+            .values(rows)
             .on_conflict_do_nothing(constraint="uq_canonical_event_id")
         )
         result = cast(CursorResult[Any], await session.execute(statement))
-        inserted = result.rowcount == 1
+        inserted = result.rowcount
     elif dialect == "sqlite":
         sqlite_statement = (
             sqlite_insert(CanonicalEventRecord)
-            .values(**values)
+            .values(rows)
             .on_conflict_do_nothing(index_elements=["event_id"])
         )
         result = cast(CursorResult[Any], await session.execute(sqlite_statement))
-        inserted = result.rowcount == 1
+        inserted = result.rowcount
     else:
-        existing = await session.scalar(
-            select(CanonicalEventRecord.id).where(
-                CanonicalEventRecord.event_id == event.metadata.event_id
+        existing = set(
+            await session.scalars(
+                select(CanonicalEventRecord.event_id).where(
+                    CanonicalEventRecord.event_id.in_(unique)
+                )
             )
         )
-        if existing is not None:
-            return False
-        generic_statement = insert(CanonicalEventRecord).values(**values)
-        await session.execute(generic_statement)
-        inserted = True
+        pending = [row for row in rows if row["event_id"] not in existing]
+        if pending:
+            await session.execute(insert(CanonicalEventRecord).values(pending))
+        inserted = len(pending)
     await session.commit()
     return inserted
 

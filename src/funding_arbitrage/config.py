@@ -29,6 +29,15 @@ class Settings(BaseSettings):
         repr=False,
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL", repr=False)
+    canonical_event_queue_size: int = Field(
+        default=50_000, alias="CANONICAL_EVENT_QUEUE_SIZE"
+    )
+    canonical_event_batch_size: int = Field(
+        default=500, alias="CANONICAL_EVENT_BATCH_SIZE"
+    )
+    canonical_event_flush_interval_seconds: float = Field(
+        default=0.10, alias="CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS"
+    )
     bybit_base_url: str = Field(default="https://api.bybit.com", alias="BYBIT_BASE_URL")
     bybit_ws_url: str = Field(
         default="wss://stream.bybit.com/v5/public/linear", alias="BYBIT_WS_URL"
@@ -545,6 +554,14 @@ def get_settings() -> Settings:
 
 
 def _validate_safe_values(settings: Settings) -> None:
+    if settings.canonical_event_queue_size <= 0:
+        raise ValueError("CANONICAL_EVENT_QUEUE_SIZE must be positive")
+    if not 0 < settings.canonical_event_batch_size <= settings.canonical_event_queue_size:
+        raise ValueError(
+            "CANONICAL_EVENT_BATCH_SIZE must be positive and not exceed queue size"
+        )
+    if settings.canonical_event_flush_interval_seconds <= 0:
+        raise ValueError("CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS must be positive")
     if settings.run_mode == "paper_test" and settings.execution_mode != "paper":
         raise ValueError("paper_test requires EXECUTION_MODE=paper")
     if settings.run_mode == "paper_test" and settings.market_data_mode not in {

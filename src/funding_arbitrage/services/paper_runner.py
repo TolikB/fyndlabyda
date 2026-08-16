@@ -376,7 +376,11 @@ class PaperTestRunner:
 
     def _autotrade_enabled(self, now: datetime) -> bool:
         start = self.settings.paper_autotrade_start_utc
-        return self.settings.paper_autotrade and (start is None or now >= start)
+        return (
+            self.settings.paper_autotrade
+            and self.runtime.entries_allowed()
+            and (start is None or now >= start)
+        )
 
     def _mark_open_positions(self, snapshot: MarketSnapshot) -> None:
         for position in self.runtime.portfolio.positions.values():

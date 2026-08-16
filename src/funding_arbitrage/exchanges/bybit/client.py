@@ -17,6 +17,8 @@ from typing import Any
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -32,6 +34,12 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBook,
     OrderBookLevel,
     Ticker,
+)
+from funding_arbitrage.exchanges.bybit.orderbook import (
+    BybitBookEvent,
+    BybitBookUpdate,
+    BybitOrderBookNormalizer,
+    BybitOrderBookSequenceGap,
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
@@ -68,6 +76,7 @@ class BybitPublicAdapter(ExchangeAdapter):
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
+        canonical_book_event_sink: Callable[[BybitBookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.websocket_url = websocket_url
@@ -79,6 +88,10 @@ class BybitPublicAdapter(ExchangeAdapter):
         self._limiter = RateLimiter(requests_per_second, burst)
         self._sleep = sleep
         self.max_reconnects = max_reconnects
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[
+            tuple[str, InstrumentType], DomainInstrumentKey
+        ] = {}
 
     async def __aenter__(self) -> BybitPublicAdapter:
         await self._ensure_http()
@@ -142,6 +155,18 @@ class BybitPublicAdapter(ExchangeAdapter):
                 if not isinstance(next_cursor, str) or not next_cursor:
                     break
                 cursor = next_cursor
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset,
+                expiry=item.expiry,
+            )
+            for item in instruments
+        }
         return instruments
 
     def _parse_instrument(self, row: object, category: str) -> NormalizedInstrument:
@@ -621,7 +646,7 @@ class BybitPublicAdapter(ExchangeAdapter):
         reconnects = 0
         stream_depth = 50
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
-            states: dict[str, dict[str, dict[Decimal, Decimal]]] = {}
+            states: dict[str, BybitOrderBookNormalizer] = {}
             try:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as socket:
                     await socket.send(
@@ -647,13 +672,29 @@ class BybitPublicAdapter(ExchangeAdapter):
                             and str(payload.get("topic", "")).startswith("orderbook.")
                         ):
                             continue
-                        book = self._apply_ws_orderbook(
+                        update = await self._process_ws_orderbook_update(
                             payload, states, instrument_type, depth
+                        )
+                        if update is not None and update.result.status.value == "GAP":
+                            raise BybitOrderBookSequenceGap(
+                                update.result.reason or "orderbook_sequence_gap"
+                            )
+                        book = (
+                            states[str(payload["data"]["s"])].legacy_book(
+                                update, instrument_type
+                            )
+                            if update is not None
+                            else None
                         )
                         if book is not None:
                             reconnects = 0
                             yield book
-            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+            except (
+                BybitOrderBookSequenceGap,
+                TimeoutError,
+                OSError,
+                websockets.WebSocketException,
+            ) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
@@ -663,53 +704,81 @@ class BybitPublicAdapter(ExchangeAdapter):
     def _apply_ws_orderbook(
         self,
         payload: object,
-        states: dict[str, dict[str, dict[Decimal, Decimal]]],
+        states: dict[str, BybitOrderBookNormalizer],
         instrument_type: InstrumentType,
         depth: int,
     ) -> OrderBook | None:
+        update = self._apply_ws_orderbook_update(
+            payload, states, instrument_type, depth
+        )
+        if update is None or not isinstance(payload, dict):
+            return None
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return None
+        state = states[str(data.get("s", ""))]
+        return state.legacy_book(update, instrument_type)
+
+    async def _process_ws_orderbook_update(
+        self,
+        payload: object,
+        states: dict[str, BybitOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> BybitBookUpdate | None:
+        update = self._apply_ws_orderbook_update(
+            payload, states, instrument_type, depth
+        )
+        if update is not None and self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return update
+
+    def _apply_ws_orderbook_update(
+        self,
+        payload: object,
+        states: dict[str, BybitOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> BybitBookUpdate | None:
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise InvalidResponseError("invalid Bybit WebSocket orderbook payload")
         data = payload["data"]
-        symbol = str(data.get("s", ""))
+        symbol = str(data.get("s", "")).upper()
         if not symbol:
             raise InvalidResponseError("Bybit WebSocket orderbook symbol is missing")
         is_snapshot = payload.get("type") == "snapshot" or data.get("u") == 1
         if is_snapshot:
-            states[symbol] = {"b": {}, "a": {}}
+            states[symbol] = BybitOrderBookNormalizer(
+                self._canonical_instrument(symbol, instrument_type),
+                depth=depth,
+                source_depth=50,
+            )
         elif symbol not in states:
             return None
-        state = states[symbol]
-        for side in ("b", "a"):
-            updates = data.get(side, [])
-            if not isinstance(updates, list):
-                raise InvalidResponseError("invalid Bybit WebSocket orderbook levels")
-            for row in updates:
-                price = decimal(row[0], f"{side}_price")
-                quantity = decimal(row[1], f"{side}_quantity")
-                if quantity == 0:
-                    state[side].pop(price, None)
-                else:
-                    state[side][price] = quantity
-        if not state["b"] or not state["a"]:
-            return None
-        bids = tuple(
-            OrderBookLevel(price=price, quantity=quantity)
-            for price, quantity in sorted(state["b"].items(), reverse=True)[:depth]
+        return states[symbol].apply(payload)
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        cached = self._canonical_instruments.get((symbol, instrument_type))
+        if cached is not None:
+            return cached
+        quote_suffixes = ("USDT", "USDC", "BTC", "ETH", "EUR", "USD")
+        quote = next(
+            (suffix for suffix in quote_suffixes if symbol.endswith(suffix)),
+            None,
         )
-        asks = tuple(
-            OrderBookLevel(price=price, quantity=quantity)
-            for price, quantity in sorted(state["a"].items())[:depth]
-        )
-        return validate_orderbook(
-            OrderBook(
-                exchange=self.name,
-                symbol=symbol,
-                instrument_type=instrument_type,
-                bids=bids,
-                asks=asks,
-                timestamp=_utc_from_ms(payload.get("ts", data.get("ts", "0"))),
-                sequence=int(data["u"]) if data.get("u") is not None else None,
+        if quote is None or len(symbol) <= len(quote):
+            raise InvalidResponseError(
+                f"Bybit instrument metadata is required for {symbol}"
             )
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=symbol,
+            base_asset=symbol[: -len(quote)],
+            quote_asset=quote,
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset=quote,
         )
 
 

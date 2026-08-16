@@ -30,6 +30,17 @@ def test_public_exchange_registry_contains_bybit_and_gate() -> None:
     assert adapters["htx"].futures_base_url == "https://api.hbdm.com"
 
 
+def test_canonical_book_event_sink_is_wired_only_to_supported_adapter() -> None:
+    async def sink(_event: object) -> None:
+        return None
+
+    adapters = create_public_adapters(
+        Settings(), canonical_book_event_sink=sink
+    )
+
+    assert adapters["bybit"].canonical_book_event_sink is sink
+
+
 def test_paper_test_registry_is_mock_only() -> None:
     adapters = create_public_adapters(
         Settings(run_mode="paper_test", market_data_mode="mock", paper_autotrade=True)
