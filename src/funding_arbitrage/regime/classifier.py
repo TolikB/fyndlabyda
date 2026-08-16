@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from funding_arbitrage.domain.decisions import MarketRegime
 from funding_arbitrage.domain.events import DataQuality, InstrumentKey
 from funding_arbitrage.features.derivatives import DerivativesFeatureSnapshot
 from funding_arbitrage.features.orderflow import OrderFlowFeatureSnapshot
@@ -20,16 +20,6 @@ from funding_arbitrage.features.technical import TechnicalFeatureSnapshot
 ZERO = Decimal("0")
 ONE = Decimal("1")
 BPS = Decimal("10000")
-
-
-class MarketRegime(StrEnum):
-    TREND_UP = "TREND_UP"
-    TREND_DOWN = "TREND_DOWN"
-    RANGE = "RANGE"
-    TRANSITION = "TRANSITION"
-    VOLATILITY_EXPANSION = "VOLATILITY_EXPANSION"
-    STRESS = "STRESS"
-    UNKNOWN = "UNKNOWN"
 
 
 class RegimeThresholds(BaseModel):

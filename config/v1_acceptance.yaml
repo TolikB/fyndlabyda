@@ -257,8 +257,10 @@ requirements:
   - id: SIG-001
     category: strategies
     title: Signal orchestrator enforces schema, TTL, deduplication, conflicts, correlation, and allocation policy
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/signals/orchestrator.py
+      - tests/test_signal_orchestrator.py
   - id: RISK-001
     category: risk
     title: Portfolio risk is the sole authority that approves, resizes, or rejects intents
