@@ -7,6 +7,13 @@ from funding_arbitrage.storage.clickhouse import (
     TelemetryAnalyticsEvent,
 )
 from funding_arbitrage.storage.ephemeral import EphemeralStatePolicy, RedisEphemeralStore
+from funding_arbitrage.storage.parquet import (
+    ParquetDatasetManifest,
+    ParquetDatasetReader,
+    ParquetFileRecord,
+    ParquetIntegrityError,
+    VersionedParquetDatasetWriter,
+)
 
 __all__ = [
     "ClickHouseHttpWriter",
@@ -15,4 +22,9 @@ __all__ = [
     "TelemetryAnalyticsEvent",
     "EphemeralStatePolicy",
     "RedisEphemeralStore",
+    "ParquetDatasetManifest",
+    "ParquetDatasetReader",
+    "ParquetFileRecord",
+    "ParquetIntegrityError",
+    "VersionedParquetDatasetWriter",
 ]

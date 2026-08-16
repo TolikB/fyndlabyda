@@ -452,8 +452,13 @@ requirements:
   - id: DATA-004
     category: storage
     title: Parquet datasets are versioned, checksummed, reproducible, and replayable
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/storage/parquet.py
+      - tests/test_parquet_storage.py
+      - pyproject.toml
+      - requirements.lock
+      - requirements-linux.lock
   - id: DATA-005
     category: storage
     title: Immutable raw event and audit retention supports exact incident reconstruction
