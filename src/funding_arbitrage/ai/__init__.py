@@ -15,9 +15,22 @@ from funding_arbitrage.ai.meta_labeling import (
     TemporalSplitConfig,
     TimedFeature,
 )
+from funding_arbitrage.ai.rl_policy import (
+    GuardedRLPolicy,
+    RLAction,
+    RLDecision,
+    RLOfflineEvaluation,
+    RLOfflineEvaluationConfig,
+    RLOfflineEvaluator,
+    RLOfflineTransition,
+    RLPolicyArtifact,
+    RLPolicyConfig,
+    RLState,
+)
 
 __all__ = [
     "CalibratedMetaLabelTrainer",
+    "GuardedRLPolicy",
     "MetaLabelArtifact",
     "MetaLabelDataset",
     "MetaLabelDatasetBuilder",
@@ -27,6 +40,15 @@ __all__ = [
     "MetaLabelPolicy",
     "MetaLabelRow",
     "MetaLabelTrainerConfig",
+    "RLAction",
+    "RLDecision",
+    "RLOfflineEvaluation",
+    "RLOfflineEvaluationConfig",
+    "RLOfflineEvaluator",
+    "RLOfflineTransition",
+    "RLPolicyArtifact",
+    "RLPolicyConfig",
+    "RLState",
     "TemporalDatasetSplit",
     "TemporalSplitConfig",
     "TimedFeature",

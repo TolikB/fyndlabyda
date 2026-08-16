@@ -265,8 +265,10 @@ requirements:
   - id: AI-002
     category: strategies
     title: RL decisions have constrained action space, offline evaluation, guardrails, and deterministic fallback
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/ai/rl_policy.py
+      - tests/test_rl_policy.py
   - id: AI-003
     category: strategies
     title: LLM decisions use versioned schemas, bounded latency and spend, audit, and deterministic fallback
