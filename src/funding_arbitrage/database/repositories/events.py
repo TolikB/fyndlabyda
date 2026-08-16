@@ -45,6 +45,10 @@ PAYLOAD_MODELS: dict[EventKind, type[BaseModel]] = {
 }
 
 
+class EventJournalIntegrityError(RuntimeError):
+    """Raised when a stored event or reused event ID does not match its hash."""
+
+
 def _payload_hash(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -80,10 +84,34 @@ async def append_events(
 ) -> int:
     """Append a deduplicated batch in one transaction and return inserted rows."""
 
-    unique = {event.metadata.event_id: event for event in events}
-    rows = [_record_values(event) for event in unique.values()]
+    unique: dict[str, dict[str, Any]] = {}
+    for event in events:
+        row = _record_values(event)
+        event_id = event.metadata.event_id
+        prior = unique.get(event_id)
+        if prior is not None and prior["payload_hash"] != row["payload_hash"]:
+            raise EventJournalIntegrityError("event ID collision inside append batch")
+        unique[event_id] = row
+    rows = list(unique.values())
     if not rows:
         return 0
+    existing_rows = (
+        await session.execute(
+            select(CanonicalEventRecord.event_id, CanonicalEventRecord.payload_hash).where(
+                CanonicalEventRecord.event_id.in_(unique)
+            )
+        )
+    ).all()
+    existing_hashes: dict[str, str] = {
+        event_id: payload_hash for event_id, payload_hash in existing_rows
+    }
+    if any(
+        event_id in existing_hashes
+        and existing_hashes[event_id] != row["payload_hash"]
+        for event_id, row in unique.items()
+    ):
+        await session.rollback()
+        raise EventJournalIntegrityError("stored event ID has a different payload hash")
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         statement = (
@@ -102,17 +130,23 @@ async def append_events(
         result = cast(CursorResult[Any], await session.execute(sqlite_statement))
         inserted = result.rowcount
     else:
-        existing = set(
-            await session.scalars(
-                select(CanonicalEventRecord.event_id).where(
-                    CanonicalEventRecord.event_id.in_(unique)
-                )
-            )
-        )
-        pending = [row for row in rows if row["event_id"] not in existing]
+        pending = [row for row in rows if row["event_id"] not in existing_hashes]
         if pending:
             await session.execute(insert(CanonicalEventRecord).values(pending))
         inserted = len(pending)
+    stored_rows = (
+        await session.execute(
+            select(CanonicalEventRecord.event_id, CanonicalEventRecord.payload_hash).where(
+                CanonicalEventRecord.event_id.in_(unique)
+            )
+        )
+    ).all()
+    stored_hashes: dict[str, str] = {
+        event_id: payload_hash for event_id, payload_hash in stored_rows
+    }
+    if any(stored_hashes.get(event_id) != row["payload_hash"] for event_id, row in unique.items()):
+        await session.rollback()
+        raise EventJournalIntegrityError("event journal post-append verification failed")
     await session.commit()
     return inserted
 
@@ -175,6 +209,8 @@ async def load_events(
 
 
 def record_to_event(record: CanonicalEventRecord) -> EventEnvelope[BaseModel]:
+    if _payload_hash(record.payload) != record.payload_hash:
+        raise EventJournalIntegrityError("canonical event payload checksum mismatch")
     kind = EventKind(record.kind)
     payload_model = PAYLOAD_MODELS[kind]
     payload = payload_model.model_validate(record.payload)

@@ -462,11 +462,15 @@ requirements:
   - id: DATA-005
     category: storage
     title: Immutable raw event and audit retention supports exact incident reconstruction
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/database/repositories/events.py
       - migrations/versions/0011_canonical_events.py
       - tests/test_event_journal.py
+      - migrations/versions/0013_append_only_retention.py
+      - src/funding_arbitrage/storage/incident.py
+      - tests/test_immutable_retention.py
+      - docs/V1_DATA_RETENTION.md
   - id: SEC-001
     category: security
     title: Control plane enforces JWT, mTLS, RBAC, idempotency, rate limits, and immutable audit

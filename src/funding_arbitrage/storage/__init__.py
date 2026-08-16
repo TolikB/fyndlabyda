@@ -7,6 +7,14 @@ from funding_arbitrage.storage.clickhouse import (
     TelemetryAnalyticsEvent,
 )
 from funding_arbitrage.storage.ephemeral import EphemeralStatePolicy, RedisEphemeralStore
+from funding_arbitrage.storage.incident import (
+    IMMUTABLE_OPERATIONAL_TABLES,
+    ImmutableRetentionPolicy,
+    IncidentEvidenceBundle,
+    IncidentEvidenceInput,
+    IncidentEvidenceIntegrityError,
+    IncidentEvidenceRecord,
+)
 from funding_arbitrage.storage.parquet import (
     ParquetDatasetManifest,
     ParquetDatasetReader,
@@ -22,6 +30,12 @@ __all__ = [
     "TelemetryAnalyticsEvent",
     "EphemeralStatePolicy",
     "RedisEphemeralStore",
+    "IMMUTABLE_OPERATIONAL_TABLES",
+    "ImmutableRetentionPolicy",
+    "IncidentEvidenceBundle",
+    "IncidentEvidenceInput",
+    "IncidentEvidenceIntegrityError",
+    "IncidentEvidenceRecord",
     "ParquetDatasetManifest",
     "ParquetDatasetReader",
     "ParquetFileRecord",

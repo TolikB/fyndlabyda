@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+import pytest
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from funding_arbitrage.database.models import Base, CanonicalEventRecord
 from funding_arbitrage.database.repositories.events import (
+    EventJournalIntegrityError,
     append_event,
     append_events,
     load_events,
@@ -124,5 +126,44 @@ async def test_batch_append_deduplicates_inside_batch_and_against_journal() -> N
     async with factory() as session:
         assert await append_events(session, [first, second, first]) == 2
         assert await append_events(session, [first, second]) == 0
+
+    await engine.dispose()
+
+
+async def test_journal_rejects_event_id_collision_with_different_payload() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    original = _event(1)
+    collision = original.model_copy(
+        update={"payload": original.payload.model_copy(update={"price": Decimal("99999")})}
+    )
+
+    async with factory() as session:
+        assert await append_event(session, original) is True
+        with pytest.raises(EventJournalIntegrityError, match="different payload hash"):
+            await append_event(session, collision)
+
+    await engine.dispose()
+
+
+async def test_journal_detects_stored_payload_tampering_before_replay() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    event = _event(1)
+
+    async with factory() as session:
+        await append_event(session, event)
+        await session.execute(
+            update(CanonicalEventRecord)
+            .where(CanonicalEventRecord.event_id == event.metadata.event_id)
+            .values(payload={**event.payload.model_dump(mode="json"), "price": "99999"})
+        )
+        await session.commit()
+        with pytest.raises(EventJournalIntegrityError, match="payload checksum"):
+            await load_events(session)
 
     await engine.dispose()
