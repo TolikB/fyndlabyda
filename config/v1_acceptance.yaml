@@ -209,10 +209,11 @@ requirements:
   - id: STRAT-003
     category: strategies
     title: Funding and basis harvest uses exact settlements, forecast, borrow, fees, basis, and leg state machine
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/opportunity
-      - src/funding_arbitrage/services/paper_runner.py
+      - src/funding_arbitrage/strategies/funding_basis.py
+      - tests/test_funding_basis_strategy.py
+      - tests/test_funding_harvest_state_machine.py
   - id: STRAT-004
     category: strategies
     title: Cross-exchange lead-lag fair value is a meta-filter and executable statistical-arbitrage strategy
