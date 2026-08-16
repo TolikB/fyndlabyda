@@ -216,8 +216,10 @@ requirements:
   - id: STRAT-004
     category: strategies
     title: Cross-exchange lead-lag fair value is a meta-filter and executable statistical-arbitrage strategy
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/lead_lag.py
+      - tests/test_lead_lag_strategy.py
   - id: STRAT-005
     category: strategies
     title: Perpetual versus dated-futures basis strategy is implemented
