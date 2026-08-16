@@ -104,6 +104,18 @@ def test_duplicate_is_idempotent_but_gap_fails_closed_until_new_snapshot() -> No
     assert book.tradable is True
 
 
+def test_explicit_previous_sequence_allows_venue_sequence_reset() -> None:
+    book = LocalOrderBook(INSTRUMENT)
+    book.apply_snapshot(_snapshot(sequence=100))
+
+    reset = book.apply_delta(_delta(first=3, last=3, previous=100))
+
+    assert reset.status is BookApplyStatus.APPLIED
+    assert book.sequence == 3
+    assert book.best_bid == Decimal("100.5")
+    assert book.tradable is True
+
+
 def test_crossed_stale_and_bad_checksum_books_are_not_tradable() -> None:
     crossed = LocalOrderBook(INSTRUMENT)
     crossed.apply_snapshot(_snapshot(crossed=True))

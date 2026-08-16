@@ -162,7 +162,7 @@ class BybitPublicAdapter(ExchangeAdapter):
                 base_asset=item.base_asset,
                 quote_asset=item.quote_asset,
                 instrument_type=DomainInstrumentType(item.instrument_type.value),
-                settlement_asset=item.settlement_asset,
+                settlement_asset=item.settlement_asset or item.quote_asset,
                 expiry=item.expiry,
             )
             for item in instruments

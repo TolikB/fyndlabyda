@@ -13,6 +13,9 @@ from typing import Any
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import BookEvent
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -28,6 +31,11 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBook,
     OrderBookLevel,
     Ticker,
+)
+from funding_arbitrage.exchanges.okx.orderbook import (
+    OkxBookUpdate,
+    OkxOrderBookNormalizer,
+    OkxOrderBookSequenceGap,
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
@@ -58,6 +66,7 @@ class OkxPublicAdapter(ExchangeAdapter):
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
         funding_symbol_limit: int = 30,
+        canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.websocket_url = websocket_url
@@ -68,6 +77,8 @@ class OkxPublicAdapter(ExchangeAdapter):
         self._sleep = sleep
         self.max_reconnects = max_reconnects
         self.funding_symbol_limit = funding_symbol_limit
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[tuple[str, InstrumentType], DomainInstrumentKey] = {}
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -121,6 +132,18 @@ class OkxPublicAdapter(ExchangeAdapter):
                             "error": str(exc),
                         },
                     )
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset or item.quote_asset,
+                expiry=item.expiry,
+            )
+            for item in result
+        }
         return result
 
     def _parse_instrument(self, row: dict[str, Any], inst_type: str) -> NormalizedInstrument:
@@ -204,9 +227,7 @@ class OkxPublicAdapter(ExchangeAdapter):
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         result: list[FundingSnapshot] = []
         instruments = await self._request("/api/v5/public/instruments", {"instType": "SWAP"})
-        instruments = [
-            item for item in instruments if str(item.get("state", "live")) == "live"
-        ]
+        instruments = [item for item in instruments if str(item.get("state", "live")) == "live"]
         popular = ("BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP")
         instruments = sorted(
             instruments,
@@ -287,9 +308,7 @@ class OkxPublicAdapter(ExchangeAdapter):
                     result[point.funding_timestamp] = point
             if len(batch) < 100 or not batch:
                 break
-            next_cursor = int(
-                min(item.funding_timestamp for item in batch).timestamp() * 1000
-            ) - 1
+            next_cursor = int(min(item.funding_timestamp for item in batch).timestamp() * 1000) - 1
             if next_cursor >= cursor_end:
                 break
             cursor_end = next_cursor
@@ -321,8 +340,7 @@ class OkxPublicAdapter(ExchangeAdapter):
                 },
             )
             batch = [
-                self._parse_candle(row, symbol, instrument_type, interval_minutes)
-                for row in rows
+                self._parse_candle(row, symbol, instrument_type, interval_minutes) for row in rows
             ]
             for candle in batch:
                 if start <= candle.open_time < end and candle.is_closed:
@@ -391,9 +409,7 @@ class OkxPublicAdapter(ExchangeAdapter):
             raise InvalidResponseError(f"invalid OKX orderbook: {row!r}") from exc
         return validate_orderbook(book)
 
-    def stream_tickers(
-        self, symbols: list[tuple[str, InstrumentType]]
-    ) -> AsyncIterator[Ticker]:
+    def stream_tickers(self, symbols: list[tuple[str, InstrumentType]]) -> AsyncIterator[Ticker]:
         return self._stream_tickers(symbols)
 
     async def _stream_tickers(
@@ -429,9 +445,7 @@ class OkxPublicAdapter(ExchangeAdapter):
                                 symbol = str(row.get("instId", ""))
                                 instrument_type = instrument_types.get(symbol)
                                 if instrument_type is not None:
-                                    ticker = self._parse_ticker_or_none(
-                                        row, instrument_type
-                                    )
+                                    ticker = self._parse_ticker_or_none(row, instrument_type)
                                     if ticker is not None:
                                         yield ticker
                 reconnects = 0
@@ -457,6 +471,7 @@ class OkxPublicAdapter(ExchangeAdapter):
         if not symbols:
             return
         instrument_types = dict(symbols)
+        states: dict[str, OkxOrderBookNormalizer] = {}
         reconnects = 0
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
             try:
@@ -468,7 +483,7 @@ class OkxPublicAdapter(ExchangeAdapter):
                             {
                                 "op": "subscribe",
                                 "args": [
-                                    {"channel": "books5", "instId": symbol}
+                                    {"channel": "books", "instId": symbol}
                                     for symbol in instrument_types
                                 ],
                             }
@@ -484,7 +499,7 @@ class OkxPublicAdapter(ExchangeAdapter):
                             )
                         if not (
                             isinstance(payload, dict)
-                            and payload.get("arg", {}).get("channel") == "books5"
+                            and payload.get("arg", {}).get("channel") == "books"
                         ):
                             continue
                         symbol = str(payload.get("arg", {}).get("instId", ""))
@@ -492,16 +507,87 @@ class OkxPublicAdapter(ExchangeAdapter):
                         if instrument_type is None:
                             continue
                         for row in payload.get("data", []):
-                            reconnects = 0
-                            yield self._parse_ws_orderbook(
-                                symbol, row, instrument_type, depth
+                            update = await self._process_ws_orderbook_update(
+                                symbol,
+                                row,
+                                payload.get("action"),
+                                states,
+                                instrument_type,
+                                depth,
                             )
-            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+                            if update is None:
+                                continue
+                            if update.result.status.value == "GAP":
+                                raise OkxOrderBookSequenceGap(
+                                    update.result.reason or "orderbook_sequence_gap"
+                                )
+                            book = states[symbol].legacy_book(update, instrument_type)
+                            reconnects = 0
+                            if book is not None:
+                                yield book
+            except (
+                OkxOrderBookSequenceGap,
+                TimeoutError,
+                OSError,
+                websockets.WebSocketException,
+            ) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("OKX orderbook WebSocket reconnect limit reached") from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    async def _process_ws_orderbook_update(
+        self,
+        symbol: str,
+        payload: object,
+        action: object,
+        states: dict[str, OkxOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> OkxBookUpdate | None:
+        update = self._apply_ws_orderbook_update(
+            symbol, payload, action, states, instrument_type, depth
+        )
+        if update is not None and self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return update
+
+    def _apply_ws_orderbook_update(
+        self,
+        symbol: str,
+        payload: object,
+        action: object,
+        states: dict[str, OkxOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> OkxBookUpdate | None:
+        normalized_action = str(action).lower()
+        if normalized_action == "snapshot":
+            states[symbol] = OkxOrderBookNormalizer(
+                self._canonical_instrument(symbol, instrument_type), depth=depth
+            )
+        elif symbol not in states:
+            return None
+        return states[symbol].apply(payload, action=action)
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        cached = self._canonical_instruments.get((symbol, instrument_type))
+        if cached is not None:
+            return cached
+        parts = symbol.upper().split("-")
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            raise InvalidResponseError(f"OKX instrument metadata is required for {symbol}")
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=symbol,
+            base_asset=parts[0],
+            quote_asset=parts[1],
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset=parts[1],
+        )
 
     def _parse_ws_orderbook(
         self,

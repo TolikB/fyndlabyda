@@ -98,6 +98,10 @@ requirements:
       - tests/test_bybit_event_pipeline.py
       - scripts/bybit_canonical_book_probe.py
       - ops/BYBIT_CANONICAL_BOOK_EVIDENCE.md
+      - src/funding_arbitrage/exchanges/okx/orderbook.py
+      - tests/test_okx_canonical_orderbook.py
+      - scripts/okx_canonical_book_probe.py
+      - ops/OKX_CANONICAL_BOOK_EVIDENCE.md
   - id: MD-002
     category: market_data
     title: Private order, fill, position, balance, and account streams are normalized and reconciled

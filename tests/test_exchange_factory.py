@@ -34,11 +34,10 @@ def test_canonical_book_event_sink_is_wired_only_to_supported_adapter() -> None:
     async def sink(_event: object) -> None:
         return None
 
-    adapters = create_public_adapters(
-        Settings(), canonical_book_event_sink=sink
-    )
+    adapters = create_public_adapters(Settings(), canonical_book_event_sink=sink)
 
     assert adapters["bybit"].canonical_book_event_sink is sink
+    assert adapters["okx"].canonical_book_event_sink is sink
 
 
 def test_paper_test_registry_is_mock_only() -> None:

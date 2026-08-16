@@ -108,7 +108,10 @@ class LocalOrderBook:
             DataQuality.UNAVAILABLE,
         }:
             return self._gap("snapshot_required")
-        if delta.last_sequence <= self.sequence:
+        sequence_reset = (
+            delta.previous_sequence == self.sequence and delta.last_sequence < self.sequence
+        )
+        if delta.last_sequence <= self.sequence and not sequence_reset:
             return BookApplyResult(
                 status=BookApplyStatus.DUPLICATE,
                 quality=self.quality,
@@ -199,9 +202,7 @@ class LocalOrderBook:
             return True
         return self.checksum_validator(snapshot, checksum)
 
-    def _trim(
-        self, levels: dict[Decimal, Decimal], *, reverse: bool
-    ) -> dict[Decimal, Decimal]:
+    def _trim(self, levels: dict[Decimal, Decimal], *, reverse: bool) -> dict[Decimal, Decimal]:
         prices = sorted(levels, reverse=reverse)[: self.max_depth]
         return {price: levels[price] for price in prices}
 

@@ -166,7 +166,12 @@ async def test_okx_empty_spot_contract_value_is_normalized() -> None:
             json={
                 "code": "0",
                 "data": [
-                    {"instId": "BTC-USDT", "ctVal": "", "tickSz": "0.01"},
+                    {
+                        "instId": "BTC-USDT",
+                        "ctVal": "",
+                        "tickSz": "0.01",
+                        "settleCcy": "",
+                    },
                     {
                         "instId": "XALAB-USDT",
                         "state": "preopen",
@@ -186,6 +191,9 @@ async def test_okx_empty_spot_contract_value_is_normalized() -> None:
 
     spot = next(item for item in instruments if item.instrument_type is InstrumentType.SPOT)
     assert spot.contract_size == Decimal("1")
+    assert adapter._canonical_instruments[
+        ("BTC-USDT", InstrumentType.SPOT)
+    ].settlement_asset == "USDT"
     assert {item.exchange_symbol for item in instruments} == {
         "BTC-USDT-SWAP",
         "BTC-USDT",

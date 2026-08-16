@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from funding_arbitrage.config import Settings
+from funding_arbitrage.domain.events import BookEvent
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
-from funding_arbitrage.exchanges.bybit.orderbook import BybitBookEvent
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 from funding_arbitrage.exchanges.htx import HtxPublicAdapter
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
@@ -21,7 +21,7 @@ from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 def create_public_adapters(
     settings: Settings,
     *,
-    canonical_book_event_sink: Callable[[BybitBookEvent], Awaitable[None]] | None = None,
+    canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
 ) -> dict[str, ExchangeAdapter]:
     if settings.market_data_mode == "mock":
         return {
@@ -62,6 +62,7 @@ def create_public_adapters(
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,
             funding_symbol_limit=settings.okx_funding_symbol_limit,
+            canonical_book_event_sink=canonical_book_event_sink,
         ),
         "binance": BinancePublicAdapter(
             spot_base_url=settings.binance_spot_base_url,

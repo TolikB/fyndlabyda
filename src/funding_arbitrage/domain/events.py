@@ -112,9 +112,7 @@ class InstrumentKey(BaseModel):
     settlement_asset: str | None = None
     expiry: datetime | None = None
 
-    @field_validator(
-        "venue", "exchange_symbol", "base_asset", "quote_asset", "settlement_asset"
-    )
+    @field_validator("venue", "exchange_symbol", "base_asset", "quote_asset", "settlement_asset")
     @classmethod
     def normalize_identifiers(cls, value: str | None) -> str | None:
         if value is None:
@@ -403,6 +401,9 @@ class EventEnvelope[PayloadT: BaseModel](BaseModel):
         if payload_timestamp != self.metadata.exchange_timestamp:
             raise ValueError("payload and metadata exchange timestamps must match")
         return self
+
+
+BookEvent = EventEnvelope[BookSnapshot] | EventEnvelope[BookDelta]
 
 
 def deterministic_event_id(
