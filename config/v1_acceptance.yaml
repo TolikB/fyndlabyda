@@ -153,25 +153,31 @@ requirements:
   - id: FEAT-001
     category: features
     title: Incremental EMA, ATR, ADX, efficiency ratio, VWAP, and volume profile features exist
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/features/technical.py
+      - tests/test_technical_features.py
   - id: FEAT-002
     category: features
     title: Incremental swing, BOS, CHoCH, liquidity-zone, and fair-value-gap features exist
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/features/structure.py
+      - tests/test_structure_features.py
   - id: FEAT-003
     category: features
     title: Incremental OFI, microprice, book imbalance, trade flow, and CVD features exist
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/features/orderflow.py
       - tests/test_orderflow_features.py
   - id: FEAT-004
     category: features
     title: Incremental OI, funding, mark-index basis, and derivatives features exist
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/features/derivatives.py
+      - tests/test_derivatives_features.py
   - id: REG-001
     category: regime
     title: Deterministic classifier covers trend, range, transition, volatility expansion, stress, and unknown
