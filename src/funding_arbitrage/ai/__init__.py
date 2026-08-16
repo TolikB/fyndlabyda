@@ -1,5 +1,19 @@
 """Guarded decision-support components; none can authorize execution size."""
 
+from funding_arbitrage.ai.llm_gateway import (
+    GuardedLLMGateway,
+    LLMAction,
+    LLMAuditRecord,
+    LLMBudgetSnapshot,
+    LLMDecision,
+    LLMDecisionRequest,
+    LLMFallback,
+    LLMGatewayConfig,
+    LLMGatewayResult,
+    LLMProvider,
+    LLMRationaleCode,
+    LLMStructuredResponse,
+)
 from funding_arbitrage.ai.meta_labeling import (
     CalibratedMetaLabelTrainer,
     MetaLabelArtifact,
@@ -31,6 +45,18 @@ from funding_arbitrage.ai.rl_policy import (
 __all__ = [
     "CalibratedMetaLabelTrainer",
     "GuardedRLPolicy",
+    "GuardedLLMGateway",
+    "LLMAuditRecord",
+    "LLMAction",
+    "LLMBudgetSnapshot",
+    "LLMDecision",
+    "LLMDecisionRequest",
+    "LLMFallback",
+    "LLMGatewayConfig",
+    "LLMGatewayResult",
+    "LLMProvider",
+    "LLMRationaleCode",
+    "LLMStructuredResponse",
     "MetaLabelArtifact",
     "MetaLabelDataset",
     "MetaLabelDatasetBuilder",

@@ -272,8 +272,10 @@ requirements:
   - id: AI-003
     category: strategies
     title: LLM decisions use versioned schemas, bounded latency and spend, audit, and deterministic fallback
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/ai/llm_gateway.py
+      - tests/test_llm_gateway.py
   - id: SIG-001
     category: strategies
     title: Signal orchestrator enforces schema, TTL, deduplication, conflicts, correlation, and allocation policy
