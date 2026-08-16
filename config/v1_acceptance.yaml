@@ -223,8 +223,10 @@ requirements:
   - id: STRAT-005
     category: strategies
     title: Perpetual versus dated-futures basis strategy is implemented
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/dated_basis.py
+      - tests/test_dated_basis_strategy.py
   - id: STRAT-006
     category: strategies
     title: Options volatility strategies and options risk models are implemented
