@@ -7,6 +7,14 @@ from funding_arbitrage.execution.oms import (
     OMSJournalEntry,
     OMSOrderSnapshot,
 )
+from funding_arbitrage.execution.router import (
+    EmergencyFlattenResult,
+    OpenExposure,
+    RouteChildOrder,
+    SmartOrderPlan,
+    SmartOrderRouter,
+    VenueRouteQuote,
+)
 
 __all__ = [
     "DurableOMS",
@@ -14,4 +22,10 @@ __all__ = [
     "OMSEventType",
     "OMSJournalEntry",
     "OMSOrderSnapshot",
+    "EmergencyFlattenResult",
+    "OpenExposure",
+    "RouteChildOrder",
+    "SmartOrderPlan",
+    "SmartOrderRouter",
+    "VenueRouteQuote",
 ]

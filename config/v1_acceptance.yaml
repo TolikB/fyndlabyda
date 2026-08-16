@@ -336,9 +336,12 @@ requirements:
   - id: EXE-003
     category: execution
     title: Marketable capped limits, all-in cost, slippage guard, partial fills, and emergency flatten are implemented
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/execution/live.py
+      - src/funding_arbitrage/execution/oms.py
+      - src/funding_arbitrage/execution/router.py
+      - tests/test_durable_oms.py
+      - tests/test_smart_order_router.py
   - id: EXE-004
     category: execution
     title: Exchange-side reduce-only protective stops survive process failure and reconcile after restart
@@ -347,8 +350,10 @@ requirements:
   - id: EXE-005
     category: execution
     title: Smart order router optimizes all-in execution across venues and handles partial routing
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/execution/router.py
+      - tests/test_smart_order_router.py
   - id: EXE-006
     category: execution
     title: DEX execution handles approvals, nonce, gas, slippage, reorg, replacement, and finality
