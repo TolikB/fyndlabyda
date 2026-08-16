@@ -322,15 +322,17 @@ requirements:
   - id: EXE-001
     category: execution
     title: Durable OMS state machine covers new, acknowledged, partial, filled, cancel, rejected, expired, unknown, and reconciling
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/execution/live.py
+      - src/funding_arbitrage/execution/oms.py
+      - tests/test_durable_oms.py
   - id: EXE-002
     category: execution
     title: Client order IDs, persist-before-submit, unknown-outcome recovery, and cancel-race handling are enforced
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/execution/live.py
+      - src/funding_arbitrage/execution/oms.py
+      - tests/test_durable_oms.py
   - id: EXE-003
     category: execution
     title: Marketable capped limits, all-in cost, slippage guard, partial fills, and emergency flatten are implemented
