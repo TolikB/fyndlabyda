@@ -181,13 +181,17 @@ requirements:
   - id: REG-001
     category: regime
     title: Deterministic classifier covers trend, range, transition, volatility expansion, stress, and unknown
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/regime/classifier.py
+      - tests/test_regime_classifier.py
   - id: REG-002
     category: regime
     title: Regime transitions use hysteresis, minimum dwell, confidence, and deterministic replay
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/regime/classifier.py
+      - tests/test_regime_classifier.py
   - id: STRAT-001
     category: strategies
     title: Regime-filtered orderflow breakout implements score, entry, stop, target, and time stop
