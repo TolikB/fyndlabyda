@@ -1,5 +1,16 @@
 """Venue-independent execution primitives shared by all trading modes."""
 
+from funding_arbitrage.execution.dex import (
+    DexExecutionEngine,
+    DexExecutionPolicy,
+    DexSwapPlan,
+    DexSwapQuote,
+    DexTransactionKind,
+    DexTransactionSnapshot,
+    DexTransactionStatus,
+    JsonlDexJournal,
+    TokenAllowance,
+)
 from funding_arbitrage.execution.oms import (
     DurableOMS,
     JsonlOMSJournal,
@@ -25,6 +36,15 @@ from funding_arbitrage.execution.router import (
 )
 
 __all__ = [
+    "DexExecutionEngine",
+    "DexExecutionPolicy",
+    "DexSwapPlan",
+    "DexSwapQuote",
+    "DexTransactionKind",
+    "DexTransactionSnapshot",
+    "DexTransactionStatus",
+    "JsonlDexJournal",
+    "TokenAllowance",
     "DurableOMS",
     "JsonlOMSJournal",
     "OMSEventType",

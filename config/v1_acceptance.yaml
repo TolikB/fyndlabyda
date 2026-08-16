@@ -359,8 +359,10 @@ requirements:
   - id: EXE-006
     category: execution
     title: DEX execution handles approvals, nonce, gas, slippage, reorg, replacement, and finality
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/execution/dex.py
+      - tests/test_dex_execution.py
   - id: EXE-007
     category: execution
     title: On-chain MEV execution handles simulation, bundle policy, reorgs, private relay, and loss bounds
