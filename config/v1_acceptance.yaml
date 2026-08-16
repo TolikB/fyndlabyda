@@ -195,13 +195,17 @@ requirements:
   - id: STRAT-001
     category: strategies
     title: Regime-filtered orderflow breakout implements score, entry, stop, target, and time stop
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/directional.py
+      - tests/test_directional_strategies.py
   - id: STRAT-002
     category: strategies
     title: Liquidity-sweep and failed-breakout reversion implements score, entry, stop, target, and time stop
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/strategies/directional.py
+      - tests/test_directional_strategies.py
   - id: STRAT-003
     category: strategies
     title: Funding and basis harvest uses exact settlements, forecast, borrow, fees, basis, and leg state machine
