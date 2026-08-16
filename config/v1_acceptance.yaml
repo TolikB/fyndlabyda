@@ -258,8 +258,10 @@ requirements:
   - id: AI-001
     category: strategies
     title: ML meta-labeling has versioned datasets, leakage controls, calibration, drift, and fallback
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/ai/meta_labeling.py
+      - tests/test_meta_labeling.py
   - id: AI-002
     category: strategies
     title: RL decisions have constrained action space, offline evaluation, guardrails, and deterministic fallback
