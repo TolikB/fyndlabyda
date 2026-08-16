@@ -12,6 +12,9 @@ from typing import Any
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import BookEvent
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -27,6 +30,10 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBook,
     OrderBookLevel,
     Ticker,
+)
+from funding_arbitrage.exchanges.hyperliquid.orderbook import (
+    HyperliquidBookUpdate,
+    HyperliquidOrderBookNormalizer,
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
@@ -52,6 +59,7 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
+        canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.websocket_url = websocket_url
@@ -61,6 +69,10 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
         self._limiter = RateLimiter(requests_per_second, burst)
         self._sleep = sleep
         self.max_reconnects = max_reconnects
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[
+            tuple[str, InstrumentType], DomainInstrumentKey
+        ] = {}
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -118,6 +130,18 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
                     is_active=not bool(row.get("isDelisted", False)),
                 )
             )
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset or item.quote_asset,
+                expiry=item.expiry,
+            )
+            for item in result
+        }
         return result
 
     async def get_tickers(self) -> list[Ticker]:
@@ -369,6 +393,7 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
         if not symbols:
             return
         instrument_types = dict(symbols)
+        states: dict[str, HyperliquidOrderBookNormalizer] = {}
         reconnects = 0
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
             try:
@@ -402,10 +427,15 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
                         instrument_type = instrument_types.get(symbol)
                         if instrument_type is None:
                             continue
-                        reconnects = 0
-                        yield self._parse_ws_orderbook(
-                            data, instrument_type, depth
+                        update = await self._process_ws_orderbook_update(
+                            data, states, instrument_type, depth
                         )
+                        if update is None:
+                            continue
+                        book = states[symbol].legacy_book(update, instrument_type)
+                        reconnects = 0
+                        if book is not None:
+                            yield book
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
@@ -414,6 +444,44 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
                         "Hyperliquid orderbook WebSocket reconnect limit reached"
                     ) from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    async def _process_ws_orderbook_update(
+        self,
+        payload: object,
+        states: dict[str, HyperliquidOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> HyperliquidBookUpdate | None:
+        if not isinstance(payload, dict):
+            raise InvalidResponseError("invalid Hyperliquid L2 payload")
+        symbol = str(payload.get("coin", "")).upper()
+        if not symbol:
+            return None
+        state = states.get(symbol)
+        if state is None:
+            state = HyperliquidOrderBookNormalizer(
+                self._canonical_instrument(symbol, instrument_type), depth=depth
+            )
+            states[symbol] = state
+        update = state.apply(payload)
+        if self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return update
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        cached = self._canonical_instruments.get((symbol, instrument_type))
+        if cached is not None:
+            return cached
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=symbol,
+            base_asset=symbol,
+            quote_asset="USDC",
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset="USDC",
+        )
 
     def _parse_ws_orderbook(
         self,

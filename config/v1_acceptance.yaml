@@ -110,6 +110,10 @@ requirements:
       - tests/test_gate_canonical_orderbook.py
       - scripts/gate_canonical_book_probe.py
       - ops/GATE_CANONICAL_BOOK_EVIDENCE.md
+      - src/funding_arbitrage/exchanges/hyperliquid/orderbook.py
+      - tests/test_hyperliquid_canonical_orderbook.py
+      - scripts/hyperliquid_canonical_book_probe.py
+      - ops/HYPERLIQUID_CANONICAL_BOOK_EVIDENCE.md
   - id: MD-002
     category: market_data
     title: Private order, fill, position, balance, and account streams are normalized and reconciled
