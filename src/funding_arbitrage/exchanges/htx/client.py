@@ -13,6 +13,9 @@ from typing import Any
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import BookEvent, DataQuality
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -29,6 +32,7 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBookLevel,
     Ticker,
 )
+from funding_arbitrage.market_data.canonical_snapshot import canonical_snapshot_event
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
 from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
@@ -74,6 +78,7 @@ class HtxPublicAdapter(ExchangeAdapter):
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
+        canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.spot_base_url = spot_base_url.rstrip("/")
         self.futures_base_url = futures_base_url.rstrip("/")
@@ -87,6 +92,10 @@ class HtxPublicAdapter(ExchangeAdapter):
         self.max_reconnects = max_reconnects
         self._contract_sizes: dict[str, Decimal] = {}
         self._funding_intervals: dict[str, Decimal] = {}
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[
+            tuple[str, InstrumentType], DomainInstrumentKey
+        ] = {}
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -142,9 +151,22 @@ class HtxPublicAdapter(ExchangeAdapter):
         self._contract_sizes = {
             item.exchange_symbol: item.contract_size for item in future_instruments
         }
-        return future_instruments + [
+        instruments = future_instruments + [
             self._parse_spot_instrument(row) for row in _rows(spot, "spot symbols")
         ]
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset or item.quote_asset,
+                expiry=item.expiry,
+            )
+            for item in instruments
+        }
+        return instruments
 
     def _parse_future_instrument(self, row: dict[str, Any]) -> NormalizedInstrument:
         try:
@@ -518,7 +540,19 @@ class HtxPublicAdapter(ExchangeAdapter):
                         if stream == "ticker":
                             yield self._parse_ws_ticker(payload, kind)
                         else:
-                            yield self._parse_ws_orderbook(payload, kind, depth)
+                            book = self._parse_ws_orderbook(payload, kind, depth)
+                            source = (
+                                "HTX.PUBLIC.SPOT.DEPTH.STEP0"
+                                if kind is InstrumentType.SPOT
+                                else "HTX.PUBLIC.FUTURES.DEPTH.STEP0"
+                            )
+                            event = await self._publish_canonical_book(book, source)
+                            if (
+                                event is not None
+                                and event.metadata.quality is not DataQuality.VALID
+                            ):
+                                continue
+                            yield book
                 reconnects = 0
             except (TimeoutError, OSError, ValueError, websockets.WebSocketException) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
@@ -572,4 +606,49 @@ class HtxPublicAdapter(ExchangeAdapter):
             multiplier,
             payload.get("ts", payload["tick"].get("ts")),
             depth,
+        )
+
+    async def _publish_canonical_book(
+        self, book: OrderBook, source: str
+    ) -> BookEvent | None:
+        if self.canonical_book_event_sink is None:
+            return None
+        event = canonical_snapshot_event(
+            book,
+            self._canonical_instrument(book.symbol, book.instrument_type),
+            source=source,
+        )
+        await self.canonical_book_event_sink(event)
+        return event
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        cached = self._canonical_instruments.get((symbol, instrument_type))
+        if cached is not None:
+            return cached
+        normalized = symbol.upper()
+        if "-" in normalized:
+            base, quote = normalized.split("-", 1)
+        else:
+            quote = next(
+                (
+                    suffix
+                    for suffix in ("USDT", "USDC", "BTC", "ETH", "USD")
+                    if normalized.endswith(suffix)
+                ),
+                "",
+            )
+            base = normalized[: -len(quote)] if quote else ""
+        if not base or not quote:
+            raise InvalidResponseError(
+                f"HTX instrument metadata is required for {symbol}"
+            )
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=normalized,
+            base_asset=base,
+            quote_asset=quote,
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset=quote,
         )

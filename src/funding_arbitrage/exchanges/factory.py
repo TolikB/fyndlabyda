@@ -90,6 +90,7 @@ def create_public_adapters(
             timeout_seconds=settings.request_timeout_seconds,
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,
+            canonical_book_event_sink=canonical_book_event_sink,
         ),
         "kucoin": KucoinPublicAdapter(
             spot_base_url=settings.kucoin_spot_base_url,
@@ -99,6 +100,7 @@ def create_public_adapters(
             timeout_seconds=settings.request_timeout_seconds,
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,
+            canonical_book_event_sink=canonical_book_event_sink,
         ),
         "htx": HtxPublicAdapter(
             spot_base_url=settings.htx_spot_base_url,
@@ -108,5 +110,6 @@ def create_public_adapters(
             timeout_seconds=settings.request_timeout_seconds,
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,
+            canonical_book_event_sink=canonical_book_event_sink,
         ),
     }

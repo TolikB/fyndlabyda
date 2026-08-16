@@ -21,6 +21,9 @@ from typing import Any
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import BookEvent, DataQuality
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -37,9 +40,17 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBookLevel,
     Ticker,
 )
+from funding_arbitrage.market_data.canonical_snapshot import canonical_snapshot_event
+from funding_arbitrage.market_data.l2_book import BookApplyStatus
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
 from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
+
+from .orderbook import (
+    MexcBookUpdate,
+    MexcOrderBookNormalizer,
+    MexcOrderBookSequenceGap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +91,7 @@ class MexcPublicAdapter(ExchangeAdapter):
         base_url: str | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
+        canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         # ``base_url`` is retained only for deterministic single-transport tests.
         if base_url is not None:
@@ -98,6 +110,10 @@ class MexcPublicAdapter(ExchangeAdapter):
         self.max_reconnects = max_reconnects
         self._contract_sizes: dict[str, Decimal] = {}
         self._funding_intervals: dict[str, Decimal] = {}
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[
+            tuple[str, InstrumentType], DomainInstrumentKey
+        ] = {}
 
     async def _ensure_http(self, *, futures: bool) -> httpx.AsyncClient:
         if futures:
@@ -175,7 +191,20 @@ class MexcPublicAdapter(ExchangeAdapter):
             for item in futures
             if item.instrument_type is InstrumentType.PERPETUAL
         }
-        return futures + spot
+        instruments = futures + spot
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset or item.quote_asset,
+                expiry=item.expiry,
+            )
+            for item in instruments
+        }
+        return instruments
 
     def _parse_future_instrument(self, row: object) -> NormalizedInstrument:
         if not isinstance(row, dict):
@@ -593,47 +622,69 @@ class MexcPublicAdapter(ExchangeAdapter):
         self, symbols: list[str], depth: int
     ) -> AsyncIterator[OrderBook]:
         reconnects = 0
+        reconstruction_depth = max(depth, 200)
         while True:
+            states: dict[str, MexcOrderBookNormalizer] = {}
             try:
                 async with websockets.connect(
                     self.futures_websocket_url,
                     open_timeout=self.timeout,
                     ping_interval=20,
                     ping_timeout=20,
+                    max_queue=1024,
                 ) as websocket:
                     for symbol in symbols:
                         await websocket.send(
                             json.dumps(
-                                {"method": "sub.depth", "param": {"symbol": symbol}, "gzip": False}
+                                {
+                                    "method": "sub.depth",
+                                    "param": {"symbol": symbol, "compress": False},
+                                    "gzip": False,
+                                }
                             )
                         )
+                    async with asyncio.timeout(self.timeout):
+                        buffered = await self._wait_for_future_depth_subscriptions(
+                            websocket, expected=len(symbols)
+                        )
+                    bootstrapped = await asyncio.gather(
+                        *(
+                            self._bootstrap_future_orderbook(
+                                symbol,
+                                output_depth=depth,
+                                reconstruction_depth=reconstruction_depth,
+                            )
+                            for symbol in symbols
+                        )
+                    )
+                    states.update(
+                        {
+                            symbol: state
+                            for symbol, (state, _) in zip(
+                                symbols, bootstrapped, strict=True
+                            )
+                        }
+                    )
+                    for state, update in bootstrapped:
+                        bootstrap_book = state.legacy_book(
+                            update, InstrumentType.PERPETUAL
+                        )
+                        if bootstrap_book is not None:
+                            reconnects = 0
+                            yield bootstrap_book
+                    for payload in buffered:
+                        book = await self._consume_future_orderbook_payload(payload, states)
+                        if book is not None:
+                            reconnects = 0
+                            yield book
                     async for message in websocket:
                         payload = _json_ws_payload(message)
-                        if payload.get("channel") != "push.depth":
-                            continue
-                        data = payload.get("data")
-                        symbol = str(payload.get("symbol") or "")
-                        if not isinstance(data, dict) or not symbol:
-                            continue
-                        size = self._contract_sizes.get(symbol, Decimal("1"))
-                        book = OrderBook(
-                            exchange=self.name,
-                            symbol=symbol,
-                            instrument_type=InstrumentType.PERPETUAL,
-                            bids=tuple(
-                                _parse_level(row, size, "bid")
-                                for row in data.get("bids", [])[:depth]
-                            ),
-                            asks=tuple(
-                                _parse_level(row, size, "ask")
-                                for row in data.get("asks", [])[:depth]
-                            ),
-                            timestamp=_utc_from_ms(
-                                data.get("cts") or payload.get("ts") or _now_ms()
-                            ),
-                            sequence=int(data["version"]) if data.get("version") else None,
+                        book = await self._consume_future_orderbook_payload(
+                            payload, states
                         )
-                        yield validate_orderbook(book)
+                        if book is not None:
+                            reconnects = 0
+                            yield book
                 reconnects = 0
             except asyncio.CancelledError:
                 raise
@@ -643,6 +694,77 @@ class MexcPublicAdapter(ExchangeAdapter):
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("MEXC futures depth stream exhausted reconnects") from exc
                 await self._sleep(min(2 ** min(reconnects, 5), 30))
+
+    async def _wait_for_future_depth_subscriptions(
+        self, websocket: Any, *, expected: int
+    ) -> list[dict[str, Any]]:
+        buffered: list[dict[str, Any]] = []
+        acknowledgements = 0
+        while acknowledgements < expected:
+            payload = _json_ws_payload(await websocket.recv())
+            channel = str(payload.get("channel") or "")
+            if channel == "rs.error":
+                raise InvalidResponseError(
+                    f"MEXC futures depth subscription failed: {payload}"
+                )
+            if channel == "rs.sub.depth":
+                if payload.get("data") != "success":
+                    raise InvalidResponseError(
+                        f"MEXC futures depth subscription failed: {payload}"
+                    )
+                acknowledgements += 1
+            elif channel == "push.depth":
+                buffered.append(payload)
+        return buffered
+
+    async def _bootstrap_future_orderbook(
+        self,
+        symbol: str,
+        *,
+        output_depth: int,
+        reconstruction_depth: int,
+    ) -> tuple[MexcOrderBookNormalizer, MexcBookUpdate]:
+        state = MexcOrderBookNormalizer(
+            self._canonical_instrument(symbol, InstrumentType.PERPETUAL),
+            output_depth=output_depth,
+            reconstruction_depth=reconstruction_depth,
+            contract_size=self._contract_sizes[symbol],
+        )
+        snapshot = await self.get_orderbook(
+            symbol, reconstruction_depth, InstrumentType.PERPETUAL
+        )
+        update = state.bootstrap(snapshot)
+        if self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return state, update
+
+    async def _consume_future_orderbook_payload(
+        self,
+        payload: dict[str, Any],
+        states: dict[str, MexcOrderBookNormalizer],
+    ) -> OrderBook | None:
+        if payload.get("channel") != "push.depth":
+            return None
+        symbol = str(payload.get("symbol") or "").upper()
+        state = states.get(symbol)
+        if state is None:
+            return None
+        update = await self._process_future_orderbook_update(payload, state)
+        if update.result.status is BookApplyStatus.GAP:
+            raise MexcOrderBookSequenceGap(
+                update.result.reason or "orderbook_sequence_gap"
+            )
+        return state.legacy_book(update, InstrumentType.PERPETUAL)
+
+    async def _process_future_orderbook_update(
+        self,
+        payload: object,
+        state: MexcOrderBookNormalizer,
+    ) -> MexcBookUpdate:
+        update = state.apply(payload)
+        if self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return update
 
     async def _stream_spot_books(
         self, symbols: list[str], depth: int
@@ -657,7 +779,7 @@ class MexcPublicAdapter(ExchangeAdapter):
             if decoded is None:
                 continue
             symbol, bids, asks, timestamp, sequence = decoded
-            yield validate_orderbook(
+            book = validate_orderbook(
                 OrderBook(
                     exchange=self.name,
                     symbol=symbol,
@@ -668,6 +790,12 @@ class MexcPublicAdapter(ExchangeAdapter):
                     sequence=sequence,
                 )
             )
+            event = await self._publish_canonical_book(
+                book, "MEXC.PUBLIC.SPOT.LIMIT_DEPTH"
+            )
+            if event is not None and event.metadata.quality is not DataQuality.VALID:
+                continue
+            yield book
 
     async def _stream_spot_protobuf(self, subscriptions: list[str]) -> AsyncIterator[bytes]:
         reconnects = 0
@@ -694,6 +822,51 @@ class MexcPublicAdapter(ExchangeAdapter):
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("MEXC spot stream exhausted reconnects") from exc
                 await self._sleep(min(2 ** min(reconnects, 5), 30))
+
+    async def _publish_canonical_book(
+        self, book: OrderBook, source: str
+    ) -> BookEvent | None:
+        if self.canonical_book_event_sink is None:
+            return None
+        event = canonical_snapshot_event(
+            book,
+            self._canonical_instrument(book.symbol, book.instrument_type),
+            source=source,
+        )
+        await self.canonical_book_event_sink(event)
+        return event
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        cached = self._canonical_instruments.get((symbol, instrument_type))
+        if cached is not None:
+            return cached
+        normalized = symbol.upper()
+        if "_" in normalized:
+            base, quote = normalized.split("_", 1)
+        else:
+            quote = next(
+                (
+                    suffix
+                    for suffix in ("USDT", "USDC", "BTC", "ETH", "USD")
+                    if normalized.endswith(suffix)
+                ),
+                "",
+            )
+            base = normalized[: -len(quote)] if quote else ""
+        if not base or not quote:
+            raise InvalidResponseError(
+                f"MEXC instrument metadata is required for {symbol}"
+            )
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=normalized,
+            base_asset=base,
+            quote_asset=quote,
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset=quote,
+        )
 
 
 def _parse_level(row: object, size: Decimal, side: str) -> OrderBookLevel:

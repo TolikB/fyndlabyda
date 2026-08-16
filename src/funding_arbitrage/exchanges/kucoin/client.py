@@ -14,6 +14,9 @@ from urllib.parse import urlencode
 import httpx
 import websockets
 
+from funding_arbitrage.domain.events import BookEvent, DataQuality
+from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -30,6 +33,7 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBookLevel,
     Ticker,
 )
+from funding_arbitrage.market_data.canonical_snapshot import canonical_snapshot_event
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
 from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
@@ -75,6 +79,7 @@ class KucoinPublicAdapter(ExchangeAdapter):
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
+        canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.spot_base_url = spot_base_url.rstrip("/")
         self.futures_base_url = futures_base_url.rstrip("/")
@@ -89,6 +94,10 @@ class KucoinPublicAdapter(ExchangeAdapter):
         self._contract_sizes: dict[str, Decimal] = {}
         self._funding_intervals: dict[str, Decimal] = {}
         self._instrument_types: dict[str, InstrumentType] = {}
+        self.canonical_book_event_sink = canonical_book_event_sink
+        self._canonical_instruments: dict[
+            tuple[str, InstrumentType], DomainInstrumentKey
+        ] = {}
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -149,7 +158,20 @@ class KucoinPublicAdapter(ExchangeAdapter):
         )
         future_instruments = self._cache_supported_future_instruments(futures)
         spot_instruments = [self._parse_spot_instrument(row) for row in _rows(spot, "spot symbols")]
-        return future_instruments + spot_instruments
+        instruments = future_instruments + spot_instruments
+        self._canonical_instruments = {
+            (item.exchange_symbol, item.instrument_type): DomainInstrumentKey(
+                venue=item.exchange,
+                exchange_symbol=item.exchange_symbol,
+                base_asset=item.base_asset,
+                quote_asset=item.quote_asset,
+                instrument_type=DomainInstrumentType(item.instrument_type.value),
+                settlement_asset=item.settlement_asset or item.quote_asset,
+                expiry=item.expiry,
+            )
+            for item in instruments
+        }
+        return instruments
 
     def _parse_future_instrument(self, row: dict[str, Any]) -> NormalizedInstrument:
         try:
@@ -393,7 +415,14 @@ class KucoinPublicAdapter(ExchangeAdapter):
                     if timestamp not in (None, "")
                     else int(datetime.now(UTC).timestamp() * 1000)
                 ),
-                sequence=int(payload["sequence"]) if payload.get("sequence") is not None else None,
+                sequence=(
+                    int(payload["sequence"])
+                    if payload.get("sequence") is not None
+                    else int(decimal(timestamp, "snapshot_timestamp"))
+                    if instrument_type is InstrumentType.SPOT
+                    and timestamp not in (None, "")
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidResponseError(f"invalid KuCoin orderbook: {payload!r}") from exc
@@ -605,7 +634,19 @@ class KucoinPublicAdapter(ExchangeAdapter):
                         if stream == "ticker":
                             yield self._parse_ws_ticker(payload, kind)
                         else:
-                            yield self._parse_ws_orderbook(payload, kind, depth)
+                            book = self._parse_ws_orderbook(payload, kind, depth)
+                            source = (
+                                "KUCOIN.PUBLIC.SPOT.LEVEL2DEPTH50"
+                                if kind is InstrumentType.SPOT
+                                else "KUCOIN.PUBLIC.FUTURES.LEVEL2DEPTH50"
+                            )
+                            event = await self._publish_canonical_book(book, source)
+                            if (
+                                event is not None
+                                and event.metadata.quality is not DataQuality.VALID
+                            ):
+                                continue
+                            yield book
                 reconnects = 0
             except (TimeoutError, OSError, ValueError, websockets.WebSocketException) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
@@ -657,4 +698,51 @@ class KucoinPublicAdapter(ExchangeAdapter):
             multiplier,
             data.get("timestamp", data.get("ts")),
             depth,
+        )
+
+    async def _publish_canonical_book(
+        self, book: OrderBook, source: str
+    ) -> BookEvent | None:
+        if self.canonical_book_event_sink is None:
+            return None
+        event = canonical_snapshot_event(
+            book,
+            self._canonical_instrument(book.symbol, book.instrument_type),
+            source=source,
+        )
+        await self.canonical_book_event_sink(event)
+        return event
+
+    def _canonical_instrument(
+        self, symbol: str, instrument_type: InstrumentType
+    ) -> DomainInstrumentKey:
+        cached = self._canonical_instruments.get((symbol, instrument_type))
+        if cached is not None:
+            return cached
+        normalized = symbol.upper()
+        if "-" in normalized:
+            base, quote = normalized.split("-", 1)
+        else:
+            contract = normalized[:-1] if normalized.endswith("M") else normalized
+            quote = next(
+                (
+                    suffix
+                    for suffix in ("USDT", "USDC", "USD")
+                    if contract.endswith(suffix)
+                ),
+                "",
+            )
+            base = contract[: -len(quote)] if quote else ""
+        base = _base_asset(base)
+        if not base or not quote:
+            raise InvalidResponseError(
+                f"KuCoin instrument metadata is required for {symbol}"
+            )
+        return DomainInstrumentKey(
+            venue=self.name,
+            exchange_symbol=normalized,
+            base_asset=base,
+            quote_asset=quote,
+            instrument_type=DomainInstrumentType(instrument_type.value),
+            settlement_asset=quote,
         )

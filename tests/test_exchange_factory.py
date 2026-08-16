@@ -41,6 +41,9 @@ def test_canonical_book_event_sink_is_wired_only_to_supported_adapter() -> None:
     assert adapters["binance"].canonical_book_event_sink is sink
     assert adapters["gate"].canonical_book_event_sink is sink
     assert adapters["hyperliquid"].canonical_book_event_sink is sink
+    assert adapters["mexc"].canonical_book_event_sink is sink
+    assert adapters["kucoin"].canonical_book_event_sink is sink
+    assert adapters["htx"].canonical_book_event_sink is sink
 
 
 def test_paper_test_registry_is_mock_only() -> None:

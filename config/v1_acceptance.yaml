@@ -114,6 +114,12 @@ requirements:
       - tests/test_hyperliquid_canonical_orderbook.py
       - scripts/hyperliquid_canonical_book_probe.py
       - ops/HYPERLIQUID_CANONICAL_BOOK_EVIDENCE.md
+      - src/funding_arbitrage/market_data/canonical_snapshot.py
+      - src/funding_arbitrage/exchanges/mexc/orderbook.py
+      - tests/test_mexc_canonical_orderbook.py
+      - tests/test_remaining_canonical_orderbooks.py
+      - scripts/remaining_cex_canonical_book_probe.py
+      - ops/REMAINING_CEX_CANONICAL_BOOK_EVIDENCE.md
   - id: MD-002
     category: market_data
     title: Private order, fill, position, balance, and account streams are normalized and reconciled
