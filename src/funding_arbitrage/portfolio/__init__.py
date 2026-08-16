@@ -1,1 +1,65 @@
-"""Virtual paper portfolio and accounting."""
+"""Portfolio accounting, allocation, and immutable double-entry ledger."""
+
+from funding_arbitrage.portfolio.ledger import (
+    DoubleEntryLedger,
+    JsonlLedgerJournal,
+    LedgerAccountKind,
+    LedgerPosting,
+    LedgerSnapshot,
+    LedgerTransaction,
+)
+from funding_arbitrage.portfolio.reconciliation import (
+    BalanceReconState,
+    ContinuousReconciler,
+    FillReconState,
+    FundingReconState,
+    JsonlReconciliationAudit,
+    OrderReconState,
+    PositionReconState,
+    ReconciliationCategory,
+    ReconciliationInput,
+    ReconciliationIssue,
+    ReconciliationResult,
+    ReconciliationSeverity,
+    ReconciliationTolerance,
+)
+from funding_arbitrage.portfolio.withdrawal import (
+    JsonlWithdrawalJournal,
+    WithdrawalApproval,
+    WithdrawalApprovalRole,
+    WithdrawalDestination,
+    WithdrawalManager,
+    WithdrawalPolicy,
+    WithdrawalSnapshot,
+    WithdrawalStatus,
+)
+
+__all__ = [
+    "DoubleEntryLedger",
+    "JsonlLedgerJournal",
+    "LedgerAccountKind",
+    "LedgerPosting",
+    "LedgerSnapshot",
+    "LedgerTransaction",
+    "BalanceReconState",
+    "ContinuousReconciler",
+    "FillReconState",
+    "FundingReconState",
+    "JsonlReconciliationAudit",
+    "OrderReconState",
+    "PositionReconState",
+    "ReconciliationCategory",
+    "ReconciliationInput",
+    "ReconciliationIssue",
+    "ReconciliationResult",
+    "ReconciliationSeverity",
+    "ReconciliationTolerance",
+    "JsonlWithdrawalJournal",
+    "WithdrawalApproval",
+    "WithdrawalApprovalRole",
+    "WithdrawalDestination",
+    "WithdrawalManager",
+    "WithdrawalPolicy",
+    "WithdrawalSnapshot",
+    "WithdrawalStatus",
+]

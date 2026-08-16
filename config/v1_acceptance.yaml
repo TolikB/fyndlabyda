@@ -383,21 +383,24 @@ requirements:
   - id: PORT-001
     category: portfolio
     title: Double-entry ledger reconciles cash, collateral, positions, realized, unrealized, fees, funding, borrow, gas, and transfers
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/portfolio
-      - src/funding_arbitrage/database/models.py
+      - src/funding_arbitrage/portfolio/ledger.py
+      - tests/test_double_entry_ledger.py
   - id: PORT-002
     category: portfolio
     title: Continuous local versus venue order, fill, balance, position, and funding reconciliation is classified and audited
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/execution/reconciliation.py
+      - src/funding_arbitrage/portfolio/reconciliation.py
+      - tests/test_continuous_reconciliation.py
   - id: PORT-003
     category: portfolio
     title: Automated withdrawal state machine is idempotent, allowlisted, multi-approved, capped, and disabled by default
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/portfolio/withdrawal.py
+      - tests/test_withdrawal_manager.py
   - id: BT-001
     category: backtest
     title: Deterministic event-driven backtest and replay use the same strategy, risk, and OMS contracts as runtime
