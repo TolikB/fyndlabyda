@@ -101,6 +101,10 @@ class ReportSession:
             4,
             1,
             1,
+            Decimal("0.25"),
+            2,
+            1,
+            1,
             10,
             2,
             96,
@@ -166,6 +170,9 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     assert "DAY RESULT" in sent[0]
     assert "Net PnL: +$12.00" in sent[0]
     assert "Funding: +$8.00" in sent[0]
+    assert "Fees: -$1.25" in sent[0]
+    assert "Fills: 6 | Opened: 2 | Closed: 2" in sent[0]
+    assert "Directional PAPER is included in Net PnL and fees" in sent[0]
     assert "TOTAL — CURRENT SIMULATOR" in sent[0]
     assert "Return: +0.1200%" in sent[0]
     assert "Legacy/pre-fix simulator data is excluded." in sent[0]
@@ -215,6 +222,10 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
         Decimal("0"),
         Decimal("0"),
         Decimal("0"),
+        0,
+        0,
+        0,
+        0,
         0,
         0,
         0,
@@ -290,6 +301,10 @@ async def test_daily_report_includes_isolated_baseline_results(
         Decimal("0"),
         Decimal("0"),
         Decimal("0"),
+        0,
+        0,
+        0,
+        0,
         0,
         0,
         0,

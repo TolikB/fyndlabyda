@@ -83,6 +83,44 @@ class Settings(BaseSettings):
     canonical_event_flush_interval_seconds: float = Field(
         default=0.10, alias="CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS"
     )
+    multi_regime_enabled: bool = Field(
+        default=True, alias="MULTI_REGIME_ENABLED"
+    )
+    multi_regime_assets: str = Field(
+        default="BTC,ETH", alias="MULTI_REGIME_ASSETS"
+    )
+    multi_regime_source_interval_seconds: int = Field(
+        default=60, alias="MULTI_REGIME_SOURCE_INTERVAL_SECONDS"
+    )
+    multi_regime_strategy_interval_seconds: int = Field(
+        default=900, alias="MULTI_REGIME_STRATEGY_INTERVAL_SECONDS"
+    )
+    multi_regime_regime_interval_seconds: int = Field(
+        default=3600, alias="MULTI_REGIME_REGIME_INTERVAL_SECONDS"
+    )
+    multi_regime_stale_after_seconds: int = Field(
+        default=5, alias="MULTI_REGIME_STALE_AFTER_SECONDS"
+    )
+    multi_regime_restore_hours: int = Field(
+        default=168, alias="MULTI_REGIME_RESTORE_HOURS"
+    )
+    multi_regime_estimated_cost_bps: Decimal = Field(
+        default=Decimal("5"), alias="MULTI_REGIME_ESTIMATED_COST_BPS"
+    )
+    multi_regime_paper_execution_enabled: bool = Field(
+        default=True, alias="MULTI_REGIME_PAPER_EXECUTION_ENABLED"
+    )
+    multi_regime_paper_latency_ms: int = Field(
+        default=100, alias="MULTI_REGIME_PAPER_LATENCY_MS"
+    )
+    multi_regime_paper_maximum_participation_rate: Decimal = Field(
+        default=Decimal("0.10"),
+        alias="MULTI_REGIME_PAPER_MAXIMUM_PARTICIPATION_RATE",
+    )
+    multi_regime_paper_impact_coefficient_bps: Decimal = Field(
+        default=Decimal("10"),
+        alias="MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS",
+    )
     public_event_symbol_limit_per_profile: int = Field(
         default=3, alias="PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE"
     )
@@ -345,7 +383,7 @@ class Settings(BaseSettings):
     )
     paper_auto_init_database: bool = Field(default=False, alias="PAPER_AUTO_INIT_DATABASE")
     paper_simulation_version: str = Field(
-        default="v31-oos-candidate", alias="PAPER_SIMULATION_VERSION"
+        default="v32-multi-regime-candidate", alias="PAPER_SIMULATION_VERSION"
     )
     paper_strategy_profile: Literal["baseline", "candidate"] = Field(
         default="candidate", alias="PAPER_STRATEGY_PROFILE"
@@ -501,6 +539,14 @@ class Settings(BaseSettings):
     @property
     def mode_contract(self) -> ModeContract:
         return mode_contract(self.effective_trading_mode)
+
+    @property
+    def multi_regime_asset_values(self) -> frozenset[str]:
+        return frozenset(
+            value.strip().upper()
+            for value in self.multi_regime_assets.split(",")
+            if value.strip()
+        )
 
     @property
     def bybit_category_values(self) -> tuple[str, ...]:
@@ -773,6 +819,54 @@ def _validate_safe_values(settings: Settings) -> None:
         )
     if settings.canonical_event_flush_interval_seconds <= 0:
         raise ValueError("CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS must be positive")
+    if settings.multi_regime_enabled:
+        if not settings.multi_regime_asset_values:
+            raise ValueError("MULTI_REGIME_ASSETS cannot be empty")
+        intervals = (
+            settings.multi_regime_source_interval_seconds,
+            settings.multi_regime_strategy_interval_seconds,
+            settings.multi_regime_regime_interval_seconds,
+        )
+        if any(value <= 0 for value in intervals):
+            raise ValueError("multi-regime intervals must be positive")
+        if (
+            settings.multi_regime_strategy_interval_seconds
+            % settings.multi_regime_source_interval_seconds
+            != 0
+            or settings.multi_regime_regime_interval_seconds
+            % settings.multi_regime_source_interval_seconds
+            != 0
+        ):
+            raise ValueError(
+                "multi-regime strategy/regime intervals must be source multiples"
+            )
+        if (
+            settings.multi_regime_strategy_interval_seconds
+            > settings.multi_regime_regime_interval_seconds
+        ):
+            raise ValueError(
+                "MULTI_REGIME_STRATEGY_INTERVAL_SECONDS cannot exceed regime interval"
+            )
+        if settings.multi_regime_stale_after_seconds <= 0:
+            raise ValueError("MULTI_REGIME_STALE_AFTER_SECONDS must be positive")
+        if settings.multi_regime_restore_hours <= 0:
+            raise ValueError("MULTI_REGIME_RESTORE_HOURS must be positive")
+        if settings.multi_regime_estimated_cost_bps < 0:
+            raise ValueError("MULTI_REGIME_ESTIMATED_COST_BPS cannot be negative")
+        if settings.multi_regime_paper_latency_ms < 0:
+            raise ValueError("MULTI_REGIME_PAPER_LATENCY_MS cannot be negative")
+        if not (
+            Decimal("0")
+            < settings.multi_regime_paper_maximum_participation_rate
+            <= Decimal("1")
+        ):
+            raise ValueError(
+                "MULTI_REGIME_PAPER_MAXIMUM_PARTICIPATION_RATE must be in (0, 1]"
+            )
+        if settings.multi_regime_paper_impact_coefficient_bps < 0:
+            raise ValueError(
+                "MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS cannot be negative"
+            )
     if settings.public_event_symbol_limit_per_profile <= 0:
         raise ValueError("PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE must be positive")
     if settings.public_event_rest_interval_seconds <= 0:

@@ -7,6 +7,7 @@ import pytest
 
 from funding_arbitrage.backtest.fills import (
     DeterministicFillModel,
+    ExecutionBookLevel,
     ExecutionFrame,
     FillModelPolicy,
     FillRejectionReason,
@@ -90,6 +91,36 @@ def test_aggressive_fill_applies_depth_impact_spread_and_taker_fee() -> None:
     assert fill.spread_cost == Decimal("0.5")
     assert fill.impact_cost == Decimal("0.012625")
     assert fill.fee == fill.notional * Decimal("5") / Decimal("10000")
+
+
+def test_l2_aggressive_fill_uses_level_vwap_and_displayed_participation_cap() -> None:
+    frame = _frame(ask_depth="2").model_copy(
+        update={
+            "ask_levels": (
+                ExecutionBookLevel(price=Decimal("101"), quantity=Decimal("1")),
+                ExecutionBookLevel(price=Decimal("102"), quantity=Decimal("1")),
+            )
+        }
+    )
+    full = DeterministicFillModel(
+        FillModelPolicy(
+            order_latency_ms=0,
+            maximum_participation_rate=Decimal("1"),
+            impact_coefficient_bps=Decimal("0"),
+        )
+    ).simulate(_order(quantity="1.5"), [frame])
+    capped = DeterministicFillModel(
+        FillModelPolicy(
+            order_latency_ms=0,
+            maximum_participation_rate=Decimal("0.1"),
+            impact_coefficient_bps=Decimal("0"),
+        )
+    ).simulate(_order(quantity="1"), [frame])
+
+    assert full.fills[0].price == Decimal("152") / Decimal("1.5")
+    assert full.filled_quantity == Decimal("1.5")
+    assert capped.state is SimulatedOrderState.CANCELLED
+    assert capped.filled_quantity == Decimal("0.2")
 
 
 def test_market_order_partial_fill_cancels_unfilled_remainder() -> None:

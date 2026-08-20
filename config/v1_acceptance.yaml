@@ -88,6 +88,9 @@ requirements:
       - migrations/versions/0011_canonical_events.py
       - src/funding_arbitrage/services/event_writer.py
       - src/funding_arbitrage/services/event_router.py
+      - src/funding_arbitrage/services/multi_regime_runtime.py
+      - src/funding_arbitrage/database/repositories/directional_paper.py
+      - tests/test_directional_paper_restore.py
       - tests/test_domain_events.py
       - tests/test_event_journal.py
       - tests/test_event_writer.py
@@ -100,6 +103,8 @@ requirements:
       - src/funding_arbitrage/domain/decisions.py
       - src/funding_arbitrage/config.py
       - src/funding_arbitrage/services/runtime.py
+      - src/funding_arbitrage/services/multi_regime_runtime.py
+      - src/funding_arbitrage/execution/directional_paper.py
       - tests/test_runtime_modes.py
       - docs/V1_RUNTIME_MODES.md
   - id: MD-001
@@ -206,6 +211,10 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/features/technical.py
+      - src/funding_arbitrage/features/candles.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - tests/test_candle_aggregation.py
+      - tests/test_multi_regime_runtime.py
       - tests/test_technical_features.py
   - id: FEAT-002
     category: features
@@ -234,6 +243,8 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/regime/classifier.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - tests/test_multi_regime_runtime.py
       - tests/test_regime_classifier.py
   - id: REG-002
     category: regime
@@ -241,6 +252,8 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/regime/classifier.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - tests/test_multi_regime_runtime.py
       - tests/test_regime_classifier.py
   - id: STRAT-001
     category: strategies
@@ -248,6 +261,8 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/directional.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - tests/test_multi_regime_runtime.py
       - tests/test_directional_strategies.py
   - id: STRAT-002
     category: strategies
@@ -255,6 +270,8 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/directional.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - tests/test_multi_regime_runtime.py
       - tests/test_directional_strategies.py
   - id: STRAT-003
     category: strategies
@@ -503,6 +520,11 @@ requirements:
       - src/funding_arbitrage/database/models.py
       - migrations/versions/0010_live_execution.py
       - migrations/versions/0012_v1_operational_schema.py
+      - migrations/versions/0017_multi_regime_runtime.py
+      - src/funding_arbitrage/database/repositories/multi_regime.py
+      - src/funding_arbitrage/database/repositories/directional_paper.py
+      - tests/test_multi_regime_persistence.py
+      - tests/test_directional_paper_persistence.py
       - tests/test_v1_operational_schema.py
   - id: DATA-002
     category: storage
@@ -627,7 +649,9 @@ requirements:
       - src/funding_arbitrage/api/routes/control.py
       - src/funding_arbitrage/api/routes/websocket.py
       - src/funding_arbitrage/database/repositories/backtest_jobs.py
+      - src/funding_arbitrage/api/routes/multi_regime.py
       - src/funding_arbitrage/main.py
+      - tests/test_multi_regime_api.py
       - tests/test_control_plane_security.py
       - tests/test_backtest_job_persistence.py
   - id: QA-001
@@ -670,6 +694,28 @@ requirements:
       - tests/test_load_slo.py
       - docs/V1_PERFORMANCE_SLO.md
       - .github/workflows/release-gate.yml
+  - id: RUNTIME-001
+    category: execution
+    title: Canonical multi-regime runtime reaches durable risk-approved PAPER fills, positions, protective exits, and PnL while live remains gated
+    status: partial
+    evidence:
+      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/multi_regime_runtime.py
+      - src/funding_arbitrage/execution/directional_paper.py
+      - src/funding_arbitrage/backtest/fills.py
+      - src/funding_arbitrage/database/repositories/multi_regime.py
+      - src/funding_arbitrage/database/repositories/directional_paper.py
+      - src/funding_arbitrage/services/daily_report.py
+      - src/funding_arbitrage/services/paper_runner.py
+      - src/funding_arbitrage/database/repositories/market_data.py
+      - migrations/versions/0017_multi_regime_runtime.py
+      - tests/test_multi_regime_runtime.py
+      - tests/test_directional_paper_broker.py
+      - tests/test_backtest_fill_model.py
+      - tests/test_directional_paper_persistence.py
+      - tests/test_directional_paper_restore.py
+      - tests/test_telegram.py
+      - docs/MULTI_REGIME_RUNTIME.md
   - id: GATE-001
     category: delivery
     title: Shadow acceptance window completes without accounting, risk, or reconciliation violations

@@ -79,7 +79,7 @@ paper_portfolio:
   market_asset_limit: 12
   history_symbol_limit: 5
   market_persist_interval_seconds: 300
-  simulation_version: v31-oos-candidate
+  simulation_version: v32-multi-regime-candidate
   strategy_profile: candidate
   comparison_enabled: false
   baseline_simulation_version: v31-oos-baseline

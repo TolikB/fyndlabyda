@@ -99,9 +99,21 @@ class OrderFlowBreakoutStrategy:
         if rejection is not None:
             return self._reject(rejection)
         regime = context.regime.regime
-        if regime not in {MarketRegime.TREND_UP, MarketRegime.TREND_DOWN}:
+        if regime not in {
+            MarketRegime.TREND_UP,
+            MarketRegime.TREND_DOWN,
+            MarketRegime.VOLATILITY_EXPANSION,
+        }:
             return self._reject("regime_not_trending")
-        side = Side.BUY if regime is MarketRegime.TREND_UP else Side.SELL
+        if regime is MarketRegime.VOLATILITY_EXPANSION:
+            if context.structure.trend is StructureDirection.BULLISH:
+                side = Side.BUY
+            elif context.structure.trend is StructureDirection.BEARISH:
+                side = Side.SELL
+            else:
+                return self._reject("volatility_expansion_direction_unknown")
+        else:
+            side = Side.BUY if regime is MarketRegime.TREND_UP else Side.SELL
         values = (
             context.technical.atr,
             context.technical.adx,

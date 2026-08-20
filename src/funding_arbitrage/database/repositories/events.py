@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from pydantic import BaseModel
-from sqlalchemy import CursorResult, Select, case, insert, select
+from sqlalchemy import CursorResult, Select, case, func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -225,6 +225,42 @@ async def load_events(
         )
     ).all()
     return [record_to_event(record) for record in records]
+
+
+async def load_ingestion_events(
+    session: AsyncSession,
+    *,
+    after_row_id: int = 0,
+    up_to_row_id: int | None = None,
+    start: datetime | None = None,
+    limit: int = 1_000,
+) -> list[tuple[int, EventEnvelope[BaseModel]]]:
+    """Load one keyset-paginated canonical journal page in insertion order."""
+
+    if after_row_id < 0:
+        raise ValueError("canonical event row cursor cannot be negative")
+    if up_to_row_id is not None and up_to_row_id < after_row_id:
+        raise ValueError("canonical event upper cursor precedes lower cursor")
+    if limit <= 0:
+        raise ValueError("canonical event page limit must be positive")
+    statement = select(CanonicalEventRecord).where(
+        CanonicalEventRecord.id > after_row_id
+    )
+    if up_to_row_id is not None:
+        statement = statement.where(CanonicalEventRecord.id <= up_to_row_id)
+    if start is not None:
+        statement = statement.where(CanonicalEventRecord.exchange_timestamp >= start)
+    records = (
+        await session.scalars(
+            statement.order_by(CanonicalEventRecord.id).limit(limit)
+        )
+    ).all()
+    return [(record.id, record_to_event(record)) for record in records]
+
+
+async def latest_event_row_id(session: AsyncSession) -> int:
+    value = await session.scalar(select(func.max(CanonicalEventRecord.id)))
+    return int(value or 0)
 
 
 def record_to_event(record: CanonicalEventRecord) -> EventEnvelope[BaseModel]:

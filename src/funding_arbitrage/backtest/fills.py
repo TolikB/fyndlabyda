@@ -95,6 +95,15 @@ class SimulatedOrder(BaseModel):
         return self
 
 
+class ExecutionBookLevel(BaseModel):
+    """One visible L2 level used for conservative level-by-level execution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    price: Decimal = Field(gt=0)
+    quantity: Decimal = Field(gt=0)
+
+
 class ExecutionFrame(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -103,6 +112,8 @@ class ExecutionFrame(BaseModel):
     best_ask: Decimal = Field(gt=0)
     bid_depth: Decimal = Field(ge=0)
     ask_depth: Decimal = Field(ge=0)
+    bid_levels: tuple[ExecutionBookLevel, ...] = ()
+    ask_levels: tuple[ExecutionBookLevel, ...] = ()
     trade_volume: Decimal = Field(default=Decimal("0"), ge=0)
     low_price: Decimal | None = Field(default=None, gt=0)
     high_price: Decimal | None = Field(default=None, gt=0)
@@ -124,6 +135,26 @@ class ExecutionFrame(BaseModel):
             and self.low_price > self.high_price
         ):
             raise ValueError("execution frame low exceeds high")
+        if self.bid_levels:
+            if self.bid_levels[0].price != self.best_bid:
+                raise ValueError("first bid level must match best bid")
+            if any(
+                current.price >= previous.price
+                for previous, current in zip(
+                    self.bid_levels, self.bid_levels[1:], strict=False
+                )
+            ):
+                raise ValueError("execution bid levels must be strictly descending")
+        if self.ask_levels:
+            if self.ask_levels[0].price != self.best_ask:
+                raise ValueError("first ask level must match best ask")
+            if any(
+                current.price <= previous.price
+                for previous, current in zip(
+                    self.ask_levels, self.ask_levels[1:], strict=False
+                )
+            ):
+                raise ValueError("execution ask levels must be strictly ascending")
         return self
 
 
@@ -346,17 +377,65 @@ class DeterministicFillModel:
         frame: ExecutionFrame,
         remaining: Decimal,
     ) -> SimulatedFill | None:
+        levels = frame.ask_levels if order.side is Side.BUY else frame.bid_levels
         depth = frame.ask_depth if order.side is Side.BUY else frame.bid_depth
-        available = depth + frame.trade_volume * self.policy.maximum_participation_rate
-        quantity = min(remaining, available)
-        if quantity <= 0:
-            return None
         best_price = frame.best_ask if order.side is Side.BUY else frame.best_bid
-        depth_basis = max(depth, quantity)
+        if levels:
+            visible: list[tuple[Decimal, Decimal]] = []
+            for level in levels:
+                if order.limit_price is not None and (
+                    (order.side is Side.BUY and level.price > order.limit_price)
+                    or (order.side is Side.SELL and level.price < order.limit_price)
+                ):
+                    break
+                visible.append(
+                    (
+                        level.price,
+                        level.quantity * self.policy.maximum_participation_rate,
+                    )
+                )
+            if frame.trade_volume > 0:
+                visible.insert(
+                    0,
+                    (
+                        best_price,
+                        frame.trade_volume
+                        * self.policy.maximum_participation_rate,
+                    ),
+                )
+            quantity = min(remaining, sum((item[1] for item in visible), Decimal("0")))
+            if quantity <= 0:
+                return None
+            left = quantity
+            visible_notional = Decimal("0")
+            for level_price, level_quantity in visible:
+                consumed = min(left, level_quantity)
+                visible_notional += consumed * level_price
+                left -= consumed
+                if left <= 0:
+                    break
+            execution_reference = visible_notional / quantity
+            depth_basis = max(
+                sum((level.quantity for level in levels), Decimal("0"))
+                + frame.trade_volume,
+                quantity,
+            )
+        else:
+            available = (
+                depth
+                + frame.trade_volume * self.policy.maximum_participation_rate
+            )
+            quantity = min(remaining, available)
+            if quantity <= 0:
+                return None
+            execution_reference = best_price
+            depth_basis = max(depth, quantity)
         participation = quantity / depth_basis
         impact_bps = self.policy.impact_coefficient_bps * participation * participation
         direction = Decimal("1") if order.side is Side.BUY else Decimal("-1")
-        price = best_price * (Decimal("1") + direction * impact_bps / _BPS)
+        price = execution_reference * (
+            Decimal("1") + direction * impact_bps / _BPS
+        )
         if order.limit_price is not None and (
             (order.side is Side.BUY and price > order.limit_price)
             or (order.side is Side.SELL and price < order.limit_price)
@@ -370,8 +449,8 @@ class DeterministicFillModel:
             price=price,
             notional=notional,
             fee=notional * self.policy.taker_fee_bps / _BPS,
-            spread_cost=abs(best_price - midpoint) * quantity,
-            impact_cost=abs(price - best_price) * quantity,
+            spread_cost=abs(execution_reference - midpoint) * quantity,
+            impact_cost=abs(price - execution_reference) * quantity,
             liquidity_role=LiquidityRole.TAKER,
         )
 

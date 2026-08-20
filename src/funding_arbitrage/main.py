@@ -22,11 +22,13 @@ from funding_arbitrage.api.routes.backtests import (
 )
 from funding_arbitrage.api.routes.control import router as control_router
 from funding_arbitrage.api.routes.market_data import router as market_data_router
+from funding_arbitrage.api.routes.multi_regime import router as multi_regime_router
 from funding_arbitrage.api.routes.opportunities import router as opportunities_router
 from funding_arbitrage.api.routes.portfolio import router as portfolio_router
 from funding_arbitrage.api.routes.scan import router as scan_router
 from funding_arbitrage.api.routes.system import router as system_router
 from funding_arbitrage.api.routes.websocket import router as websocket_router
+from funding_arbitrage.backtest.fills import FillModelPolicy
 from funding_arbitrage.config import Settings, get_settings
 from funding_arbitrage.database.repositories.audit import DatabaseControlPlaneAuditSink
 from funding_arbitrage.database.repositories.backtest_jobs import (
@@ -36,10 +38,12 @@ from funding_arbitrage.database.repositories.control_plane import (
     DatabaseControlPlaneIdempotencyStore,
 )
 from funding_arbitrage.database.session import create_database, init_database
+from funding_arbitrage.domain.events import TradingMode
 from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.exchanges.private_streams import create_private_stream_supervisor
 from funding_arbitrage.exchanges.public_events import create_public_event_supervisor
 from funding_arbitrage.exchanges.trading import create_trading_adapters
+from funding_arbitrage.execution.directional_paper import DirectionalPaperBroker
 from funding_arbitrage.internal_tls import create_internal_ssl_context
 from funding_arbitrage.logging import configure_logging
 from funding_arbitrage.market_data.quality import DataQualityMonitor
@@ -54,6 +58,14 @@ from funding_arbitrage.security.revocation import create_token_revocation_store
 from funding_arbitrage.services.event_router import CanonicalEventRouter
 from funding_arbitrage.services.event_writer import CanonicalEventWriter
 from funding_arbitrage.services.live_runner import LiveTradingRunner
+from funding_arbitrage.services.multi_regime import (
+    MultiRegimeEngine,
+    MultiRegimeEngineConfig,
+)
+from funding_arbitrage.services.multi_regime_runtime import (
+    DurableMultiRegimeRuntime,
+    RuntimePortfolioRiskContextProvider,
+)
 from funding_arbitrage.services.paper_runner import (
     PaperTestRunner,
     SharedMarketPaperComparisonRunner,
@@ -109,6 +121,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
     )
     event_router = CanonicalEventRouter(event_writer, event_quality_monitor)
+    multi_regime_runtime: DurableMultiRegimeRuntime | None = None
+    paper_broker: DirectionalPaperBroker | None = None
     adapters = create_public_adapters(
         active_settings, canonical_book_event_sink=event_router.publish
     )
@@ -124,6 +138,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return False, "canonical_event_journal_unavailable"
         if clickhouse_replicator is not None and not clickhouse_replicator.healthy:
             return False, clickhouse_replicator.health_reason
+        if multi_regime_runtime is not None and not multi_regime_runtime.healthy:
+            return False, (
+                "multi_regime_runtime_failed:"
+                + (multi_regime_runtime.failure_reason or "unknown")
+            )
         if public_events is not None:
             healthy, _ = event_router.required_streams_usable(
                 public_events.required_quality_streams,
@@ -134,6 +153,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return True, None
 
     runtime = RuntimeState(active_settings, adapters, entry_health=entry_health)
+    if (
+        active_settings.multi_regime_enabled
+        and active_settings.mode_contract.strategy_evaluation_enabled
+    ):
+        runtime_mode = active_settings.effective_trading_mode
+        if runtime_mode in {TradingMode.LIMITED_LIVE, TradingMode.LIVE}:
+            runtime_mode = TradingMode.SHADOW
+        paper_broker = (
+            DirectionalPaperBroker(
+                {
+                    venue: FillModelPolicy(
+                        maker_fee_bps=maker_fee * 10_000,
+                        taker_fee_bps=taker_fee * 10_000,
+                        order_latency_ms=active_settings.multi_regime_paper_latency_ms,
+                        maximum_participation_rate=(
+                            active_settings.multi_regime_paper_maximum_participation_rate
+                        ),
+                        impact_coefficient_bps=(
+                            active_settings.multi_regime_paper_impact_coefficient_bps
+                        ),
+                    )
+                    for venue, (maker_fee, taker_fee) in (
+                        active_settings.fee_schedules.items()
+                    )
+                },
+                simulation_version=active_settings.paper_simulation_version,
+            )
+            if runtime_mode is TradingMode.PAPER
+            and active_settings.multi_regime_paper_execution_enabled
+            else None
+        )
+        risk_provider = RuntimePortfolioRiskContextProvider(runtime, paper_broker)
+        multi_regime_engine = MultiRegimeEngine(
+            MultiRegimeEngineConfig(
+                mode=runtime_mode,
+                assets=active_settings.multi_regime_asset_values,
+                source_interval_seconds=(
+                    active_settings.multi_regime_source_interval_seconds
+                ),
+                strategy_interval_seconds=(
+                    active_settings.multi_regime_strategy_interval_seconds
+                ),
+                regime_interval_seconds=(
+                    active_settings.multi_regime_regime_interval_seconds
+                ),
+                stale_after_seconds=(
+                    active_settings.multi_regime_stale_after_seconds
+                ),
+                estimated_cost_bps=active_settings.multi_regime_estimated_cost_bps,
+            ),
+            risk_context_provider=risk_provider,
+        )
+        multi_regime_runtime = DurableMultiRegimeRuntime(
+            multi_regime_engine,
+            session_factory,
+            paper_broker=paper_broker,
+            runtime_state=runtime,
+        )
+        event_router.subscribe(multi_regime_runtime.publish)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -145,6 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_writer = event_writer
         app.state.event_router = event_router
         app.state.event_quality_monitor = event_quality_monitor
+        app.state.multi_regime_runtime = multi_regime_runtime
         app.state.clickhouse_replicator = clickhouse_replicator
         app.state.public_events = public_events
         runner: PaperTestRunner | SharedMarketPaperComparisonRunner | LiveTradingRunner | None = (
@@ -178,6 +257,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 runtime,
                 session_factory,
                 public_events=public_events,
+                combined_snapshot_provider=(
+                    multi_regime_runtime.combined_portfolio_snapshot
+                    if paper_broker is not None
+                    and multi_regime_runtime is not None
+                    else None
+                ),
             )
             if active_settings.paper_comparison_enabled:
                 baseline_settings = active_settings.model_copy(
@@ -207,8 +292,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 runner = candidate_runner
             app.state.paper_runner = runner
             app.state.baseline_runtime = baseline_runtime
+            if isinstance(runner, SharedMarketPaperComparisonRunner):
+                await runner.restore()
+            else:
+                await runner.restore(restore_history=True)
+            if multi_regime_runtime is not None:
+                await multi_regime_runtime.restore_features(
+                    start=datetime.now(UTC)
+                    - timedelta(hours=active_settings.multi_regime_restore_hours)
+                )
             task = asyncio.create_task(runner.run(), name="paper-test-runner")
         elif active_settings.run_mode == "live":
+            if multi_regime_runtime is not None:
+                await multi_regime_runtime.restore_features(
+                    start=datetime.now(UTC)
+                    - timedelta(hours=active_settings.multi_regime_restore_hours)
+                )
             trading_adapters = create_trading_adapters(active_settings)
             private_streams = create_private_stream_supervisor(
                 active_settings, trading_adapters, event_router.publish
@@ -309,6 +408,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
     app.include_router(market_data_router)
+    app.include_router(multi_regime_router)
     app.include_router(system_router)
     app.include_router(opportunities_router)
     app.include_router(portfolio_router)

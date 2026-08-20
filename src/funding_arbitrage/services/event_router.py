@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +27,18 @@ class CanonicalEventRouter:
         self.writer = writer
         self.quality_monitor = quality_monitor
         self._stream_locks: dict[StreamIdentity, asyncio.Lock] = {}
+        self._consumers: list[
+            Callable[[EventEnvelope[Any]], Awaitable[None]]
+        ] = []
+
+    def subscribe(
+        self, consumer: Callable[[EventEnvelope[Any]], Awaitable[None]]
+    ) -> None:
+        """Register a post-durability consumer before event producers start."""
+
+        if consumer in self._consumers:
+            raise ValueError("canonical event consumer already subscribed")
+        self._consumers.append(consumer)
 
     async def publish(self, event: EventEnvelope[Any]) -> None:
         identity = identity_for_event(event)
@@ -46,6 +59,8 @@ class CanonicalEventRouter:
                     "canonical stream quality changed during durable publication"
                 )
             self._set_metric(committed)
+            for consumer in tuple(self._consumers):
+                await consumer(routed)
 
     def required_streams_usable(
         self,

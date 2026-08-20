@@ -13,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funding_arbitrage.config import Settings
 from funding_arbitrage.database.models import (
+    ExecutionFillRecord,
     OpportunityRecord,
     PaperFillRecord,
     PaperFundingPaymentRecord,
     PaperPositionRecord,
     PaperRuntimeIncidentRecord,
     PortfolioSnapshotRecord,
+    PositionStateRecord,
     TelegramDailyReportRecord,
 )
 from funding_arbitrage.notifications.telegram import TelegramNotifier
@@ -94,6 +96,7 @@ class _PortfolioReport:
     had_prior_snapshot: bool
     first_seen: datetime | None
     venues: tuple[_VenueReport, ...]
+    includes_directional: bool
 
 
 def _signed_usd(value: Decimal) -> str:
@@ -275,11 +278,19 @@ class DailyReportService:
         signal_start: datetime,
         signal_counts: tuple[int, int] | None = None,
     ) -> _PortfolioReport:
+        includes_directional = (
+            label.lower() == "candidate"
+            and self.settings.multi_regime_enabled
+            and self.settings.multi_regime_paper_execution_enabled
+            and simulation_version == self.settings.paper_simulation_version
+        )
+        snapshot_scope = "combined" if includes_directional else "legacy"
         previous = await session.scalar(
             select(PortfolioSnapshotRecord)
             .where(
                 PortfolioSnapshotRecord.timestamp < start,
                 PortfolioSnapshotRecord.simulation_version == simulation_version,
+                PortfolioSnapshotRecord.snapshot_scope == snapshot_scope,
             )
             .order_by(PortfolioSnapshotRecord.timestamp.desc())
         )
@@ -288,12 +299,16 @@ class DailyReportService:
             .where(
                 PortfolioSnapshotRecord.timestamp < end,
                 PortfolioSnapshotRecord.simulation_version == simulation_version,
+                PortfolioSnapshotRecord.snapshot_scope == snapshot_scope,
             )
             .order_by(PortfolioSnapshotRecord.timestamp.desc())
         )
         first = await session.scalar(
             select(PortfolioSnapshotRecord)
-            .where(PortfolioSnapshotRecord.simulation_version == simulation_version)
+            .where(
+                PortfolioSnapshotRecord.simulation_version == simulation_version,
+                PortfolioSnapshotRecord.snapshot_scope == snapshot_scope,
+            )
             .order_by(PortfolioSnapshotRecord.timestamp.asc())
         )
         funding = await session.scalar(
@@ -366,6 +381,44 @@ class DailyReportService:
                 PaperPositionRecord.simulation_version == simulation_version,
             )
         )
+        if includes_directional:
+            directional_fees = await session.scalar(
+                select(func.coalesce(func.sum(ExecutionFillRecord.fee_amount), 0))
+                .where(
+                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    ExecutionFillRecord.simulation_version == simulation_version,
+                    ExecutionFillRecord.exchange_timestamp >= start,
+                    ExecutionFillRecord.exchange_timestamp < end,
+                )
+            )
+            directional_fills = await session.scalar(
+                select(func.count(ExecutionFillRecord.id)).where(
+                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    ExecutionFillRecord.simulation_version == simulation_version,
+                    ExecutionFillRecord.exchange_timestamp >= start,
+                    ExecutionFillRecord.exchange_timestamp < end,
+                )
+            )
+            directional_opened = await session.scalar(
+                select(func.count(PositionStateRecord.id)).where(
+                    PositionStateRecord.position_id.like("mrp_%"),
+                    PositionStateRecord.simulation_version == simulation_version,
+                    PositionStateRecord.opened_at >= start,
+                    PositionStateRecord.opened_at < end,
+                )
+            )
+            directional_closed = await session.scalar(
+                select(func.count(PositionStateRecord.id)).where(
+                    PositionStateRecord.position_id.like("mrp_%"),
+                    PositionStateRecord.simulation_version == simulation_version,
+                    PositionStateRecord.closed_at >= start,
+                    PositionStateRecord.closed_at < end,
+                )
+            )
+            fees = Decimal(str(fees or 0)) + Decimal(str(directional_fees or 0))
+            fills = int(fills or 0) + int(directional_fills or 0)
+            opened = int(opened or 0) + int(directional_opened or 0)
+            closed = int(closed or 0) + int(directional_closed or 0)
         if signal_counts is None:
             opportunities = await session.scalar(
                 select(func.count(OpportunityRecord.id)).where(
@@ -389,6 +442,7 @@ class DailyReportService:
                 PortfolioSnapshotRecord.timestamp >= start,
                 PortfolioSnapshotRecord.timestamp < end,
                 PortfolioSnapshotRecord.simulation_version == simulation_version,
+                PortfolioSnapshotRecord.snapshot_scope == snapshot_scope,
             )
         )
         cycle_failures = await session.scalar(
@@ -444,6 +498,7 @@ class DailyReportService:
             had_prior_snapshot=previous is not None,
             first_seen=first_seen,
             venues=venues,
+            includes_directional=includes_directional,
         )
 
     async def _load_venue_reports(
@@ -665,6 +720,16 @@ class DailyReportService:
             f"Funding: {_signed_usd(report.day_funding)}",
             f"Fees: -${report.day_fees:.2f}",
             f"Slippage: -${report.day_slippage:.2f}",
+            *(
+                [
+                    (
+                        "Directional PAPER is included in Net PnL and fees; "
+                        "its spread/impact is embedded in simulated fill prices."
+                    )
+                ]
+                if report.includes_directional
+                else []
+            ),
             (
                 f"Fills: {report.fills} | Opened: {report.opened} "
                 f"| Closed: {report.closed}"

@@ -211,10 +211,20 @@ async def paper_statistics(
     simulation_version: Annotated[str | None, Query()] = None,
 ) -> dict[str, object]:
     active_version = simulation_version or runtime.settings.paper_simulation_version
+    snapshot_scope = (
+        "combined"
+        if active_version == runtime.settings.paper_simulation_version
+        and runtime.settings.multi_regime_enabled
+        and runtime.settings.multi_regime_paper_execution_enabled
+        else "legacy"
+    )
     snapshots = (
         await session.execute(
             select(PortfolioSnapshotRecord)
-            .where(PortfolioSnapshotRecord.simulation_version == active_version)
+            .where(
+                PortfolioSnapshotRecord.simulation_version == active_version,
+                PortfolioSnapshotRecord.snapshot_scope == snapshot_scope,
+            )
             .order_by(PortfolioSnapshotRecord.timestamp.desc())
             .limit(limit)
         )

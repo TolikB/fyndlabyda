@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.backtest.events import (
@@ -54,12 +54,26 @@ class DatabasePaperReplay:
         start: datetime | None = None,
         end: datetime | None = None,
     ) -> PaperReplayDataset:
+        combined_exists = exists(
+            select(PortfolioSnapshotRecord.id).where(
+                PortfolioSnapshotRecord.simulation_version == simulation_version,
+                PortfolioSnapshotRecord.snapshot_scope == "combined",
+            )
+        )
+        authoritative_snapshot = or_(
+            PortfolioSnapshotRecord.snapshot_scope == "combined",
+            and_(
+                PortfolioSnapshotRecord.snapshot_scope == "legacy",
+                ~combined_exists,
+            ),
+        )
         prior_snapshot = None
         if start is not None:
             prior_snapshot = await session.scalar(
                 select(PortfolioSnapshotRecord)
                 .where(
                     PortfolioSnapshotRecord.simulation_version == simulation_version,
+                    authoritative_snapshot,
                     PortfolioSnapshotRecord.timestamp < start,
                 )
                 .order_by(
@@ -97,7 +111,10 @@ class DatabasePaperReplay:
             )
         snapshot_statement = (
             select(PortfolioSnapshotRecord)
-            .where(PortfolioSnapshotRecord.simulation_version == simulation_version)
+            .where(
+                PortfolioSnapshotRecord.simulation_version == simulation_version,
+                authoritative_snapshot,
+            )
             .order_by(PortfolioSnapshotRecord.timestamp, PortfolioSnapshotRecord.id)
         )
         if start is not None:

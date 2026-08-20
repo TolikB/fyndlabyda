@@ -14,7 +14,7 @@ from funding_arbitrage.exchanges.base.models import (
 def test_default_simulator_namespaces_match_current_canary() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.paper_simulation_version == "v31-oos-candidate"
+    assert settings.paper_simulation_version == "v32-multi-regime-candidate"
     assert settings.paper_baseline_simulation_version == "v31-oos-baseline"
 
 

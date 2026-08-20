@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -60,6 +61,7 @@ from funding_arbitrage.opportunity.settlement import (
     target_settlement_events,
 )
 from funding_arbitrage.portfolio.allocator import CapitalAllocator
+from funding_arbitrage.portfolio.portfolio import PortfolioSnapshot
 from funding_arbitrage.portfolio.position import PaperPosition, PositionState
 from funding_arbitrage.risk.engine import RiskEngine, RiskLimits
 from funding_arbitrage.services.daily_report import DailyReportService
@@ -148,11 +150,15 @@ class PaperTestRunner:
         session_factory: async_sessionmaker[AsyncSession],
         collector: MarketDataCollector | None = None,
         public_events: PublicEventSupervisor | None = None,
+        combined_snapshot_provider: (
+            Callable[[datetime], PortfolioSnapshot | None] | None
+        ) = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
         self.session_factory = session_factory
         self.public_events = public_events
+        self.combined_snapshot_provider = combined_snapshot_provider
         self._owns_collector = collector is None
         self.collector = collector or MarketDataCollector(
             runtime.adapters.values(),
@@ -202,6 +208,8 @@ class PaperTestRunner:
             str, set[tuple[str, InstrumentType]]
         ] = {}
         self.daily_report = DailyReportService(settings, session_factory)
+        self._restore_lock = asyncio.Lock()
+        self._restored = False
 
     async def run(self) -> None:
         await self.restore(restore_history=True)
@@ -254,9 +262,13 @@ class PaperTestRunner:
         await self.daily_report.close()
 
     async def restore(self, *, restore_history: bool) -> None:
-        await self._restore_positions()
-        if restore_history:
-            await self._restore_funding_history()
+        async with self._restore_lock:
+            if self._restored:
+                return
+            await self._restore_positions()
+            if restore_history:
+                await self._restore_funding_history()
+            self._restored = True
 
     async def cycle(self) -> None:
         snapshot = await self.collect_snapshot()
@@ -463,7 +475,8 @@ class PaperTestRunner:
                 select(PortfolioSnapshotRecord)
                 .where(
                     PortfolioSnapshotRecord.simulation_version
-                    == self.settings.paper_simulation_version
+                    == self.settings.paper_simulation_version,
+                    PortfolioSnapshotRecord.snapshot_scope == "legacy",
                 )
                 .order_by(PortfolioSnapshotRecord.timestamp.desc())
             )
@@ -612,12 +625,36 @@ class PaperTestRunner:
             await save_opportunities(session, opportunities)
 
     async def _persist_portfolio(self, timestamp: datetime) -> None:
+        legacy = self.runtime.portfolio.snapshot(timestamp=timestamp)
+        combined = (
+            self.combined_snapshot_provider(timestamp)
+            if self.combined_snapshot_provider is not None
+            else None
+        )
+        if (
+            self.combined_snapshot_provider is not None
+            and combined is None
+        ):
+            raise RuntimeError("combined paper snapshot provider returned no snapshot")
+        if combined is not None and combined.simulation_version != legacy.simulation_version:
+            raise RuntimeError("combined paper snapshot crossed simulation versions")
         async with self.session_factory() as session:
             for position in self.runtime.portfolio.positions.values():
                 await save_paper_position(session, position)
-            await save_portfolio_snapshot(
-                session, self.runtime.portfolio.snapshot(timestamp=timestamp)
-            )
+            if combined is None:
+                await save_portfolio_snapshot(session, legacy)
+            else:
+                await save_portfolio_snapshot(
+                    session,
+                    legacy,
+                    snapshot_scope="legacy",
+                    commit=False,
+                )
+                await save_portfolio_snapshot(
+                    session,
+                    combined,
+                    snapshot_scope="combined",
+                )
 
     async def _open_confirmed(
         self, opportunities: list[Opportunity], snapshot: MarketSnapshot
@@ -1188,9 +1225,12 @@ class SharedMarketPaperComparisonRunner:
         self.baseline = baseline
         self.stop_event = asyncio.Event()
 
-    async def run(self) -> None:
+    async def restore(self) -> None:
         await self.candidate.restore(restore_history=True)
         await self.baseline.restore(restore_history=False)
+
+    async def run(self) -> None:
+        await self.restore()
         await _persist_runner_start(
             self.candidate.session_factory,
             (

@@ -308,11 +308,20 @@ async def save_opportunities(
     await session.commit()
 
 
-async def save_portfolio_snapshot(session: AsyncSession, snapshot: PortfolioSnapshot) -> None:
+async def save_portfolio_snapshot(
+    session: AsyncSession,
+    snapshot: PortfolioSnapshot,
+    *,
+    snapshot_scope: str = "legacy",
+    commit: bool = True,
+) -> None:
+    if snapshot_scope not in {"legacy", "combined"}:
+        raise ValueError("portfolio snapshot scope must be legacy or combined")
     session.add(
         PortfolioSnapshotRecord(
             timestamp=snapshot.timestamp,
             simulation_version=snapshot.simulation_version,
+            snapshot_scope=snapshot_scope,
             equity=snapshot.equity,
             cash=snapshot.cash,
             locked_capital=snapshot.locked_capital,
@@ -322,7 +331,10 @@ async def save_portfolio_snapshot(session: AsyncSession, snapshot: PortfolioSnap
             balances={key: str(value) for key, value in snapshot.balances.items()},
         )
     )
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
 
 
 async def save_paper_runtime_incident(

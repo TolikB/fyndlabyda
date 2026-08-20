@@ -155,6 +155,25 @@ def test_orderflow_breakout_emits_complete_declarative_intent() -> None:
     assert orchestration.decisions[0].status is SignalDecisionStatus.ACCEPTED
 
 
+def test_orderflow_breakout_uses_structure_direction_in_volatility_expansion() -> None:
+    bullish = OrderFlowBreakoutStrategy().evaluate(
+        _context(regime=_regime(MarketRegime.VOLATILITY_EXPANSION))
+    )
+    neutral_structure = _structure().model_copy(
+        update={"trend": StructureDirection.NEUTRAL}
+    )
+    unknown = OrderFlowBreakoutStrategy().evaluate(
+        _context(
+            structure=neutral_structure,
+            regime=_regime(MarketRegime.VOLATILITY_EXPANSION),
+        )
+    )
+
+    assert bullish.intent is not None
+    assert bullish.intent.side is Side.BUY
+    assert unknown.rejection_reason == "volatility_expansion_direction_unknown"
+
+
 def test_orderflow_breakout_fails_closed_on_quality_regime_and_flow() -> None:
     strategy = OrderFlowBreakoutStrategy()
 

@@ -272,6 +272,7 @@ class PortfolioSnapshotRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     simulation_version: Mapped[str] = mapped_column(String(32), default="v1-legacy", index=True)
+    snapshot_scope: Mapped[str] = mapped_column(String(16), default="legacy", index=True)
     equity: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     cash: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     locked_capital: Mapped[Decimal] = mapped_column(Numeric(38, 18))
@@ -530,6 +531,39 @@ class CanonicalEventRecord(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class MultiRegimeDecisionRecord(Base):
+    """Durable feature, regime, signal, risk, and hypothetical-plan decision batch."""
+
+    __tablename__ = "multi_regime_decision_batches"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    batch_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    source_event_id: Mapped[str] = mapped_column(String(80), index=True)
+    instrument_id: Mapped[str] = mapped_column(String(256), index=True)
+    mode: Mapped[str] = mapped_column(String(24), index=True)
+    regime: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class MultiRegimePaperCheckpointRecord(Base):
+    """Exact durable cursor for deterministic multi-regime paper replay."""
+
+    __tablename__ = "multi_regime_paper_checkpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    consumer_name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    event_row_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    event_id: Mapped[str] = mapped_column(String(80), index=True)
+    event_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class AnalyticsReplicationCheckpointRecord(Base):
     """Durable cursor from authoritative PostgreSQL events into ClickHouse."""
 
@@ -568,6 +602,9 @@ class OMSOrderStateRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_order_id: Mapped[str] = mapped_column(String(80), index=True)
+    simulation_version: Mapped[str] = mapped_column(
+        String(64), default="v1-legacy", index=True
+    )
     exchange_order_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     risk_decision_id: Mapped[str] = mapped_column(
         ForeignKey("risk_decisions.decision_id"), index=True
@@ -598,6 +635,9 @@ class ExecutionFillRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     fill_id: Mapped[str] = mapped_column(String(160), index=True)
+    simulation_version: Mapped[str] = mapped_column(
+        String(64), default="v1-legacy", index=True
+    )
     client_order_id: Mapped[str] = mapped_column(String(80), index=True)
     exchange_order_id: Mapped[str] = mapped_column(String(160), index=True)
     venue: Mapped[str] = mapped_column(String(32), index=True)
@@ -620,6 +660,9 @@ class PositionStateRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     position_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    simulation_version: Mapped[str] = mapped_column(
+        String(64), default="v1-legacy", index=True
+    )
     strategy_id: Mapped[str] = mapped_column(String(80), index=True)
     venue: Mapped[str] = mapped_column(String(32), index=True)
     instrument_id: Mapped[str] = mapped_column(String(256), index=True)
