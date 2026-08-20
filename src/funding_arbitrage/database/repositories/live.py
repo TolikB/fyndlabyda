@@ -16,6 +16,7 @@ from funding_arbitrage.database.models import (
     LivePositionRecord,
     LiveReconciliationRecord,
 )
+from funding_arbitrage.domain.decisions import LiveExecutionApproval
 from funding_arbitrage.execution.trading import (
     LiveOrderStatus,
     LivePosition,
@@ -31,21 +32,29 @@ from funding_arbitrage.opportunity.models import Opportunity
 async def create_live_intent(
     session: AsyncSession,
     intent_id: str,
-    opportunity: Opportunity,
+    authority: Opportunity | LiveExecutionApproval,
     capital_per_leg: Decimal,
 ) -> None:
     now = datetime.now(UTC)
+    if isinstance(authority, LiveExecutionApproval):
+        opportunity_id = authority.opportunity_id
+        strategy = authority.strategy
+        asset = authority.asset
+    else:
+        opportunity_id = authority.id
+        strategy = str(authority.strategy)
+        asset = authority.asset
     session.add(
         LiveIntentRecord(
             intent_id=intent_id,
-            opportunity_id=opportunity.id,
-            strategy=str(opportunity.strategy),
-            asset=opportunity.asset,
+            opportunity_id=opportunity_id,
+            strategy=strategy,
+            asset=asset,
             state=LivePositionState.OPENING.value,
             capital_per_leg=capital_per_leg,
             created_at=now,
             updated_at=now,
-            payload=opportunity.model_dump(mode="json"),
+            payload=authority.model_dump(mode="json"),
         )
     )
     await session.commit()

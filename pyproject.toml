@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "aiosqlite>=0.20,<1",
+  "coverage==7.15.2",
   "mypy>=1.11,<2",
   "pip-audit>=2.9,<3",
   "pytest>=8.3,<9",
@@ -67,3 +68,11 @@ no_implicit_optional = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["funding_arbitrage"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

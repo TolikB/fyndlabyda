@@ -39,6 +39,36 @@ funding_history_coverage_ratio = Gauge(
 market_data_dropped_total = Counter(
     "funding_market_data_dropped_total", "Rejected market-data records", ["exchange", "reason"]
 )
+public_event_capability = Gauge(
+    "funding_public_event_capability",
+    "Whether a canonical public stream is available for an exchange account",
+    ["exchange", "account", "stream"],
+)
+public_events_total = Counter(
+    "funding_public_events_total",
+    "Canonical public market events accepted",
+    ["exchange", "stream", "source"],
+)
+canonical_stream_quality = Gauge(
+    "funding_canonical_stream_quality",
+    "One-hot canonical stream data quality state",
+    ["exchange", "stream", "instrument", "quality"],
+)
+venue_rate_limit_milliseconds = Gauge(
+    "funding_venue_rate_limit_milliseconds",
+    "Dynamically advertised minimum request interval",
+    ["exchange", "account"],
+)
+venue_clock_offset_seconds = Gauge(
+    "funding_venue_clock_offset_seconds",
+    "Observed venue server clock offset from local midpoint",
+    ["exchange", "account"],
+)
+venue_metadata_instruments = Gauge(
+    "funding_venue_metadata_instruments",
+    "Active and inactive instruments in the latest dynamic metadata snapshot",
+    ["exchange", "account"],
+)
 opportunities_total = Gauge("funding_opportunities_total", "Current ranked opportunities")
 confirmed_opportunities_total = Gauge(
     "funding_confirmed_opportunities_total", "Current confirmed opportunities"
@@ -95,14 +125,52 @@ live_runner_last_cycle_timestamp = Gauge(
 live_orders_total = Counter(
     "funding_live_orders_total", "Authenticated order outcomes", ["exchange", "status"]
 )
+live_order_submission_latency_seconds = Histogram(
+    "funding_live_order_submission_latency_seconds",
+    "Authenticated order submission-to-result latency",
+    ["exchange"],
+)
 live_trade_rejections_total = Counter(
     "funding_live_trade_rejections_total", "Live entries rejected before exposure", ["reason"]
 )
 live_positions_open = Gauge("funding_live_positions_open", "Open real-money positions")
+live_gross_exposure_usd = Gauge(
+    "funding_live_gross_exposure_usd", "Gross notional of non-terminal live positions"
+)
+live_exposure_limit_utilization = Gauge(
+    "funding_live_exposure_limit_utilization",
+    "Gross live exposure divided by the configured total-notional limit",
+)
 live_equity = Gauge("funding_live_equity_usd", "Authenticated aggregate account equity")
 live_pnl = Gauge("funding_live_pnl_usd", "Equity delta since this live process started")
+live_drawdown_fraction = Gauge(
+    "funding_live_drawdown_fraction", "Current drawdown from live high-water equity"
+)
+live_drawdown_limit_utilization = Gauge(
+    "funding_live_drawdown_limit_utilization",
+    "Current live drawdown divided by the configured drawdown limit",
+)
+live_reconciliation_healthy = Gauge(
+    "funding_live_reconciliation_healthy",
+    "Whether the latest authenticated reconciliation passed",
+)
 live_reconciliation_failures_total = Counter(
     "funding_live_reconciliation_failures_total", "Failed private-state reconciliations"
+)
+live_private_stream_healthy = Gauge(
+    "funding_live_private_stream_healthy",
+    "Whether authenticated account streams and their REST checkpoint are healthy",
+    ["exchange"],
+)
+live_private_stream_events_total = Counter(
+    "funding_live_private_stream_events_total",
+    "Normalized authenticated account events",
+    ["exchange", "stream", "source"],
+)
+live_private_stream_normalization_errors_total = Counter(
+    "funding_live_private_stream_normalization_errors_total",
+    "Authenticated account events rejected during normalization",
+    ["exchange", "stream"],
 )
 live_funding_payments_total = Counter(
     "funding_live_funding_payments_total", "New actual funding cashflows", ["exchange"]

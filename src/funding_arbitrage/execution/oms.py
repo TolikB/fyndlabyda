@@ -92,6 +92,22 @@ class OMSJournal(Protocol):
     def load(self) -> tuple[OMSJournalEntry, ...]: ...
 
 
+class InMemoryOMSJournal:
+    """Deterministic replay journal implementing the production OMS contract."""
+
+    def __init__(self) -> None:
+        self.entries: list[OMSJournalEntry] = []
+
+    def append(self, entry: OMSJournalEntry) -> None:
+        expected = len(self.entries) + 1
+        if entry.sequence != expected:
+            raise ValueError("OMS journal sequence is not contiguous")
+        self.entries.append(entry)
+
+    def load(self) -> tuple[OMSJournalEntry, ...]:
+        return tuple(self.entries)
+
+
 class JsonlOMSJournal:
     """Append-only journal; every entry is flushed and fsynced before returning."""
 

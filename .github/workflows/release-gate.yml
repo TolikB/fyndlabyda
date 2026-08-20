@@ -6,6 +6,13 @@ on:
     branches:
       - main
       - "codex/**"
+  workflow_dispatch:
+    inputs:
+      live_gate_confirmation:
+        description: "Type APPROVE_LIMITED_LIVE_CONFIGURATION_ONLY"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -14,10 +21,14 @@ concurrency:
   group: release-gate-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CI_IMAGE: funding-arbitrage-ci:${{ github.sha }}
+
 jobs:
   verify:
+    name: Lint, type, unit, and coverage gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
@@ -60,7 +71,10 @@ jobs:
           python -m ruff check src tests scripts migrations
           python -m mypy src
           python scripts/v1_acceptance_audit.py
-          python -m pytest -q
+          python -m coverage erase
+          python -m coverage run -m pytest -q
+          python -m coverage json -o coverage_report.json
+          python scripts/coverage_gate.py --report coverage_report.json
 
       - name: Build and benchmark native low-latency gate
         run: |
@@ -68,9 +82,6 @@ jobs:
             native/low_latency/native_low_latency.c \
             -o /tmp/funding-native-low-latency
           /tmp/funding-native-low-latency --self-test 200000
-
-      - name: Audit production dependencies
-        run: python -m pip_audit --requirement requirements-linux.lock --disable-pip
 
       - name: Verify complete PostgreSQL migration chain
         env:
@@ -80,8 +91,353 @@ jobs:
           python -m alembic downgrade base
           python -m alembic upgrade head
 
-      - name: Validate Compose and build production image
+      - name: Validate production Compose configuration
         run: |
           cp .env.paper-test.example .env
           docker compose config --quiet
-          docker build --tag funding-arbitrage:${{ github.sha }} .
+
+  integration-replay:
+    name: PostgreSQL integration, replay, and failure injection
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: funding
+          POSTGRES_PASSWORD: funding
+          POSTGRES_DB: funding
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U funding -d funding"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql+asyncpg://funding:funding@127.0.0.1:5432/funding
+      PYTHONPATH: src
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev-linux.lock
+
+      - name: Install hash-locked development dependencies
+        run: python -m pip install --require-hashes --requirement requirements-dev-linux.lock
+
+      - name: Run integration and deterministic replay contracts
+        run: >-
+          python -m pytest -q
+          tests/test_migrations.py
+          tests/test_market_data_repository.py
+          tests/test_backtest_job_persistence.py
+          tests/test_backtest_routes_contract.py
+          tests/test_database_replay.py
+          tests/test_historical_replay.py
+          tests/test_event_journal.py
+          tests/test_durable_oms.py
+          tests/test_continuous_reconciliation.py
+          tests/test_live_runner_lifecycle.py
+
+  load-slo:
+    name: Representative critical-path load and reliability SLO
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev-linux.lock
+
+      - name: Install hash-locked development dependencies
+        run: python -m pip install --require-hashes --requirement requirements-dev-linux.lock
+
+      - name: Enforce P99 and reliability budgets under representative load
+        env:
+          PYTHONPATH: src
+        run: >-
+          python scripts/load_slo.py
+          --events 20000
+          --decisions 5000
+          --output "${RUNNER_TEMP}/funding-load-slo.json"
+  infrastructure-verify:
+    name: Terraform, Vault, backup, and Linux script validation
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Terraform 1.15.9
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: "1.15.9"
+          terraform_wrapper: false
+
+      - name: Validate provider-neutral Terraform
+        run: |
+          terraform -chdir=infra/terraform fmt -check -recursive
+          terraform -chdir=infra/terraform init -backend=false -input=false
+          terraform -chdir=infra/terraform validate -no-color
+
+      - name: Validate Linux operational scripts
+        run: >-
+          bash -n
+          scripts/ci_shadow_smoke.sh
+          scripts/ci_load_candidate_image.sh
+          scripts/generate_ephemeral_test_pki.sh
+          scripts/backup_state.sh
+          scripts/restore_state.sh
+          scripts/host_preflight.sh
+
+  build-candidate:
+    name: Build and seal immutable candidate image
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Build candidate image exactly once
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/funding-candidate"
+          mkdir -p "$artifact_dir"
+          docker build \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag "$CI_IMAGE" .
+          image_id="$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")"
+          revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$CI_IMAGE")"
+          test "$revision" = "$GITHUB_SHA"
+          printf '%s\n' "$image_id" >"$artifact_dir/funding-candidate-image.id"
+          printf '%s\n' "$revision" >"$artifact_dir/funding-candidate-image.revision"
+          docker save "$CI_IMAGE" | gzip -1 >"$artifact_dir/funding-candidate-image.tar.gz"
+          (
+            cd "$artifact_dir"
+            sha256sum funding-candidate-image.tar.gz >funding-candidate-image.tar.gz.sha256
+          )
+
+      - name: Upload sealed candidate image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: funding-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/funding-candidate
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  container-security:
+    name: Dependency, image, SBOM, and signature gates
+    needs:
+      - verify
+      - build-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download sealed candidate image
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: funding-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/funding-candidate
+
+      - name: Verify and load exact candidate image
+        run: >-
+          bash scripts/ci_load_candidate_image.sh
+          "${RUNNER_TEMP}/funding-candidate"
+          "$CI_IMAGE"
+          "$GITHUB_SHA"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev-linux.lock
+
+      - name: Install hash-locked development dependencies
+        run: python -m pip install --require-hashes --requirement requirements-dev-linux.lock
+
+      - name: Audit production dependencies
+        run: python -m pip_audit --requirement requirements-linux.lock --disable-pip
+
+
+      - name: Scan candidate image for high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+        with:
+          image-ref: ${{ env.CI_IMAGE }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Generate immutable image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ${{ env.CI_IMAGE }}
+          format: spdx-json
+          output-file: funding-arbitrage.spdx.json
+          artifact-name: funding-arbitrage-sbom-${{ github.sha }}
+          upload-artifact: "true"
+          upload-artifact-retention: "30"
+          upload-release-assets: "false"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+
+      - name: Sign and verify the SBOM with an ephemeral CI key
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_dir="$(mktemp -d "${RUNNER_TEMP}/funding-ci-cosign.XXXXXX")"
+          key_prefix="${key_dir}/cosign"
+          bundle="${key_dir}/funding-ci-sbom.bundle"
+          cleanup() {
+            rm -rf -- "$key_dir"
+          }
+          trap cleanup EXIT
+          export COSIGN_PASSWORD="$(openssl rand -hex 32)"
+          cosign generate-key-pair --output-key-prefix "$key_prefix"
+          cosign sign-blob --yes --key "${key_prefix}.key" \
+            --bundle "$bundle" funding-arbitrage.spdx.json
+          cosign verify-blob --key "${key_prefix}.pub" \
+            --bundle "$bundle" funding-arbitrage.spdx.json
+
+  shadow-deploy:
+    name: Isolated shadow container smoke test
+    needs:
+      - verify
+      - integration-replay
+      - load-slo
+      - infrastructure-verify
+      - build-candidate
+      - container-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download sealed candidate image
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: funding-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/funding-candidate
+
+      - name: Verify and load exact candidate image
+        run: >-
+          bash scripts/ci_load_candidate_image.sh
+          "${RUNNER_TEMP}/funding-candidate"
+          "$CI_IMAGE"
+          "$GITHUB_SHA"
+
+      - name: Run isolated shadow deployment
+        run: bash scripts/ci_shadow_smoke.sh "$CI_IMAGE"
+
+  publish-signed-image:
+    name: Publish and keylessly sign main image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: shadow-deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download sealed candidate image
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: funding-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/funding-candidate
+
+      - name: Verify and load exact candidate image
+        run: >-
+          bash scripts/ci_load_candidate_image.sh
+          "${RUNNER_TEMP}/funding-candidate"
+          "$CI_IMAGE"
+          "$GITHUB_SHA"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+
+      - name: Publish, sign, and verify the exact gated image
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          image="ghcr.io/${repository}"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io \
+            --username "$GITHUB_ACTOR" --password-stdin
+          docker tag "$CI_IMAGE" "${image}:${GITHUB_SHA}"
+          docker push "${image}:${GITHUB_SHA}"
+          digest="$(docker inspect --format='{{index .RepoDigests 0}}' \
+            "${image}:${GITHUB_SHA}" | cut -d@ -f2)"
+          test -n "$digest"
+          cosign sign --yes "${image}@${digest}"
+          cosign verify \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-gate.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${image}@${digest}"
+
+  manual-live-gate:
+    name: Protected limited-live configuration approval
+    if: github.event_name == 'workflow_dispatch'
+    needs: shadow-deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: limited-live-approval
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev-linux.lock
+
+      - name: Install hash-locked development dependencies
+        run: python -m pip install --require-hashes --requirement requirements-dev-linux.lock
+
+      - name: Verify protected manual gate preconditions
+        env:
+          LIVE_GATE_CONFIRMATION: ${{ inputs.live_gate_confirmation }}
+        run: python scripts/manual_live_gate.py --manifest config/v1_acceptance.yaml

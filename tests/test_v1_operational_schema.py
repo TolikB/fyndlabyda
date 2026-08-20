@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from funding_arbitrage.database.models import (
+    ApiIdempotencyRecord,
     BalanceStateRecord,
     Base,
     ExecutionFillRecord,
@@ -37,6 +38,8 @@ def test_v1_operational_metadata_covers_every_authoritative_control_domain() -> 
         "reconciliation_audits",
         "withdrawal_states",
         "immutable_audit_log",
+        "api_idempotency_records",
+        "market_replay_jobs",
     }
     assert required <= set(Base.metadata.tables)
     assert {column.name for column in Base.metadata.tables["ledger_postings"].columns} >= {
@@ -63,6 +66,19 @@ def test_v1_operational_metadata_covers_every_authoritative_control_domain() -> 
         "audit_hash",
     }
 
+    assert {
+        column.name for column in Base.metadata.tables["api_idempotency_records"].columns
+    } >= {
+        "principal_id",
+        "idempotency_key",
+        "request_hash",
+        "state",
+        "status_code",
+        "response_body",
+        "response_headers",
+        "expires_at",
+    }
+
 
 async def test_v1_operational_schema_creates_and_enforces_authoritative_identities() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -74,6 +90,8 @@ async def test_v1_operational_schema_creates_and_enforces_authoritative_identiti
     factory = async_sessionmaker(engine, expire_on_commit=False)
     assert "risk_decisions" in table_names
     assert "ledger_postings" in table_names
+    assert "api_idempotency_records" in table_names
+    assert "market_replay_jobs" in table_names
 
     async with factory() as session:
         session.add(
@@ -239,6 +257,18 @@ async def test_v1_operational_schema_creates_and_enforces_authoritative_identiti
                     previous_hash="0" * 64,
                     audit_hash="5" * 64,
                     payload={},
+                ),
+                ApiIdempotencyRecord(
+                    principal_id="OPERATOR-A",
+                    idempotency_key="control-idempotency-0001",
+                    request_hash="6" * 64,
+                    state="COMPLETED",
+                    status_code=200,
+                    response_body=b"{}",
+                    response_headers={"content-type": "application/json"},
+                    created_at=NOW,
+                    updated_at=NOW,
+                    expires_at=NOW,
                 ),
             ]
         )

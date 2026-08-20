@@ -82,15 +82,22 @@ class LocalOrderBook:
     def apply_snapshot(self, snapshot: BookSnapshot) -> BookApplyResult:
         if snapshot.instrument != self.instrument:
             return self._reject("instrument_mismatch")
-        bids = {level.price: level.quantity for level in snapshot.bids}
-        asks = {level.price: level.quantity for level in snapshot.asks}
-        self._bids = self._trim(bids, reverse=True)
-        self._asks = self._trim(asks, reverse=False)
-        self.sequence = snapshot.sequence
-        self.exchange_timestamp = snapshot.exchange_timestamp
-        self._refresh_quality()
-        if not self._checksum_valid(snapshot, snapshot.checksum):
+        candidate = self._candidate_snapshot(
+            bids=self._trim(
+                {level.price: level.quantity for level in snapshot.bids},
+                reverse=True,
+            ),
+            asks=self._trim(
+                {level.price: level.quantity for level in snapshot.asks},
+                reverse=False,
+            ),
+            sequence=snapshot.sequence,
+            exchange_timestamp=snapshot.exchange_timestamp,
+            checksum=snapshot.checksum,
+        )
+        if not self._checksum_valid(candidate, snapshot.checksum):
             return self._gap("snapshot_checksum_mismatch")
+        self._commit(candidate)
         return BookApplyResult(
             status=BookApplyStatus.APPLIED,
             quality=self.quality,
@@ -120,20 +127,24 @@ class LocalOrderBook:
             )
         if not self._is_contiguous(delta):
             return self._gap("sequence_gap")
+        bids = dict(self._bids)
+        asks = dict(self._asks)
         for update in delta.updates:
-            levels = self._bids if update.side is BookSide.BID else self._asks
+            levels = bids if update.side is BookSide.BID else asks
             if update.action is BookDeltaAction.DELETE:
                 levels.pop(update.price, None)
             else:
                 levels[update.price] = update.quantity
-        self._bids = self._trim(self._bids, reverse=True)
-        self._asks = self._trim(self._asks, reverse=False)
-        self.sequence = delta.last_sequence
-        self.exchange_timestamp = delta.exchange_timestamp
-        self._refresh_quality()
-        current = self.snapshot()
-        if not self._checksum_valid(current, delta.checksum):
+        candidate = self._candidate_snapshot(
+            bids=self._trim(bids, reverse=True),
+            asks=self._trim(asks, reverse=False),
+            sequence=delta.last_sequence,
+            exchange_timestamp=delta.exchange_timestamp,
+            checksum=delta.checksum,
+        )
+        if not self._checksum_valid(candidate, delta.checksum):
             return self._gap("delta_checksum_mismatch")
+        self._commit(candidate)
         return BookApplyResult(
             status=BookApplyStatus.APPLIED,
             quality=self.quality,
@@ -174,6 +185,36 @@ class LocalOrderBook:
             exchange_timestamp=self.exchange_timestamp,
         )
 
+    def _candidate_snapshot(
+        self,
+        *,
+        bids: dict[Decimal, Decimal],
+        asks: dict[Decimal, Decimal],
+        sequence: int,
+        exchange_timestamp: datetime,
+        checksum: str | None,
+    ) -> BookSnapshot:
+        return BookSnapshot(
+            instrument=self.instrument,
+            bids=tuple(
+                BookLevel(price=price, quantity=quantity)
+                for price, quantity in sorted(bids.items(), reverse=True)
+            ),
+            asks=tuple(
+                BookLevel(price=price, quantity=quantity)
+                for price, quantity in sorted(asks.items())
+            ),
+            sequence=sequence,
+            checksum=checksum,
+            exchange_timestamp=exchange_timestamp,
+        )
+
+    def _commit(self, snapshot: BookSnapshot) -> None:
+        self._bids = {level.price: level.quantity for level in snapshot.bids}
+        self._asks = {level.price: level.quantity for level in snapshot.asks}
+        self.sequence = snapshot.sequence
+        self.exchange_timestamp = snapshot.exchange_timestamp
+        self._refresh_quality()
     def _is_contiguous(self, delta: BookDelta) -> bool:
         if self.sequence is None:
             return False
@@ -198,8 +239,10 @@ class LocalOrderBook:
             self.recovery_reason = None
 
     def _checksum_valid(self, snapshot: BookSnapshot, checksum: str | None) -> bool:
-        if checksum is None or self.checksum_validator is None:
+        if checksum is None:
             return True
+        if self.checksum_validator is None:
+            return False
         return self.checksum_validator(snapshot, checksum)
 
     def _trim(self, levels: dict[Decimal, Decimal], *, reverse: bool) -> dict[Decimal, Decimal]:

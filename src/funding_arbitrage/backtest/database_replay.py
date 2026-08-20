@@ -42,6 +42,8 @@ class PaperReplayDataset:
     snapshot_pnl_delta: Decimal | None = None
     runtime_incident_count: int = 0
     carry_in_position_count: int = 0
+    oms_event_count: int = 0
+    oms_terminal_order_count: int = 0
 
 
 class DatabasePaperReplay:

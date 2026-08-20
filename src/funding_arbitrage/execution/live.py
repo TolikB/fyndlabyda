@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -18,6 +19,7 @@ from funding_arbitrage.database.repositories.live import (
     save_pending_live_order,
     update_live_intent,
 )
+from funding_arbitrage.domain.decisions import LiveExecutionApproval
 from funding_arbitrage.exchanges.base.models import InstrumentType, OrderBook
 from funding_arbitrage.execution.trading import (
     LiveLeg,
@@ -31,8 +33,11 @@ from funding_arbitrage.execution.trading import (
 )
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.market_data.orderbook import OrderSide, calculate_execution_price
-from funding_arbitrage.opportunity.models import Opportunity
-from funding_arbitrage.opportunity.settlement import target_settlements
+from funding_arbitrage.market_data.venue_metadata import VenueMetadataRegistry
+from funding_arbitrage.monitoring.metrics import (
+    live_order_submission_latency_seconds,
+    live_orders_total,
+)
 from funding_arbitrage.risk.live import LiveRiskController, LiveTradingPaused
 
 
@@ -49,64 +54,72 @@ class LiveTradingExecutor:
         adapters: dict[str, TradingAdapter],
         session_factory: async_sessionmaker[AsyncSession],
         risk: LiveRiskController,
+        metadata_registry: VenueMetadataRegistry | None = None,
     ) -> None:
         self.settings = settings
         self.adapters = adapters
         self.session_factory = session_factory
         self.risk = risk
+        self.metadata_registry = metadata_registry
 
     async def open_position(
         self,
-        opportunity: Opportunity,
-        capital_per_leg: Decimal,
+        approval: LiveExecutionApproval,
         snapshot: MarketSnapshot,
-        opportunity_key: str,
         balances: dict[str, VenueBalance],
         open_notional: Decimal,
     ) -> LivePosition:
         # Reject before fee lookups, derivative configuration, or durable intents.
         self.risk.assert_entry_enabled()
-        self._validate_opportunity(opportunity, capital_per_leg)
-        await self._validate_account_fees(opportunity, capital_per_leg)
+        self._validate_approval(approval)
+        if snapshot.captured_at != approval.market_snapshot_at:
+            raise LiveExecutionError("execution snapshot differs from approved snapshot")
+        self._validate_dynamic_metadata(approval)
+        await self._validate_account_fees(approval)
+        capital_per_leg = approval.capital_per_leg
         intent_id = uuid4().hex
         position = LivePosition(
             position_id=uuid4().hex,
             intent_id=intent_id,
-            opportunity_id=opportunity.id,
-            opportunity_key=opportunity_key,
-            strategy=str(opportunity.strategy),
-            asset=opportunity.asset.upper(),
+            opportunity_id=approval.opportunity_id,
+            opportunity_key=approval.opportunity_key,
+            strategy=approval.strategy,
+            asset=approval.asset,
             capital_per_leg=capital_per_leg,
             state=LivePositionState.OPENING,
-            target_settlements=target_settlements(
-                opportunity, snapshot, snapshot.captured_at
-            ),
+            target_settlements=approval.target_settlements,
         )
         async with self.session_factory() as session:
-            await create_live_intent(session, intent_id, opportunity, capital_per_leg)
+            await create_live_intent(session, intent_id, approval, capital_per_leg)
             await save_live_position(session, position)
 
-        specifications = self._leg_specs(opportunity)
+        specifications = self._leg_specs(approval)
+        instructions = tuple(
+            sorted(approval.plan.instructions, key=lambda item: item.leg_index)
+        )
         if specifications[1][3] is InstrumentType.SPOT:
             return await self._fail(position, "spot_leg_must_execute_first")
         prepared = []
-        requested_base = min(
-            capital_per_leg / opportunity.price_a,
-            capital_per_leg / opportunity.price_b,
-        )
+        requested_base = approval.risk_decision.approved_quantity
         try:
-            for label, exchange, symbol, instrument_type, side in specifications:
+            for specification, instruction in zip(
+                specifications, instructions, strict=True
+            ):
+                label, exchange, symbol, instrument_type, side = specification
                 adapter = self._adapter(exchange)
                 quantity = await adapter.normalize_base_quantity(
                     symbol, instrument_type, requested_base
                 )
                 if quantity <= 0:
                     return await self._fail(position, "quantity_below_venue_minimum")
+                if quantity > instruction.quantity:
+                    return await self._fail(position, "quantity_exceeds_execution_plan")
                 book = self._fresh_book(snapshot, exchange, symbol, instrument_type)
                 limit_price = self._ioc_limit_price(book, side, quantity)
                 limit_price = await adapter.normalize_price(
                     symbol, instrument_type, limit_price
                 )
+                self._assert_planned_price(instruction.limit_price, side, limit_price)
                 prepared.append(
                     (
                         label,
@@ -162,17 +175,17 @@ class LiveTradingExecutor:
                     first_result,
                     first[1],
                     balances[first[2]],
-                    opportunity.asset,
+                    approval.asset,
                 )
             except Exception as exc:
                 position.leg_a = self._to_leg(
-                    first_result, first[7], opportunity.asset
+                    first_result, first[7], approval.asset
                 )
                 await self._save_position(position)
                 return await self._manual(
                     position, f"spot_balance_delta_unresolved:{type(exc).__name__}"
                 )
-        position.leg_a = self._to_leg(first_result, first[7], opportunity.asset)
+        position.leg_a = self._to_leg(first_result, first[7], approval.asset)
         await self._save_position(position)
 
         second = prepared[1]
@@ -185,12 +198,19 @@ class LiveTradingExecutor:
                 return await self._compensate_open(
                     position, "hedge_quantity_below_minimum"
                 )
+            if hedge_quantity > instructions[1].quantity:
+                return await self._compensate_open(
+                    position, "hedge_quantity_exceeds_execution_plan"
+                )
             second_book = self._fresh_book(snapshot, second[2], second[3], second[4])
             second_limit = self._ioc_limit_price(
                 second_book, second[5], hedge_quantity
             )
             second_limit = await second_adapter.normalize_price(
                 second[3], second[4], second_limit
+            )
+            self._assert_planned_price(
+                instructions[1].limit_price, second[5], second_limit
             )
         except (LiveExecutionError, ValueError) as exc:
             return await self._compensate_open(
@@ -217,7 +237,7 @@ class LiveTradingExecutor:
             return await self._manual(position, "second_leg_order_state_unknown")
         if second_result.filled_base_quantity <= 0:
             return await self._compensate_open(position, "second_leg_not_filled")
-        position.leg_b = self._to_leg(second_result, second[7], opportunity.asset)
+        position.leg_b = self._to_leg(second_result, second[7], approval.asset)
         if self._relative_drift(
             position.leg_a.filled_base_quantity,
             position.leg_b.filled_base_quantity,
@@ -351,9 +371,34 @@ class LiveTradingExecutor:
             await save_pending_live_order(
                 session, request, position_id=position.position_id, leg=label
             )
-        result = await adapter.submit_ioc_order(
-            request, self.settings.live_order_timeout_seconds
-        )
+        submission_started = time.monotonic()
+        try:
+            result = await adapter.submit_ioc_order(
+                request, self.settings.live_order_timeout_seconds
+            )
+        except Exception as exc:
+            # The request crossed the authenticated API boundary after its durable
+            # PENDING record was committed. A timeout/transport exception therefore
+            # has an unknown exchange outcome and must never be treated as a safe
+            # rejection or retried automatically.
+            result = TradingOrderResult(
+                exchange=exchange,
+                client_order_id=request.client_order_id,
+                exchange_symbol=symbol,
+                instrument_type=instrument_type,
+                side=side,
+                requested_base_quantity=quantity,
+                filled_base_quantity=Decimal("0"),
+                status=LiveOrderStatus.UNKNOWN,
+                reduce_only=reduce_only,
+                raw={"submission_error_type": type(exc).__name__},
+            )
+            self.risk.trip("order_submission_outcome_unknown")
+        finally:
+            live_order_submission_latency_seconds.labels(exchange).observe(
+                time.monotonic() - submission_started
+            )
+        live_orders_total.labels(exchange, result.status.value).inc()
         try:
             async with self.session_factory() as session:
                 await save_live_order(
@@ -492,37 +537,76 @@ class LiveTradingExecutor:
             await update_live_intent(session, position.intent_id, position.state, reason)
         return position
 
-    def _validate_opportunity(
-        self, opportunity: Opportunity, capital_per_leg: Decimal
-    ) -> None:
-        if opportunity.status != "confirmed":
-            raise LiveExecutionError("only confirmed opportunities may trade")
-        if opportunity.asset.upper() not in self.settings.live_allowed_asset_values:
+    def _validate_approval(self, approval: LiveExecutionApproval) -> None:
+        if datetime.now(UTC) >= approval.plan.expires_at:
+            raise LiveExecutionError("live execution approval expired")
+        if approval.asset not in self.settings.live_allowed_asset_values:
             raise LiveExecutionError("asset is not live-allowlisted")
-        if str(opportunity.strategy).lower() not in self.settings.live_allowed_strategy_values:
+        if approval.strategy.lower() not in self.settings.live_allowed_strategy_values:
             raise LiveExecutionError("strategy is not live-allowlisted")
-        venues = {opportunity.venue_a, opportunity.venue_b or opportunity.venue_a}
+        specifications = self._leg_specs(approval)
+        venues = {item[1] for item in specifications}
         if not venues.issubset(self.adapters):
-            raise LiveExecutionError("opportunity uses a non-enabled live venue")
-        if not opportunity.symbol_a or not opportunity.symbol_b:
-            raise LiveExecutionError("exchange symbols are required for live execution")
-        if capital_per_leg <= 0:
+            raise LiveExecutionError("execution plan uses a non-enabled live venue")
+        if approval.expected_net_profit <= 0:
+            raise LiveExecutionError("approved net profit must be positive")
+        if approval.capital_per_leg <= 0:
             raise LiveExecutionError("capital must be positive")
-        if opportunity.net_edge <= 0:
-            raise LiveExecutionError("net edge must be positive")
-        for instrument_type, side in (
-            (InstrumentType(opportunity.leg_a_type), opportunity.leg_a_side),
-            (InstrumentType(opportunity.leg_b_type), opportunity.leg_b_side),
-        ):
-            if instrument_type is InstrumentType.SPOT and side.upper() == "SELL":
+        for _, _, _, instrument_type, side in specifications:
+            if instrument_type is InstrumentType.SPOT and side == "SELL":
                 raise LiveExecutionError("live spot borrowing is not implemented")
-        if InstrumentType(opportunity.leg_b_type) is InstrumentType.SPOT:
+        if specifications[1][3] is InstrumentType.SPOT:
             raise LiveExecutionError("live spot leg must be leg A")
 
-    async def _validate_account_fees(
-        self, opportunity: Opportunity, capital_per_leg: Decimal
+    def _validate_dynamic_metadata(
+        self, approval: LiveExecutionApproval
     ) -> None:
-        specifications = self._leg_specs(opportunity)
+        registry = self.metadata_registry
+        if registry is None:
+            return
+        now = datetime.now(UTC)
+        maximum_age = max(60.0, self.settings.public_metadata_refresh_seconds * 2)
+        for specification, price in zip(
+            self._leg_specs(approval), approval.reference_prices, strict=True
+        ):
+            _, venue, symbol, instrument_type, _ = specification
+            snapshots = tuple(
+                snapshot
+                for snapshot in registry.snapshots()
+                if snapshot.venue == venue.lower()
+                and (now - snapshot.observed_at).total_seconds() <= maximum_age
+            )
+            if not snapshots:
+                raise LiveExecutionError("dynamic venue metadata is unavailable")
+            matches = tuple(
+                metadata
+                for snapshot in snapshots
+                for metadata in snapshot.instruments
+                if metadata.instrument.exchange_symbol.upper() == symbol.upper()
+                and metadata.instrument.instrument_type.value == instrument_type.value
+            )
+            if len(matches) != 1:
+                raise LiveExecutionError("dynamic instrument metadata is ambiguous")
+            metadata = matches[0]
+            if not metadata.active:
+                raise LiveExecutionError("dynamic instrument metadata is inactive")
+            requested_base = approval.capital_per_leg / price
+            venue_amount = requested_base / metadata.contract_size
+            if (
+                metadata.minimum_amount is not None
+                and venue_amount < metadata.minimum_amount
+            ):
+                raise LiveExecutionError("dynamic venue minimum amount is not met")
+            if (
+                metadata.minimum_cost is not None
+                and requested_base * price < metadata.minimum_cost
+            ):
+                raise LiveExecutionError("dynamic venue minimum cost is not met")
+
+    async def _validate_account_fees(
+        self, approval: LiveExecutionApproval
+    ) -> None:
+        specifications = self._leg_specs(approval)
         try:
             actual_fees = await asyncio.gather(
                 *(
@@ -532,53 +616,58 @@ class LiveTradingExecutor:
             )
         except Exception as exc:
             raise LiveExecutionError("account taker-fee verification failed") from exc
-        quote = next(
-            (
-                item
-                for item in opportunity.size_quotes
-                if item.capital == capital_per_leg
-            ),
-            None,
-        )
-        if quote is None:
-            raise LiveExecutionError("selected live size has no cost quote")
         configured_fees = [
             self.settings.fee_schedules[exchange][1]
             for _, exchange, _, _, _ in specifications
         ]
         configured_roundtrip = (
-            capital_per_leg * Decimal("2") * sum(configured_fees, Decimal("0"))
+            approval.capital_per_leg
+            * Decimal("2")
+            * sum(configured_fees, Decimal("0"))
         )
         actual_roundtrip = (
-            capital_per_leg * Decimal("2") * sum(actual_fees, Decimal("0"))
+            approval.capital_per_leg
+            * Decimal("2")
+            * sum(actual_fees, Decimal("0"))
         )
-        adjusted_profit = quote.net_profit + configured_roundtrip - actual_roundtrip
+        adjusted_profit = (
+            approval.expected_net_profit
+            + configured_roundtrip
+            - actual_roundtrip
+        )
         if adjusted_profit < self.settings.live_min_expected_profit_usd:
             raise LiveExecutionError("account-specific fees remove the expected net profit")
 
     @staticmethod
     def _leg_specs(
-        opportunity: Opportunity,
+        approval: LiveExecutionApproval,
     ) -> tuple[tuple[str, str, str, InstrumentType, str], ...]:
-        assert opportunity.symbol_a is not None
-        assert opportunity.symbol_b is not None
-        return (
+        instructions = tuple(
+            sorted(approval.plan.instructions, key=lambda item: item.leg_index)
+        )
+        return tuple(
             (
-                "open_a",
-                opportunity.venue_a,
-                opportunity.symbol_a,
-                InstrumentType(opportunity.leg_a_type),
-                opportunity.leg_a_side.upper(),
-            ),
-            (
-                "open_b",
-                opportunity.venue_b or opportunity.venue_a,
-                opportunity.symbol_b,
-                InstrumentType(opportunity.leg_b_type),
-                opportunity.leg_b_side.upper(),
-            ),
+                f"open_{chr(ord('a') + instruction.leg_index)}",
+                instruction.instrument.venue.lower(),
+                instruction.instrument.exchange_symbol,
+                InstrumentType(instruction.instrument.instrument_type.value),
+                instruction.side.value,
+            )
+            for instruction in instructions
         )
 
+    @staticmethod
+    def _assert_planned_price(
+        planned_limit: Decimal | None,
+        side: str,
+        actual_limit: Decimal,
+    ) -> None:
+        if planned_limit is None:
+            raise LiveExecutionError("execution plan is missing a bounded limit price")
+        if side == "BUY" and actual_limit > planned_limit:
+            raise LiveExecutionError("IOC price exceeds execution-plan buy limit")
+        if side == "SELL" and actual_limit < planned_limit:
+            raise LiveExecutionError("IOC price exceeds execution-plan sell limit")
     def _fresh_book(
         self,
         snapshot: MarketSnapshot,

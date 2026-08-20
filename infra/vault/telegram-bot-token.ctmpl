@@ -1,0 +1,3 @@
+{{- with secret "kv/data/funding/v1/telegram" -}}
+{{ .Data.data.bot_token }}
+{{- end }}

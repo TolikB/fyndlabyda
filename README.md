@@ -4,8 +4,9 @@ Market-neutral funding/basis arbitrage system for Bybit, Gate.io, OKX,
 Binance, Hyperliquid, MEXC, KuCoin, and HTX. It normalizes public REST/WebSocket data, exact
 venue funding cycles, spot/perpetual, perp/perp, and dated-futures
 opportunities. Paper mode is the default. A separately interlocked live mode
-uses authenticated account reconciliation, durable order intents,
-idempotent client IDs, bounded IOC orders, and persistent kill switches.
+uses authenticated order/fill/balance/position streams, periodic authoritative
+account reconciliation, durable order intents, idempotent client IDs, bounded
+IOC orders, and persistent kill switches.
 
 ## Local setup
 
@@ -150,10 +151,27 @@ silently assumes zero slippage.
 ## Guarded live mode
 
 Live execution is disabled unless `RUN_MODE=live`, `EXECUTION_MODE=live`,
-`LIVE_ARMED=true`, and the exact confirmation phrase in `.env.live.example`
+`TRADING_MODE=LIMITED_LIVE` or `LIVE`, `LIVE_ARMED=true`, and the exact
+confirmation phrase in `.env.live.example`
 are all present. Copy that example only after completing the checklist in
 `ops/LIVE_TRADING_RUNBOOK.md`. Never reuse a paper `.env` or grant withdrawal
 or transfer permissions.
+
+Public tick trades, one-minute OHLCV, mark/index/funding snapshots, open
+interest, and venue-supported public liquidations are written to the canonical
+journal for all eight CEX. The active universe is bounded per spot/derivative
+profile and ranked by normalized 24-hour volume. Native adapters remain the
+source of truth for exact funding timestamps, rates, mark, and index prices;
+CCXT Pro supplies supplemental streams and conservative REST recovery. Missing
+venue capabilities are exported explicitly and never replaced by synthetic data.
+Authenticated private events from all eight CEX are normalized into the same
+immutable journal as market data. WebSocket order, fill, balance, and supported
+position updates are paired with periodic REST reconciliation; MEXC and HTX
+position snapshots use that explicit REST recovery path because pinned CCXT Pro
+4.5.73 does not advertise their position streams. Any reconnecting channel,
+stale checkpoint, stopped task, normalization failure, or journal failure blocks
+new entries. `/system/live`, Prometheus, and Grafana expose only health metadata,
+never credentials or raw private payloads.
 
 MEXC paper mode uses the same public spot/futures feeds and exact settlement
 timestamps as production. MEXC live mode uses native spot V3 and futures V1

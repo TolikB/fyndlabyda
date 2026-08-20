@@ -8,7 +8,14 @@ from pathlib import Path
 
 import httpx
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from funding_arbitrage.database.models import (
+    AnalyticsReplicationCheckpointRecord,
+    Base,
+)
+from funding_arbitrage.database.repositories.events import append_event
 from funding_arbitrage.domain.decisions import (
     MarketRegime,
     SignalIntent,
@@ -32,6 +39,7 @@ from funding_arbitrage.storage.clickhouse import (
     TelemetryAnalyticsEvent,
 )
 from funding_arbitrage.storage.ephemeral import EphemeralStatePolicy, RedisEphemeralStore
+from funding_arbitrage.storage.replication import ClickHouseEventReplicator
 
 NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 
@@ -91,6 +99,23 @@ def _signal() -> SignalIntent:
         created_at=NOW,
         expires_at=NOW + timedelta(minutes=1),
     )
+
+
+def test_clickhouse_policy_requires_https_when_tls_verification_is_enabled() -> None:
+    with pytest.raises(ValueError, match="requires HTTPS"):
+        ClickHouseStoragePolicy(
+            url="http://clickhouse:8123",
+            username="analytics",
+            password="secret-password",
+        )
+
+    policy = ClickHouseStoragePolicy(
+        url="https://clickhouse:8443",
+        username="analytics",
+        password="secret-password",
+    )
+    assert policy.verify_tls is True
+    assert "secret-password" not in repr(policy)
 
 
 async def test_clickhouse_writer_covers_all_analytics_domains_with_auth() -> None:
@@ -200,6 +225,74 @@ def test_clickhouse_schema_has_explicit_retention_for_every_domain() -> None:
     assert "signal_events" in sql and "INTERVAL 730 DAY" in sql
     assert "telemetry_events" in sql and "INTERVAL 90 DAY" in sql
     assert sql.count("ReplacingMergeTree") == 4
+
+
+class RecordingMarketAnalyticsSink:
+    def __init__(self, *, fail_once: bool = False) -> None:
+        self.fail_once = fail_once
+        self.pings = 0
+        self.batches: list[tuple[EventEnvelope, ...]] = []
+
+    async def ping(self) -> None:
+        self.pings += 1
+
+    async def write_market_events(self, events: tuple[EventEnvelope, ...]) -> int:
+        if self.fail_once:
+            self.fail_once = False
+            raise TimeoutError("simulated ClickHouse outage")
+        self.batches.append(events)
+        return len(events)
+
+
+async def test_clickhouse_replication_advances_cursor_only_after_complete_write() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        assert await append_event(session, _event())
+
+    sink = RecordingMarketAnalyticsSink(fail_once=True)
+    replicator = ClickHouseEventReplicator(
+        factory, sink, batch_size=10, poll_seconds=0.01
+    )
+    with pytest.raises(TimeoutError, match="ClickHouse outage"):
+        await replicator.replicate_once()
+    async with factory() as session:
+        checkpoint = await session.scalar(
+            select(AnalyticsReplicationCheckpointRecord)
+        )
+    assert checkpoint is None
+    assert sink.batches == []
+
+    assert await replicator.replicate_once() == 1
+    assert replicator.healthy
+    assert len(sink.batches) == 1
+    async with factory() as session:
+        checkpoint = await session.scalar(
+            select(AnalyticsReplicationCheckpointRecord)
+        )
+    assert checkpoint is not None
+    assert checkpoint.last_event_row_id == replicator.last_replicated_event_row_id
+
+    assert await replicator.replicate_once() == 0
+    assert len(sink.batches) == 1
+    await engine.dispose()
+
+
+async def test_empty_clickhouse_replication_requires_a_successful_health_probe() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    sink = RecordingMarketAnalyticsSink()
+    replicator = ClickHouseEventReplicator(factory, sink, poll_seconds=0.01)
+
+    assert not replicator.healthy
+    assert await replicator.replicate_once() == 0
+    assert replicator.healthy
+    assert sink.pings == 1
+    await engine.dispose()
 
 
 class FakeRedis:

@@ -189,6 +189,10 @@ async def test_backtest_monthly_distribution_is_json_serializable() -> None:
         def __init__(self) -> None:
             self.records = []
 
+        async def scalar(self, statement):
+            del statement
+            return None
+
         def add(self, record) -> None:
             self.records.append(record)
 

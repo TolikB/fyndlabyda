@@ -33,6 +33,7 @@ from funding_arbitrage.execution.mev import (
 )
 from funding_arbitrage.execution.oms import (
     DurableOMS,
+    InMemoryOMSJournal,
     JsonlOMSJournal,
     OMSEventType,
     OMSJournalEntry,
@@ -82,6 +83,7 @@ __all__ = [
     "NativeOrderIntent",
     "UdpNativeTransport",
     "DurableOMS",
+    "InMemoryOMSJournal",
     "JsonlOMSJournal",
     "OMSEventType",
     "OMSJournalEntry",

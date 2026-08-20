@@ -75,6 +75,7 @@ class HtxPublicAdapter(ExchangeAdapter):
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
         burst: int = 8,
+        funding_symbol_limit: int = 30,
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
@@ -87,7 +88,10 @@ class HtxPublicAdapter(ExchangeAdapter):
         self.timeout = timeout_seconds
         self._http = http_client
         self._owns_http = http_client is None
+        if funding_symbol_limit <= 0:
+            raise ValueError("HTX funding symbol limit must be positive")
         self._limiter = RateLimiter(requests_per_second, burst)
+        self.funding_symbol_limit = funding_symbol_limit
         self._sleep = sleep
         self.max_reconnects = max_reconnects
         self._contract_sizes: dict[str, Decimal] = {}
@@ -263,31 +267,88 @@ class HtxPublicAdapter(ExchangeAdapter):
 
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         await self._refresh_contract_metadata()
-        payload = await self._request(
-            self.futures_base_url, "/linear-swap-api/v1/swap_batch_funding_rate"
+        responses: list[Any | BaseException] = list(
+            await asyncio.gather(
+                self._request(
+                    self.futures_base_url,
+                    "/linear-swap-api/v1/swap_batch_funding_rate",
+                ),
+                self._request(
+                    self.futures_base_url,
+                    "/linear-swap-api/v1/swap_index",
+                ),
+                return_exceptions=True,
+            )
         )
+        funding_result, index_result = responses
+        if isinstance(funding_result, BaseException):
+            raise funding_result
+        funding_rows = _rows(funding_result, "funding rates")
+        index_prices: dict[str, Decimal] = {}
+        if not isinstance(index_result, BaseException):
+            for row in _rows(index_result, "index prices"):
+                symbol = str(row.get("contract_code", "")).upper()
+                if symbol and row.get("index_price") not in (None, ""):
+                    index_prices[symbol] = decimal(row["index_price"], "index_price")
+
+        eligible = [
+            row
+            for row in funding_rows
+            if row.get("funding_rate") not in (None, "")
+            and (row.get("next_funding_time") or row.get("funding_time"))
+            not in (None, "", 0, "0")
+        ]
+        selected = sorted(
+            eligible,
+            key=lambda row: (
+                -abs(decimal(row["funding_rate"], "funding_rate")),
+                str(row.get("contract_code", "")),
+            ),
+        )[: self.funding_symbol_limit]
+        selected_symbols = [str(row["contract_code"]).upper() for row in selected]
+        mark_results = await asyncio.gather(
+            *(
+                self._request(
+                    self.futures_base_url,
+                    "/index/market/history/linear_swap_mark_price_kline",
+                    {"contract_code": symbol, "period": "1min", "size": 1},
+                )
+                for symbol in selected_symbols
+            ),
+            return_exceptions=True,
+        )
+        mark_prices: dict[str, Decimal] = {}
+        for symbol, response in zip(selected_symbols, mark_results, strict=True):
+            if isinstance(response, BaseException):
+                continue
+            rows = _rows(response, "mark price")
+            if rows:
+                latest = max(rows, key=lambda row: int(str(row.get("id", 0))))
+                if latest.get("close") not in (None, ""):
+                    mark_prices[symbol] = decimal(latest["close"], "mark price")
+
         now = datetime.now(UTC)
         result: list[FundingSnapshot] = []
-        for row in _rows(payload, "funding rates"):
+        for row in eligible:
             symbol = str(row["contract_code"]).upper()
-            if (
-                symbol not in self._funding_intervals
-                or row.get("funding_rate") in (None, "")
-                or row.get("funding_time") in (None, "", 0, "0")
-            ):
-                continue
             result.append(
                 FundingSnapshot(
                     exchange=self.name,
                     symbol=symbol,
                     funding_rate=decimal(row["funding_rate"], "funding_rate"),
-                    funding_interval_hours=self._funding_intervals.get(symbol, Decimal("8")),
-                    next_funding_time=_ms(row["funding_time"], "funding_time"),
+                    funding_interval_hours=self._funding_intervals.get(
+                        symbol, Decimal("8")
+                    ),
+                    next_funding_time=_ms(
+                        row.get("next_funding_time") or row["funding_time"],
+                        "funding_time",
+                    ),
+                    mark_price=mark_prices.get(symbol),
+                    index_price=index_prices.get(symbol),
                     timestamp=now,
                 )
             )
         return result
-
     async def get_funding_history(
         self, symbol: str, start: datetime, end: datetime
     ) -> list[FundingHistoryPoint]:
@@ -475,7 +536,9 @@ class HtxPublicAdapter(ExchangeAdapter):
         stream: str,
         depth: int,
     ) -> AsyncIterator[Ticker | OrderBook]:
-        queue: asyncio.Queue[Ticker | OrderBook | BaseException] = asyncio.Queue()
+        queue: asyncio.Queue[Ticker | OrderBook | BaseException] = asyncio.Queue(
+            maxsize=max(64, len(symbols) * 4)
+        )
 
         async def pump(kind: InstrumentType, requested: list[str]) -> None:
             try:

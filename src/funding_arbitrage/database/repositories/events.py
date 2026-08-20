@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from pydantic import BaseModel
-from sqlalchemy import CursorResult, Select, insert, select
+from sqlalchemy import CursorResult, Select, case, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,7 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     FillEvent,
     FundingSnapshot,
+    LiquidationTick,
     OpenInterestSnapshot,
     OrderUpdate,
     PositionSnapshot,
@@ -38,6 +39,7 @@ PAYLOAD_MODELS: dict[EventKind, type[BaseModel]] = {
     EventKind.CANDLE: Candle,
     EventKind.FUNDING_SNAPSHOT: FundingSnapshot,
     EventKind.OPEN_INTEREST_SNAPSHOT: OpenInterestSnapshot,
+    EventKind.LIQUIDATION_TICK: LiquidationTick,
     EventKind.ORDER_UPDATE: OrderUpdate,
     EventKind.FILL: FillEvent,
     EventKind.POSITION_SNAPSHOT: PositionSnapshot,
@@ -54,6 +56,18 @@ def _payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _native_sequence(event: EventEnvelope[Any]) -> int | None:
+    """Return the venue-native numeric sequence used for causal replay order."""
+
+    if event.metadata.native_sequence is not None:
+        return event.metadata.native_sequence
+    if isinstance(event.payload, BookSnapshot):
+        return event.payload.sequence
+    if isinstance(event.payload, BookDelta):
+        return event.payload.last_sequence
+    return None
+
+
 def _record_values(event: EventEnvelope[Any]) -> dict[str, Any]:
     payload = event.payload.model_dump(mode="json")
     metadata = event.metadata
@@ -62,6 +76,7 @@ def _record_values(event: EventEnvelope[Any]) -> dict[str, Any]:
         "kind": event.kind.value,
         "source": metadata.source,
         "sequence_id": metadata.sequence_id,
+        "native_sequence": _native_sequence(event),
         "correlation_id": metadata.correlation_id,
         "payload_version": metadata.payload_version,
         "quality": metadata.quality.value,
@@ -176,10 +191,14 @@ def event_query(
         statement = statement.where(
             CanonicalEventRecord.correlation_id == correlation_id
         )
+    native_sequence_is_missing = case(
+        (CanonicalEventRecord.native_sequence.is_(None), 1), else_=0
+    )
     return statement.order_by(
         CanonicalEventRecord.exchange_timestamp,
-        CanonicalEventRecord.monotonic_ns,
         CanonicalEventRecord.source,
+        native_sequence_is_missing,
+        CanonicalEventRecord.native_sequence,
         CanonicalEventRecord.sequence_id,
         CanonicalEventRecord.event_id,
     )
@@ -220,6 +239,7 @@ def record_to_event(record: CanonicalEventRecord) -> EventEnvelope[BaseModel]:
         receive_timestamp=record.receive_timestamp,
         monotonic_ns=record.monotonic_ns,
         sequence_id=record.sequence_id,
+        native_sequence=record.native_sequence,
         source=record.source,
         correlation_id=record.correlation_id,
         payload_version=record.payload_version,

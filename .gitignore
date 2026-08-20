@@ -9,3 +9,10 @@ __pycache__/
 .env
 *.log
 coverage.xml
+.coverage
+coverage_report.json
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.tfstate.lock.info

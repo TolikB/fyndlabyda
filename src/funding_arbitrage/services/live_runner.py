@@ -26,6 +26,8 @@ from funding_arbitrage.database.repositories.market_data import (
     save_opportunities,
 )
 from funding_arbitrage.exchanges.base.models import InstrumentType
+from funding_arbitrage.exchanges.private_streams import PrivateStreamSupervisor
+from funding_arbitrage.exchanges.public_events import PublicEventSupervisor
 from funding_arbitrage.execution.live import LiveExecutionError, LiveTradingExecutor
 from funding_arbitrage.execution.reconciliation import LiveReconciler
 from funding_arbitrage.execution.trading import (
@@ -37,12 +39,17 @@ from funding_arbitrage.execution.trading import (
 )
 from funding_arbitrage.market_data.collector import MarketDataCollector, MarketSnapshot
 from funding_arbitrage.monitoring.metrics import (
+    live_drawdown_fraction,
+    live_drawdown_limit_utilization,
     live_equity,
+    live_exposure_limit_utilization,
     live_funding_payments_total,
     live_funding_poll_errors_total,
+    live_gross_exposure_usd,
     live_pnl,
     live_positions_open,
     live_reconciliation_failures_total,
+    live_reconciliation_healthy,
     live_runner_cycles_total,
     live_runner_errors_total,
     live_runner_last_cycle_timestamp,
@@ -57,6 +64,7 @@ from funding_arbitrage.opportunity.settlement import (
     target_settlements,
 )
 from funding_arbitrage.risk.live import LiveRiskController, LiveTradingPaused
+from funding_arbitrage.services.decision_pipeline import FundingLiveDecisionService
 from funding_arbitrage.services.live_daily_report import LiveDailyReportService
 from funding_arbitrage.services.runtime import RuntimeState
 
@@ -70,11 +78,18 @@ class LiveTradingRunner:
         runtime: RuntimeState,
         session_factory: async_sessionmaker[AsyncSession],
         trading_adapters: dict[str, TradingAdapter],
+        private_streams: PrivateStreamSupervisor | None = None,
+        public_events: PublicEventSupervisor | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
         self.session_factory = session_factory
         self.trading_adapters = trading_adapters
+        self.private_streams = private_streams
+        self.public_events = public_events
+        self._base_entry_health = runtime.entry_health
+        if private_streams is not None:
+            runtime.entry_health = self._entry_health
         public_adapters = [runtime.adapters[name] for name in settings.live_venue_values]
         self.collector = MarketDataCollector(
             public_adapters,
@@ -86,8 +101,15 @@ class LiveTradingRunner:
         )
         self.risk = LiveRiskController(settings)
         self.executor = LiveTradingExecutor(
-            settings, trading_adapters, session_factory, self.risk
+            settings,
+            trading_adapters,
+            session_factory,
+            self.risk,
+            metadata_registry=(
+                public_events.metadata_registry if public_events is not None else None
+            ),
         )
+        self.decision_pipeline = FundingLiveDecisionService(settings, self.risk)
         self.reconciler = LiveReconciler(
             settings, trading_adapters, session_factory, self.risk
         )
@@ -120,25 +142,35 @@ class LiveTradingRunner:
             await asyncio.gather(
                 *(adapter.preflight() for adapter in self.trading_adapters.values())
             )
+            if self.private_streams is not None:
+                await self.private_streams.start()
+            if self.public_events is not None:
+                await self.public_events.start()
             await self._restore_positions()
             result = await self.reconciler.reconcile(startup=True)
+            reconciled_at = datetime.now(UTC)
+            if self.private_streams is not None:
+                await self.private_streams.ingest_reconciliation(
+                    result, observed_at=reconciled_at
+                )
+            live_reconciliation_healthy.set(1)
             self._balances = result.balances
             self._venue_positions = result.positions
-            self._last_reconciliation = datetime.now(UTC)
+            self._last_reconciliation = reconciled_at
             await self._restore_risk_baselines()
             await self._restore_funding_cursors()
             await self._poll_funding_payments(datetime.now(UTC))
             self.initialized = True
         except asyncio.CancelledError:
             raise
-        except LiveTradingPaused as exc:
-            self.startup_error = str(exc)
+        except LiveTradingPaused:
+            self.startup_error = "live_startup_reconciliation_paused"
             live_runner_errors_total.labels("startup_reconciliation").inc()
             logger.exception("live_startup_reconciliation_failed")
             await self._alert_if_paused()
             return
-        except Exception as exc:
-            self.startup_error = f"{type(exc).__name__}: {exc}"
+        except Exception:
+            self.startup_error = "live_startup_failed"
             self.risk.trip("live_startup_failed")
             live_runner_errors_total.labels("startup").inc()
             logger.exception("live_startup_failed")
@@ -176,6 +208,10 @@ class LiveTradingRunner:
         await self.stop()
         await self.collector.close()
         await self.daily_report.close()
+        if self.private_streams is not None:
+            await self.private_streams.stop()
+        if self.public_events is not None:
+            await self.public_events.close()
         await asyncio.gather(
             *(adapter.close() for adapter in self.trading_adapters.values()),
             return_exceptions=True,
@@ -202,6 +238,8 @@ class LiveTradingRunner:
             force_history_refresh=periodic_history_refresh,
         )
         self._require_complete_market_snapshot(snapshot)
+        if self.public_events is not None:
+            await self.public_events.observe_snapshot(snapshot)
         if refresh_history:
             self._last_history_refresh = snapshot.captured_at
             self._last_history_symbols = history_symbols
@@ -212,9 +250,15 @@ class LiveTradingRunner:
         if reconciliation_due:
             try:
                 result = await self.reconciler.reconcile()
-            except LiveTradingPaused:
+            except Exception:
+                live_reconciliation_healthy.set(0)
                 live_reconciliation_failures_total.inc()
                 raise
+            if self.private_streams is not None:
+                await self.private_streams.ingest_reconciliation(
+                    result, observed_at=snapshot.captured_at
+                )
+            live_reconciliation_healthy.set(1)
             self._balances = result.balances
             self._venue_positions = result.positions
             self._last_reconciliation = snapshot.captured_at
@@ -237,8 +281,30 @@ class LiveTradingRunner:
                 for position in self.positions.values()
             )
         )
+        gross_exposure = sum(
+            (
+                position.capital_per_leg * Decimal("2")
+                for position in self.positions.values()
+                if position.state
+                not in {LivePositionState.CLOSED, LivePositionState.FAILED}
+            ),
+            Decimal("0"),
+        )
+        live_gross_exposure_usd.set(float(gross_exposure))
+        live_exposure_limit_utilization.set(
+            float(gross_exposure / self.settings.live_max_total_notional_usd)
+        )
         await self.daily_report.check_and_send(snapshot.captured_at)
         self.runtime.last_completed_snapshot = snapshot
+
+    def _entry_health(self) -> tuple[bool, str | None]:
+        if self._base_entry_health is not None:
+            healthy, reason = self._base_entry_health()
+            if not healthy:
+                return False, reason
+        if self.private_streams is None:
+            return True, None
+        return self.private_streams.health()
 
     async def _restore_positions(self) -> None:
         async with self.session_factory() as session:
@@ -421,6 +487,16 @@ class LiveTradingRunner:
             self._last_account_snapshot = snapshot.captured_at
         self.risk.update_equity(total_equity, snapshot.captured_at)
         live_equity.set(float(total_equity))
+        high_water = self.risk.state.high_water_equity or total_equity
+        drawdown = (
+            (high_water - total_equity) / high_water
+            if high_water > 0
+            else Decimal("0")
+        )
+        live_drawdown_fraction.set(float(drawdown))
+        live_drawdown_limit_utilization.set(
+            float(drawdown / self.settings.live_max_drawdown_percent)
+        )
         start = self.risk.state.starting_equity or total_equity
         live_pnl.set(float(total_equity - start))
         await self._alert_if_paused()
@@ -544,11 +620,16 @@ class LiveTradingRunner:
                 live_trade_rejections_total.labels(concentration_reason).inc()
                 continue
             try:
-                position = await self.executor.open_position(
+                approval = self.decision_pipeline.approve(
                     opportunity,
-                    quote.capital,
+                    quote,
                     snapshot,
                     key,
+                    now=snapshot.captured_at,
+                )
+                position = await self.executor.open_position(
+                    approval,
+                    snapshot,
                     self._balances,
                     open_notional,
                 )

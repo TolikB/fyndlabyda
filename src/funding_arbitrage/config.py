@@ -7,10 +7,18 @@ from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from funding_arbitrage.credential_policy import (
+    load_live_credential_policy,
+    verify_live_credential_policy,
+)
+from funding_arbitrage.domain.events import TradingMode
+from funding_arbitrage.domain.modes import ModeContract, mode_contract
 
 
 class Settings(BaseSettings):
@@ -22,6 +30,7 @@ class Settings(BaseSettings):
         default="live_public", alias="MARKET_DATA_MODE"
     )
     execution_mode: Literal["paper", "live"] = Field(default="paper", alias="EXECUTION_MODE")
+    trading_mode: TradingMode | None = Field(default=None, alias="TRADING_MODE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     database_url: str = Field(
         default="postgresql+asyncpg://funding:funding@localhost:5432/funding",
@@ -29,6 +38,42 @@ class Settings(BaseSettings):
         repr=False,
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL", repr=False)
+    redis_username: str = Field(default="", alias="REDIS_USERNAME")
+    redis_password: SecretStr = Field(default=SecretStr(""), alias="REDIS_PASSWORD")
+    internal_service_tls_required: bool = Field(
+        default=False, alias="INTERNAL_SERVICE_TLS_REQUIRED"
+    )
+    internal_tls_ca_file: str = Field(
+        default="", alias="INTERNAL_TLS_CA_FILE", repr=False
+    )
+    internal_tls_client_cert_file: str = Field(
+        default="", alias="INTERNAL_TLS_CLIENT_CERT_FILE", repr=False
+    )
+    internal_tls_client_key_file: str = Field(
+        default="", alias="INTERNAL_TLS_CLIENT_KEY_FILE", repr=False
+    )
+    clickhouse_enabled: bool = Field(default=False, alias="CLICKHOUSE_ENABLED")
+    clickhouse_url: str = Field(
+        default="https://clickhouse:8443", alias="CLICKHOUSE_URL", repr=False
+    )
+    clickhouse_database: str = Field(
+        default="funding_analytics", alias="CLICKHOUSE_DATABASE"
+    )
+    clickhouse_username: str = Field(
+        default="funding_analytics", alias="CLICKHOUSE_USER"
+    )
+    clickhouse_password: SecretStr = Field(
+        default=SecretStr(""), alias="CLICKHOUSE_PASSWORD"
+    )
+    clickhouse_request_timeout_seconds: float = Field(
+        default=10.0, alias="CLICKHOUSE_REQUEST_TIMEOUT_SECONDS"
+    )
+    clickhouse_replication_batch_size: int = Field(
+        default=500, alias="CLICKHOUSE_REPLICATION_BATCH_SIZE"
+    )
+    clickhouse_replication_poll_seconds: float = Field(
+        default=1.0, alias="CLICKHOUSE_REPLICATION_POLL_SECONDS"
+    )
     canonical_event_queue_size: int = Field(
         default=50_000, alias="CANONICAL_EVENT_QUEUE_SIZE"
     )
@@ -37,6 +82,21 @@ class Settings(BaseSettings):
     )
     canonical_event_flush_interval_seconds: float = Field(
         default=0.10, alias="CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS"
+    )
+    public_event_symbol_limit_per_profile: int = Field(
+        default=3, alias="PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE"
+    )
+    public_event_rest_interval_seconds: float = Field(
+        default=60.0, alias="PUBLIC_EVENT_REST_INTERVAL_SECONDS"
+    )
+    public_event_reconnect_initial_seconds: float = Field(
+        default=1.0, alias="PUBLIC_EVENT_RECONNECT_INITIAL_SECONDS"
+    )
+    public_event_reconnect_max_seconds: float = Field(
+        default=30.0, alias="PUBLIC_EVENT_RECONNECT_MAX_SECONDS"
+    )
+    public_metadata_refresh_seconds: float = Field(
+        default=3600.0, alias="PUBLIC_METADATA_REFRESH_SECONDS"
     )
     bybit_base_url: str = Field(default="https://api.bybit.com", alias="BYBIT_BASE_URL")
     bybit_ws_url: str = Field(
@@ -88,6 +148,7 @@ class Settings(BaseSettings):
     htx_futures_ws_url: str = Field(
         default="wss://api.hbdm.com/linear-swap-ws", alias="HTX_FUTURES_WS_URL"
     )
+    htx_funding_symbol_limit: int = Field(default=30, alias="HTX_FUNDING_SYMBOL_LIMIT")
     live_armed: bool = Field(default=False, alias="LIVE_ARMED")
     live_trading_confirm: str = Field(default="", alias="LIVE_TRADING_CONFIRM")
     live_autotrade: bool = Field(default=False, alias="LIVE_AUTOTRADE")
@@ -159,6 +220,18 @@ class Settings(BaseSettings):
     live_reconciliation_interval_seconds: float = Field(
         default=30.0, alias="LIVE_RECONCILIATION_INTERVAL_SECONDS"
     )
+    live_private_stream_reconciliation_max_age_seconds: float = Field(
+        default=90.0,
+        alias="LIVE_PRIVATE_STREAM_RECONCILIATION_MAX_AGE_SECONDS",
+    )
+    live_private_stream_reconnect_initial_seconds: float = Field(
+        default=1.0,
+        alias="LIVE_PRIVATE_STREAM_RECONNECT_INITIAL_SECONDS",
+    )
+    live_private_stream_reconnect_max_seconds: float = Field(
+        default=30.0,
+        alias="LIVE_PRIVATE_STREAM_RECONNECT_MAX_SECONDS",
+    )
     live_loop_interval_seconds: float = Field(default=10.0, alias="LIVE_LOOP_INTERVAL_SECONDS")
     live_max_hold_seconds: int = Field(default=32400, alias="LIVE_MAX_HOLD_SECONDS")
     live_exit_edge_miss_cycles: int = Field(default=2, alias="LIVE_EXIT_EDGE_MISS_CYCLES")
@@ -179,6 +252,22 @@ class Settings(BaseSettings):
     )
     live_require_dedicated_accounts: bool = Field(
         default=True, alias="LIVE_REQUIRE_DEDICATED_ACCOUNTS"
+    )
+    live_expected_egress_ip: str = Field(default="", alias="LIVE_EXPECTED_EGRESS_IP")
+    live_credential_policy_json: SecretStr = Field(
+        default=SecretStr(""), alias="LIVE_CREDENTIAL_POLICY_JSON"
+    )
+    live_credential_policy_file: str = Field(
+        default="", alias="LIVE_CREDENTIAL_POLICY_FILE", repr=False
+    )
+    live_credential_max_age_days: int = Field(
+        default=90, ge=1, le=365, alias="LIVE_CREDENTIAL_MAX_AGE_DAYS"
+    )
+    live_credential_attestation_max_age_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        alias="LIVE_CREDENTIAL_ATTESTATION_MAX_AGE_HOURS",
     )
     live_liquidate_on_pause: bool = Field(default=True, alias="LIVE_LIQUIDATE_ON_PAUSE")
     bybit_api_key: SecretStr = Field(default=SecretStr(""), alias="BYBIT_API_KEY")
@@ -278,6 +367,24 @@ class Settings(BaseSettings):
     paper_max_adverse_basis_percent: Decimal = Field(
         default=Decimal("0.005"), alias="PAPER_MAX_ADVERSE_BASIS_PERCENT"
     )
+    backtest_fill_model_enabled: bool = Field(
+        default=True, alias="BACKTEST_FILL_MODEL_ENABLED"
+    )
+    backtest_order_latency_ms: int = Field(
+        default=50, ge=0, le=60_000, alias="BACKTEST_ORDER_LATENCY_MS"
+    )
+    backtest_cancel_latency_ms: int = Field(
+        default=50, ge=0, le=60_000, alias="BACKTEST_CANCEL_LATENCY_MS"
+    )
+    backtest_maximum_participation_rate: Decimal = Field(
+        default=Decimal("0.10"), gt=0, le=1, alias="BACKTEST_MAXIMUM_PARTICIPATION_RATE"
+    )
+    backtest_passive_fill_ratio: Decimal = Field(
+        default=Decimal("0.50"), gt=0, le=1, alias="BACKTEST_PASSIVE_FILL_RATIO"
+    )
+    backtest_impact_coefficient_bps: Decimal = Field(
+        default=Decimal("10"), ge=0, alias="BACKTEST_IMPACT_COEFFICIENT_BPS"
+    )
     telegram_enabled: bool = Field(default=False, alias="TELEGRAM_ENABLED")
     telegram_bot_token: SecretStr = Field(default=SecretStr(""), alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
@@ -334,11 +441,66 @@ class Settings(BaseSettings):
         default=8.0, alias="RATE_LIMIT_REQUESTS_PER_SECOND"
     )
     rate_limit_burst: int = Field(default=8, alias="RATE_LIMIT_BURST")
+    control_plane_security_enabled: bool = Field(
+        default=False, alias="CONTROL_PLANE_SECURITY_ENABLED"
+    )
+    control_plane_jwt_secret: SecretStr = Field(
+        default=SecretStr(""), alias="CONTROL_PLANE_JWT_SECRET"
+    )
+    control_plane_jwt_issuer: str = Field(
+        default="funding-arbitrage-operator", alias="CONTROL_PLANE_JWT_ISSUER"
+    )
+    control_plane_jwt_audience: str = Field(
+        default="funding-arbitrage-control", alias="CONTROL_PLANE_JWT_AUDIENCE"
+    )
+    control_plane_mtls_required: bool = Field(
+        default=False, alias="CONTROL_PLANE_MTLS_REQUIRED"
+    )
+    control_plane_mtls_certificate_header_required: bool = Field(
+        default=False,
+        alias="CONTROL_PLANE_MTLS_CERTIFICATE_HEADER_REQUIRED",
+    )
+    control_plane_mtls_trusted_proxies: str = Field(
+        default="127.0.0.1,::1,testclient",
+        alias="CONTROL_PLANE_MTLS_TRUSTED_PROXIES",
+    )
+    control_plane_mtls_client_fingerprints: str = Field(
+        default="", alias="CONTROL_PLANE_MTLS_CLIENT_FINGERPRINTS"
+    )
+    control_plane_rate_limit_per_minute: int = Field(
+        default=120, alias="CONTROL_PLANE_RATE_LIMIT_PER_MINUTE"
+    )
+    control_plane_rate_limit_backend: Literal["memory", "redis"] = Field(
+        default="memory", alias="CONTROL_PLANE_RATE_LIMIT_BACKEND"
+    )
+    control_plane_max_request_bytes: int = Field(
+        default=1_048_576,
+        ge=1024,
+        le=10_485_760,
+        alias="CONTROL_PLANE_MAX_REQUEST_BYTES",
+    )
+    control_plane_idempotency_ttl_seconds: int = Field(
+        default=86400, alias="CONTROL_PLANE_IDEMPOTENCY_TTL_SECONDS"
+    )
 
     @model_validator(mode="after")
     def validate_safe_modes(self) -> Settings:
         _validate_safe_values(self)
         return self
+
+    @property
+    def effective_trading_mode(self) -> TradingMode:
+        if self.trading_mode is not None:
+            return self.trading_mode
+        return {
+            "api": TradingMode.SAFE_MODE,
+            "paper_test": TradingMode.PAPER,
+            "live": TradingMode.LIVE,
+        }[self.run_mode]
+
+    @property
+    def mode_contract(self) -> ModeContract:
+        return mode_contract(self.effective_trading_mode)
 
     @property
     def bybit_category_values(self) -> tuple[str, ...]:
@@ -372,6 +534,22 @@ class Settings(BaseSettings):
     def live_reserve_asset_values(self) -> frozenset[str]:
         return frozenset(
             value.strip().upper() for value in self.live_reserve_assets.split(",") if value.strip()
+        )
+
+    @property
+    def control_plane_mtls_trusted_proxy_values(self) -> frozenset[str]:
+        return frozenset(
+            value.strip().lower()
+            for value in self.control_plane_mtls_trusted_proxies.split(",")
+            if value.strip()
+        )
+
+    @property
+    def control_plane_mtls_client_fingerprint_values(self) -> frozenset[str]:
+        return frozenset(
+            value.strip().lower().replace(":", "")
+            for value in self.control_plane_mtls_client_fingerprints.split(",")
+            if value.strip()
         )
 
     def live_credentials(self, venue: str) -> dict[str, str]:
@@ -554,6 +732,39 @@ def get_settings() -> Settings:
 
 
 def _validate_safe_values(settings: Settings) -> None:
+    mode = settings.effective_trading_mode
+    allowed_modes = {
+        "api": {TradingMode.BACKTEST, TradingMode.REPLAY, TradingMode.SAFE_MODE},
+        "paper_test": {TradingMode.SHADOW, TradingMode.PAPER, TradingMode.SAFE_MODE},
+        "live": {TradingMode.LIMITED_LIVE, TradingMode.LIVE},
+    }
+    if mode not in allowed_modes[settings.run_mode]:
+        raise ValueError(
+            f"TRADING_MODE={mode.value} is incompatible with RUN_MODE={settings.run_mode}"
+        )
+    if mode in {
+        TradingMode.BACKTEST,
+        TradingMode.REPLAY,
+        TradingMode.SHADOW,
+        TradingMode.SAFE_MODE,
+    } and (settings.paper_autotrade or settings.live_autotrade):
+        raise ValueError(f"TRADING_MODE={mode.value} forbids autotrade")
+    if settings.clickhouse_enabled:
+        if not settings.internal_service_tls_required:
+            raise ValueError("CLICKHOUSE_ENABLED requires internal mTLS")
+        if not settings.clickhouse_url.lower().startswith("https://"):
+            raise ValueError("CLICKHOUSE_URL must use HTTPS")
+        if (
+            not settings.clickhouse_username.strip()
+            or not settings.clickhouse_password.get_secret_value()
+        ):
+            raise ValueError("ClickHouse credentials are required when analytics is enabled")
+        if settings.clickhouse_request_timeout_seconds <= 0:
+            raise ValueError("CLICKHOUSE_REQUEST_TIMEOUT_SECONDS must be positive")
+        if settings.clickhouse_replication_batch_size <= 0:
+            raise ValueError("CLICKHOUSE_REPLICATION_BATCH_SIZE must be positive")
+        if settings.clickhouse_replication_poll_seconds <= 0:
+            raise ValueError("CLICKHOUSE_REPLICATION_POLL_SECONDS must be positive")
     if settings.canonical_event_queue_size <= 0:
         raise ValueError("CANONICAL_EVENT_QUEUE_SIZE must be positive")
     if not 0 < settings.canonical_event_batch_size <= settings.canonical_event_queue_size:
@@ -562,6 +773,30 @@ def _validate_safe_values(settings: Settings) -> None:
         )
     if settings.canonical_event_flush_interval_seconds <= 0:
         raise ValueError("CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS must be positive")
+    if settings.public_event_symbol_limit_per_profile <= 0:
+        raise ValueError("PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE must be positive")
+    if settings.public_event_rest_interval_seconds <= 0:
+        raise ValueError("PUBLIC_EVENT_REST_INTERVAL_SECONDS must be positive")
+    if settings.public_metadata_refresh_seconds <= 0:
+        raise ValueError("PUBLIC_METADATA_REFRESH_SECONDS must be positive")
+    if not (
+        0 < settings.public_event_reconnect_initial_seconds
+        <= settings.public_event_reconnect_max_seconds
+    ):
+        raise ValueError("public event reconnect bounds are invalid")
+    if (
+        settings.live_private_stream_reconciliation_max_age_seconds
+        <= settings.live_reconciliation_interval_seconds
+    ):
+        raise ValueError(
+            "LIVE_PRIVATE_STREAM_RECONCILIATION_MAX_AGE_SECONDS must exceed "
+            "LIVE_RECONCILIATION_INTERVAL_SECONDS"
+        )
+    if not (
+        0 < settings.live_private_stream_reconnect_initial_seconds
+        <= settings.live_private_stream_reconnect_max_seconds
+    ):
+        raise ValueError("live private stream reconnect bounds are invalid")
     if settings.run_mode == "paper_test" and settings.execution_mode != "paper":
         raise ValueError("paper_test requires EXECUTION_MODE=paper")
     if settings.run_mode == "paper_test" and settings.market_data_mode not in {
@@ -574,10 +809,65 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError("live run mode requires APP_ENV=production")
         if not settings.database_url.startswith("postgresql+asyncpg://"):
             raise ValueError("live run mode requires PostgreSQL via postgresql+asyncpg")
+        database_password = urlsplit(settings.database_url).password or ""
+        if len(database_password) < 24 or database_password.upper().startswith(
+            ("CHANGE_ME", "REPLACE_ME")
+        ):
+            raise ValueError("live PostgreSQL requires a strong authenticated DATABASE_URL")
+        if not settings.internal_service_tls_required:
+            raise ValueError("live run mode requires INTERNAL_SERVICE_TLS_REQUIRED=true")
+        if not settings.redis_url.startswith("rediss://"):
+            raise ValueError("live run mode requires Redis TLS via rediss")
+        redis_password = settings.redis_password.get_secret_value()
+        if (
+            not settings.redis_username.strip()
+            or len(redis_password) < 32
+            or redis_password.upper().startswith(("CHANGE_ME", "REPLACE_ME"))
+        ):
+            raise ValueError(
+                "live Redis requires authenticated REDIS_USERNAME and a strong REDIS_PASSWORD"
+            )
+        if any(
+            not value.strip()
+            for value in (
+                settings.internal_tls_ca_file,
+                settings.internal_tls_client_cert_file,
+                settings.internal_tls_client_key_file,
+            )
+        ):
+            raise ValueError("live internal service TLS certificate paths are incomplete")
         if settings.execution_mode != "live":
             raise ValueError("live run mode requires EXECUTION_MODE=live")
         if settings.market_data_mode != "live_public":
             raise ValueError("live run mode requires MARKET_DATA_MODE=live_public")
+        if not settings.control_plane_security_enabled:
+            raise ValueError("live run mode requires CONTROL_PLANE_SECURITY_ENABLED=true")
+        jwt_secret = settings.control_plane_jwt_secret.get_secret_value()
+        if len(jwt_secret) < 32 or jwt_secret.strip().upper().startswith(
+            ("CHANGE_ME", "REPLACE_ME")
+        ):
+            raise ValueError("live run mode requires a 32-byte CONTROL_PLANE_JWT_SECRET")
+        if not settings.control_plane_jwt_issuer.strip():
+            raise ValueError("CONTROL_PLANE_JWT_ISSUER cannot be empty")
+        if not settings.control_plane_jwt_audience.strip():
+            raise ValueError("CONTROL_PLANE_JWT_AUDIENCE cannot be empty")
+        if not settings.control_plane_mtls_required:
+            raise ValueError("live run mode requires CONTROL_PLANE_MTLS_REQUIRED=true")
+        if not settings.control_plane_mtls_certificate_header_required:
+            raise ValueError(
+                "live run mode requires CONTROL_PLANE_MTLS_CERTIFICATE_HEADER_REQUIRED=true"
+            )
+        if settings.control_plane_rate_limit_backend != "redis":
+            raise ValueError("live run mode requires CONTROL_PLANE_RATE_LIMIT_BACKEND=redis")
+        if not settings.control_plane_mtls_trusted_proxy_values:
+            raise ValueError("CONTROL_PLANE_MTLS_TRUSTED_PROXIES cannot be empty")
+        if not settings.control_plane_mtls_client_fingerprint_values or any(
+            not _is_hex_credential(value, 64)
+            for value in settings.control_plane_mtls_client_fingerprint_values
+        ):
+            raise ValueError(
+                "live run mode requires valid CONTROL_PLANE_MTLS_CLIENT_FINGERPRINTS"
+            )
         if not settings.live_armed:
             raise ValueError("live run mode requires LIVE_ARMED=true")
         if settings.live_trading_confirm != "I_UNDERSTAND_THIS_SENDS_REAL_ORDERS":
@@ -757,6 +1047,28 @@ def _validate_safe_values(settings: Settings) -> None:
             for key, value in settings.live_credentials(venue).items():
                 if value != value.strip() or any(character in value for character in "\r\n"):
                     raise ValueError(f"invalid whitespace in {venue} credential {key}")
+        credential_identifiers = {
+            venue: (
+                settings.live_credentials(venue).get("walletAddress", "")
+                if venue == "hyperliquid"
+                else settings.live_credentials(venue).get("apiKey", "")
+            )
+            for venue in settings.live_venue_values
+        }
+        credential_policy = load_live_credential_policy(
+            policy_json=settings.live_credential_policy_json.get_secret_value(),
+            policy_file=settings.live_credential_policy_file,
+        )
+        verify_live_credential_policy(
+            credential_policy,
+            venues=settings.live_venue_values,
+            credential_identifiers=credential_identifiers,
+            expected_egress_ip=settings.live_expected_egress_ip,
+            maximum_age_days=settings.live_credential_max_age_days,
+            maximum_attestation_age_hours=(
+                settings.live_credential_attestation_max_age_hours
+            ),
+        )
         if "hyperliquid" in settings.live_venue_values:
             wallet = settings.hyperliquid_wallet_address.get_secret_value()
             private_key = settings.hyperliquid_private_key.get_secret_value()
@@ -781,6 +1093,10 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError("LIVE_CLIENT_ORDER_PREFIX must be alphanumeric")
     if not 2 <= len(settings.live_client_order_prefix) <= 8:
         raise ValueError("LIVE_CLIENT_ORDER_PREFIX must contain 2 to 8 characters")
+    if settings.control_plane_rate_limit_per_minute <= 0:
+        raise ValueError("CONTROL_PLANE_RATE_LIMIT_PER_MINUTE must be positive")
+    if settings.control_plane_idempotency_ttl_seconds < 60:
+        raise ValueError("CONTROL_PLANE_IDEMPOTENCY_TTL_SECONDS must be at least 60")
     for field_name in (
         "live_default_position_size_usd",
         "live_max_order_notional_usd",
@@ -866,6 +1182,8 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError("PAPER_MARKET_PERSIST_INTERVAL_SECONDS must be positive")
     if settings.okx_funding_symbol_limit <= 0:
         raise ValueError("OKX_FUNDING_SYMBOL_LIMIT must be positive")
+    if settings.htx_funding_symbol_limit <= 0:
+        raise ValueError("HTX_FUNDING_SYMBOL_LIMIT must be positive")
     if not settings.paper_venue_values:
         raise ValueError("PAPER_VENUES must contain at least one venue")
     if settings.paper_position_size_usd <= 0:

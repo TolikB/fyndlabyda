@@ -24,12 +24,43 @@ from funding_arbitrage.backtest.events import (
     MarketEvent,
     OpportunityEvent,
     PositionEvent,
+    sort_events,
+)
+from funding_arbitrage.backtest.fills import (
+    DeterministicFillModel,
+    ExecutionFrame,
+    FillModelPolicy,
+    FillSimulationResult,
+    SimulatedOrder,
+    SimulatedOrderState,
+    SimulatedOrderType,
 )
 from funding_arbitrage.config import Settings
 from funding_arbitrage.database.models import (
     FundingHistoryRecord,
     InstrumentRecord,
     MarketCandleRecord,
+)
+from funding_arbitrage.domain.decisions import (
+    ExecutionInstruction,
+    ExecutionPlan,
+    ExecutionReport,
+    MarketRegime,
+    RiskDecision,
+    SignalIntent,
+    SignalLeg,
+    SignalType,
+)
+from funding_arbitrage.domain.events import (
+    InstrumentKey,
+    LiquidityRole,
+    OrderStatus,
+    OrderType,
+    Side,
+    TradingMode,
+)
+from funding_arbitrage.domain.events import (
+    InstrumentType as DomainInstrumentType,
 )
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
@@ -39,6 +70,11 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBook,
     OrderBookLevel,
     Ticker,
+)
+from funding_arbitrage.execution.oms import (
+    DurableOMS,
+    InMemoryOMSJournal,
+    OMSOrderSnapshot,
 )
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.opportunity.calculator import CostEngine
@@ -53,6 +89,12 @@ from funding_arbitrage.opportunity.settlement import (
     target_settlements,
 )
 from funding_arbitrage.risk.engine import RiskEngine, RiskLimits
+from funding_arbitrage.services.decision_pipeline import (
+    DecisionPipeline,
+    DecisionPipelineResult,
+    PipelineStatus,
+    StrictSignalValidator,
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +123,21 @@ class _ReplayPosition:
     entry_fees: Decimal = Decimal("0")
     entry_spread: Decimal = Decimal("0")
     entry_slippage: Decimal = Decimal("0")
+
+
+@dataclass(frozen=True)
+class _ReplayExecution:
+    fully_filled: bool
+    requested_notional: Decimal
+    filled_notional: Decimal
+    fee: Decimal
+    spread: Decimal
+    slippage: Decimal
+    fill_count: int
+    completed_at: datetime
+    status: str
+    rejection_reason: str | None = None
+    leg_results: tuple[FillSimulationResult, ...] = ()
 
 
 class HistoricalMarketReplay:
@@ -239,6 +296,8 @@ class HistoricalMarketReplay:
                 minimum_cash_reserve_percent=settings.paper_reserve_percent,
             )
         )
+        oms_journal = InMemoryOMSJournal()
+        replay_oms = DurableOMS(oms_journal)
         candles_by_time: dict[datetime, list[MarketCandleRecord]] = defaultdict(list)
         for candle in dataset.candles:
             candles_by_time[_candle_timestamp(candle)].append(candle)
@@ -288,6 +347,7 @@ class HistoricalMarketReplay:
         realized = Decimal("0")
         snapshot_pnl_curve: list[tuple[datetime, Decimal]] = []
         serial = 0
+        attempt_serial = 0
         for timestamp in sorted(candles_by_time):
             current_candles = candles_by_time[timestamp]
             for candle in current_candles:
@@ -408,7 +468,13 @@ class HistoricalMarketReplay:
                 )
                 if should_close:
                     realized += _close_position(
-                        position, timestamp, last_prices, events, attribution
+                        position,
+                        timestamp,
+                        last_prices,
+                        events,
+                        attribution,
+                        snapshot,
+                        settings,
                     )
                     positions.pop(key)
             locked = sum(
@@ -451,32 +517,81 @@ class HistoricalMarketReplay:
                 )
                 if required > spendable:
                     continue
+                attempt_serial += 1
+                attempt_id = f"{profile}-attempt-{attempt_serial:08d}"
+                prepared = _prepare_replay_orders(
+                    replay_oms,
+                    opportunity,
+                    quote,
+                    snapshot,
+                    timestamp,
+                    attempt_id,
+                    profile,
+                    settings,
+                )
+                execution = _simulate_replay_execution(
+                    opportunity,
+                    quote,
+                    snapshot,
+                    timestamp,
+                    settings,
+                    closing=False,
+                )
+                _apply_replay_oms(
+                    replay_oms,
+                    prepared.orders,
+                    execution,
+                    (opportunity.price_a, opportunity.price_b),
+                    timestamp,
+                )
+                if not execution.fully_filled:
+                    events.append(
+                        FillEvent(
+                            event_id=f"{profile}:entry-rejected:{attempt_id}",
+                            timestamp=execution.completed_at,
+                            position_id=attempt_id,
+                            notional=execution.filled_notional,
+                            requested_notional=execution.requested_notional,
+                            fee=execution.fee,
+                            spread=execution.spread,
+                            slippage=execution.slippage,
+                            status=execution.status,
+                            rejection_reason=execution.rejection_reason,
+                            fill_count=execution.fill_count,
+                            latency_ms=settings.backtest_order_latency_ms,
+                        )
+                    )
+                    if execution.filled_notional > 0:
+                        raise RuntimeError(
+                            "partial multi-leg entry requires explicit unwind replay"
+                        )
+                    continue
                 serial += 1
                 position_id = f"{profile}-{serial:08d}"
                 target_events = target_settlement_events(
-                    opportunity, snapshot, timestamp
+                    opportunity, snapshot, execution.completed_at
                 )
                 targets = tuple(sorted(set(target_events.values())))
                 position = _ReplayPosition(
                     position_id=position_id,
                     opportunity=opportunity,
                     capital=quote.capital,
-                    opened_at=timestamp,
+                    opened_at=execution.completed_at,
                     entry_a=opportunity.price_a,
                     entry_b=opportunity.price_b,
                     target_settlements=targets,
                     target_funding_events=target_events,
-                    entry_fees=quote.costs.entry_fees,
-                    entry_spread=quote.costs.entry_spread,
-                    entry_slippage=quote.costs.entry_slippage,
+                    entry_fees=execution.fee,
+                    entry_spread=execution.spread,
+                    entry_slippage=execution.slippage,
                 )
                 key = _opportunity_key(opportunity)
                 positions[key] = position
                 occupied_exposures.add(exposure_key)
                 entry_cost = (
-                    quote.costs.entry_fees
-                    + quote.costs.entry_spread
-                    + quote.costs.entry_slippage
+                    execution.fee
+                    + execution.spread
+                    + execution.slippage
                     + quote.costs.legging_cost
                 )
                 realized -= entry_cost
@@ -485,25 +600,26 @@ class HistoricalMarketReplay:
                     [
                         OpportunityEvent(
                             event_id=f"{profile}:opportunity:{position_id}",
-                            timestamp=timestamp,
+                            timestamp=execution.completed_at,
                             opportunity_id=position_id,
                             net_edge=opportunity.net_edge,
                         ),
                         FillEvent(
                             event_id=f"{profile}:entry:{position_id}",
-                            timestamp=timestamp,
+                            timestamp=execution.completed_at,
                             position_id=position_id,
-                            notional=quote.capital * Decimal("2"),
-                            fee=quote.costs.entry_fees,
-                            spread=quote.costs.entry_spread,
-                            slippage=(
-                                quote.costs.entry_slippage
-                                + quote.costs.legging_cost
-                            ),
+                            notional=execution.filled_notional,
+                            requested_notional=execution.requested_notional,
+                            fee=execution.fee,
+                            spread=execution.spread,
+                            slippage=execution.slippage + quote.costs.legging_cost,
+                            status=execution.status,
+                            fill_count=execution.fill_count,
+                            latency_ms=settings.backtest_order_latency_ms,
                         ),
                         PositionEvent(
                             event_id=f"{profile}:open:{position_id}",
-                            timestamp=timestamp,
+                            timestamp=execution.completed_at,
                             position_id=position_id,
                             state="OPEN",
                         ),
@@ -519,12 +635,21 @@ class HistoricalMarketReplay:
             end_at = max(candles_by_time)
             for key, position in list(positions.items()):
                 realized += _close_position(
-                    position, end_at, last_prices, events, attribution
+                    position,
+                    end_at,
+                    last_prices,
+                    events,
+                    attribution,
+                    snapshot,
+                    settings,
                 )
                 positions.pop(key)
             # The final snapshot represents the forced-close state, matching the
             # event ledger and avoiding a dangling unrealized mark at dataset end.
-            snapshot_pnl_curve[-1] = (end_at, realized)
+            snapshot_pnl_curve[-1] = (
+                end_at,
+                _event_ledger_net_profit(events, initial_capital),
+            )
         snapshot_timestamps = tuple(timestamp for timestamp, _ in snapshot_pnl_curve)
         max_snapshot_gap = max(
             (
@@ -548,7 +673,318 @@ class HistoricalMarketReplay:
             snapshot_pnl_delta=(
                 snapshot_pnl_curve[-1][1] if snapshot_pnl_curve else Decimal("0")
             ),
+            oms_event_count=len(oms_journal.entries),
+            oms_terminal_order_count=sum(
+                1
+                for order in replay_oms.orders.values()
+                if order.status
+                in {
+                    OrderStatus.FILLED,
+                    OrderStatus.REJECTED,
+                    OrderStatus.CANCELLED,
+                    OrderStatus.EXPIRED,
+                }
+            ),
         )
+
+
+@dataclass(frozen=True)
+class _ReplayRiskEvaluator:
+    decision: RiskDecision
+
+    def evaluate(self, intent: SignalIntent, now: datetime) -> RiskDecision:
+        if intent.signal_id != self.decision.signal_id:
+            raise ValueError("replay risk signal identity mismatch")
+        if now != self.decision.decided_at:
+            raise ValueError("replay risk clock mismatch")
+        return self.decision
+
+
+@dataclass(frozen=True)
+class _ReplayExecutionPlanner:
+    plan: ExecutionPlan
+
+    def build(
+        self, intent: SignalIntent, decision: RiskDecision, now: datetime
+    ) -> ExecutionPlan:
+        if intent.signal_id != self.plan.signal_id:
+            raise ValueError("replay planner signal identity mismatch")
+        if decision.decision_id != self.plan.risk_decision_id:
+            raise ValueError("replay planner risk identity mismatch")
+        if now != self.plan.created_at:
+            raise ValueError("replay planner clock mismatch")
+        return self.plan
+
+
+def _prepare_replay_orders(
+    oms: DurableOMS,
+    opportunity: Opportunity,
+    quote: SizeQuote,
+    snapshot: MarketSnapshot,
+    timestamp: datetime,
+    attempt_id: str,
+    profile: str,
+    settings: Settings,
+) -> DecisionPipelineResult:
+    current = _utc(timestamp)
+    raw_legs = (
+        (
+            opportunity.venue_a,
+            opportunity.symbol_a,
+            opportunity.leg_a_type,
+            opportunity.leg_a_side,
+            opportunity.price_a,
+        ),
+        (
+            opportunity.venue_b or opportunity.venue_a,
+            opportunity.symbol_b,
+            opportunity.leg_b_type,
+            opportunity.leg_b_side,
+            opportunity.price_b,
+        ),
+    )
+    instruments: list[InstrumentKey] = []
+    sides: list[Side] = []
+    quantities: list[Decimal] = []
+    for venue, symbol, raw_type, raw_side, reference_price in raw_legs:
+        if not symbol:
+            raise ValueError("replay decision requires exact exchange symbols")
+        instrument_type = InstrumentType(raw_type)
+        normalized = snapshot.instrument(venue, symbol, instrument_type)
+        if normalized is None or not normalized.is_active:
+            raise ValueError("replay decision requires active typed instrument metadata")
+        instruments.append(
+            InstrumentKey(
+                venue=normalized.exchange,
+                exchange_symbol=normalized.exchange_symbol,
+                base_asset=normalized.base_asset,
+                quote_asset=normalized.quote_asset,
+                instrument_type=DomainInstrumentType(normalized.instrument_type.value),
+                settlement_asset=normalized.settlement_asset,
+                expiry=normalized.expiry,
+            )
+        )
+        sides.append(Side(raw_side.upper()))
+        quantities.append(quote.capital / reference_price)
+    maximum_quantity = max(quantities)
+    execution_seconds = max(
+        1,
+        int(settings.backtest_order_latency_ms / Decimal("1000")) + 1,
+    )
+    expires_at = current + timedelta(seconds=execution_seconds)
+    signal_id = f"replay:{profile}:{attempt_id}"
+    intent = SignalIntent(
+        signal_id=signal_id,
+        strategy_id=str(opportunity.strategy),
+        mode=TradingMode.REPLAY,
+        signal_type=SignalType.FUNDING_BASIS,
+        primary_instrument=instruments[0],
+        side=sides[0],
+        legs=tuple(
+            SignalLeg(
+                instrument=instrument,
+                side=side,
+                hedge_ratio=quantity / maximum_quantity,
+            )
+            for instrument, side, quantity in zip(
+                instruments, sides, quantities, strict=True
+            )
+        ),
+        regime=MarketRegime.UNKNOWN,
+        quality_score=max(
+            Decimal("0"),
+            min(Decimal("100"), opportunity.opportunity_score),
+        ),
+        confidence=max(
+            Decimal("0"),
+            min(
+                Decimal("1"),
+                opportunity.funding_stability_score / Decimal("100"),
+            ),
+        ),
+        expected_holding_seconds=max(
+            1,
+            int(opportunity.expected_holding_hours * Decimal("3600")),
+        ),
+        expected_move_bps=opportunity.net_edge * Decimal("10000"),
+        estimated_cost_bps=(
+            quote.costs.total
+            / (quote.capital * Decimal("2"))
+            * Decimal("10000")
+        ),
+        created_at=current,
+        expires_at=expires_at,
+        evidence={
+            "dataset_version": profile,
+            "opportunity_id": opportunity.id,
+            "attempt_id": attempt_id,
+        },
+    )
+    decision_id = f"replay-risk:{attempt_id}"
+    decision = RiskDecision(
+        signal_id=signal_id,
+        decision_id=decision_id,
+        decided_at=current,
+        approved=True,
+        approved_risk_usdt=max(quote.costs.total, Decimal("0.00000001")),
+        approved_quantity=maximum_quantity,
+        approved_notional=sum(
+            (
+                quantity * price
+                for quantity, price in zip(
+                    quantities,
+                    (opportunity.price_a, opportunity.price_b),
+                    strict=True,
+                )
+            ),
+            Decimal("0"),
+        ),
+        max_slippage_bps=Decimal("10000"),
+        max_execution_seconds=execution_seconds,
+        correlation_multiplier=Decimal("1"),
+        drawdown_multiplier=Decimal("1"),
+        regime_multiplier=Decimal("1"),
+    )
+    plan = ExecutionPlan(
+        plan_id=f"replay-plan:{attempt_id}",
+        signal_id=signal_id,
+        risk_decision_id=decision_id,
+        mode=TradingMode.REPLAY,
+        created_at=current,
+        expires_at=expires_at,
+        instructions=tuple(
+            ExecutionInstruction(
+                leg_index=index,
+                instrument=instrument,
+                side=side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+            )
+            for index, (instrument, side, quantity) in enumerate(
+                zip(instruments, sides, quantities, strict=True)
+            )
+        ),
+    )
+    pipeline = DecisionPipeline(
+        validator=StrictSignalValidator(),
+        risk=_ReplayRiskEvaluator(decision),
+        planner=_ReplayExecutionPlanner(plan),
+        oms=oms,
+        adapters={},
+    )
+    prepared = pipeline.prepare(intent, now=current)
+    if prepared.status is not PipelineStatus.PREPARED:
+        raise RuntimeError("replay execution contract was not prepared")
+    return prepared
+
+
+def _apply_replay_oms(
+    oms: DurableOMS,
+    orders: tuple[OMSOrderSnapshot, ...],
+    execution: _ReplayExecution,
+    reference_prices: tuple[Decimal, Decimal],
+    timestamp: datetime,
+) -> None:
+    ordered = tuple(sorted(orders, key=lambda item: item.leg_index))
+    for index, order in enumerate(ordered):
+        submitted = oms.prepare_submit(order.client_order_id, timestamp)
+        simulated = (
+            execution.leg_results[index]
+            if index < len(execution.leg_results)
+            else None
+        )
+        if simulated is None:
+            filled_quantity = (
+                submitted.requested_quantity
+                if execution.fully_filled
+                else Decimal("0")
+            )
+            status = (
+                OrderStatus.FILLED
+                if execution.fully_filled
+                else OrderStatus.REJECTED
+            )
+            average_price = (
+                reference_prices[index] if execution.fully_filled else None
+            )
+            fee = (
+                execution.fee / Decimal(len(ordered))
+                if execution.fully_filled
+                else Decimal("0")
+            )
+            exchange_timestamp = execution.completed_at
+            liquidity_role = LiquidityRole.UNKNOWN
+            rejection = execution.rejection_reason
+        else:
+            filled_quantity = simulated.filled_quantity
+            status = (
+                OrderStatus.FILLED
+                if simulated.state is SimulatedOrderState.FILLED
+                else OrderStatus.PARTIALLY_FILLED
+                if simulated.filled_quantity > 0
+                else OrderStatus.REJECTED
+            )
+            average_price = (
+                sum(
+                    (fill.price * fill.quantity for fill in simulated.fills),
+                    Decimal("0"),
+                )
+                / simulated.filled_quantity
+                if simulated.filled_quantity > 0
+                else None
+            )
+            fee = simulated.total_fee
+            exchange_timestamp = max(
+                (fill.timestamp for fill in simulated.fills),
+                default=execution.completed_at,
+            )
+            liquidity_role = (
+                simulated.fills[0].liquidity_role
+                if simulated.fills
+                else LiquidityRole.UNKNOWN
+            )
+            rejection = (
+                simulated.rejection_reason.value
+                if simulated.rejection_reason is not None
+                else simulated.state.value
+            )
+        oms.apply_report(
+            ExecutionReport(
+                client_order_id=submitted.client_order_id,
+                exchange_order_id=f"replay:{submitted.client_order_id}",
+                status=status,
+                requested_quantity=submitted.requested_quantity,
+                filled_quantity=filled_quantity,
+                average_fill_price=average_price,
+                fee=fee,
+                fee_asset="USDT" if fee > 0 else None,
+                liquidity_role=liquidity_role,
+                exchange_timestamp=exchange_timestamp,
+                receive_timestamp=max(execution.completed_at, exchange_timestamp),
+                reject_code=rejection if status is OrderStatus.REJECTED else None,
+            )
+        )
+
+
+def _event_ledger_net_profit(
+    events: list[BacktestEvent], initial_capital: Decimal
+) -> Decimal:
+    """Reconcile the final snapshot with the canonical event-ledger aggregation."""
+
+    monthly: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for event in sort_events(events):
+        pnl = Decimal("0")
+        if isinstance(event, FundingEvent):
+            pnl = event.pnl if event.pnl is not None else event.rate * event.notional
+        elif isinstance(event, FillEvent):
+            pnl = -(event.fee + event.spread + event.slippage)
+        elif isinstance(event, PositionEvent):
+            pnl = event.pnl
+        monthly[event.timestamp.strftime("%Y-%m")] += pnl
+    # Mirror calculate_metrics exactly, including Decimal context rounding when
+    # adding PnL to a materially larger capital base.
+    ending_equity = initial_capital + sum(monthly.values(), Decimal("0"))
+    return ending_equity - initial_capital
 
 
 def _funding_points(
@@ -906,12 +1342,201 @@ def _funding_payment(
     return position.capital * point.funding_rate * direction
 
 
+def _simulate_replay_execution(
+    opportunity: Opportunity,
+    quote: SizeQuote,
+    snapshot: MarketSnapshot,
+    timestamp: datetime,
+    settings: Settings,
+    *,
+    closing: bool,
+    entry_prices: tuple[Decimal, Decimal] | None = None,
+) -> _ReplayExecution:
+    if not settings.backtest_fill_model_enabled:
+        fee = quote.costs.exit_fees if closing else quote.costs.entry_fees
+        spread = quote.costs.exit_spread if closing else quote.costs.entry_spread
+        slippage = (
+            quote.costs.exit_slippage if closing else quote.costs.entry_slippage
+        )
+        return _ReplayExecution(
+            fully_filled=True,
+            requested_notional=quote.capital * Decimal("2"),
+            filled_notional=quote.capital * Decimal("2"),
+            fee=fee,
+            spread=spread,
+            slippage=slippage,
+            fill_count=2,
+            completed_at=timestamp,
+            status="FILLED",
+        )
+
+    leg_data = (
+        (
+            opportunity.venue_a,
+            opportunity.symbol_a,
+            opportunity.leg_a_type,
+            opportunity.leg_a_side,
+            (entry_prices[0] if entry_prices is not None else opportunity.price_a),
+        ),
+        (
+            opportunity.venue_b or opportunity.venue_a,
+            opportunity.symbol_b,
+            opportunity.leg_b_type,
+            opportunity.leg_b_side,
+            (entry_prices[1] if entry_prices is not None else opportunity.price_b),
+        ),
+    )
+    prepared: list[
+        tuple[str, str, InstrumentType, Side, Decimal, OrderBook]
+    ] = []
+    for venue, symbol, raw_type, raw_side, reference_price in leg_data:
+        if symbol is None:
+            return _rejected_execution(
+                quote.capital * Decimal("2"), timestamp, "MISSING_SYMBOL"
+            )
+        instrument_type = InstrumentType(raw_type)
+        side = Side(raw_side)
+        if closing:
+            side = Side.SELL if side is Side.BUY else Side.BUY
+        book = snapshot.orderbook(venue, symbol, instrument_type)
+        if book is None or not book.bids or not book.asks:
+            return _rejected_execution(
+                quote.capital * Decimal("2"), timestamp, "MISSING_ORDER_BOOK"
+            )
+        book_age = (timestamp - _utc(book.timestamp)).total_seconds()
+        if book_age > snapshot.stale_after_seconds:
+            return _rejected_execution(
+                quote.capital * Decimal("2"), timestamp, "STALE_ORDER_BOOK"
+            )
+        if venue in snapshot.incomplete_venues:
+            return _rejected_execution(
+                quote.capital * Decimal("2"), timestamp, "VENUE_UNAVAILABLE"
+            )
+        prepared.append(
+            (venue, symbol, instrument_type, side, reference_price, book)
+        )
+
+    results = []
+    requested_notional = Decimal("0")
+    active_at = timestamp + timedelta(milliseconds=settings.backtest_order_latency_ms)
+    for index, (venue, symbol, _instrument_type, side, reference_price, book) in enumerate(
+        prepared,
+        start=1,
+    ):
+        quantity = quote.capital / reference_price
+        requested_notional += quantity * reference_price
+        maker_fee, taker_fee = settings.fee_schedules.get(
+            venue, (Decimal("0"), Decimal("0"))
+        )
+        instrument = snapshot.instrument(venue, symbol, _instrument_type)
+        policy = FillModelPolicy(
+            maker_fee_bps=maker_fee * Decimal("10000"),
+            taker_fee_bps=taker_fee * Decimal("10000"),
+            order_latency_ms=settings.backtest_order_latency_ms,
+            cancel_latency_ms=settings.backtest_cancel_latency_ms,
+            maximum_participation_rate=(
+                settings.backtest_maximum_participation_rate
+            ),
+            passive_fill_ratio=settings.backtest_passive_fill_ratio,
+            impact_coefficient_bps=settings.backtest_impact_coefficient_bps,
+            minimum_quantity=(
+                instrument.min_order_size
+                if instrument is not None
+                else Decimal("0")
+            ),
+        )
+        result = DeterministicFillModel(policy).simulate(
+            SimulatedOrder(
+                order_id=(
+                    f"replay-{'close' if closing else 'open'}-{index}-"
+                    f"{venue}-{symbol}-{timestamp.isoformat()}"
+                ),
+                side=side,
+                order_type=SimulatedOrderType.MARKET,
+                quantity=quantity,
+                submitted_at=timestamp,
+            ),
+            [
+                ExecutionFrame(
+                    timestamp=active_at,
+                    best_bid=book.bids[0].price,
+                    best_ask=book.asks[0].price,
+                    bid_depth=sum(
+                        (level.quantity for level in book.bids), Decimal("0")
+                    ),
+                    ask_depth=sum(
+                        (level.quantity for level in book.asks), Decimal("0")
+                    ),
+                    venue_available=True,
+                )
+            ],
+        )
+        results.append(result)
+
+    fills = tuple(fill for result in results for fill in result.fills)
+    fully_filled = all(
+        result.state is SimulatedOrderState.FILLED for result in results
+    )
+    rejection_reason = next(
+        (
+            result.rejection_reason.value
+            if result.rejection_reason is not None
+            else result.state.value
+            for result in results
+            if result.state is not SimulatedOrderState.FILLED
+        ),
+        None,
+    )
+    return _ReplayExecution(
+        fully_filled=fully_filled,
+        requested_notional=requested_notional,
+        filled_notional=sum((fill.notional for fill in fills), Decimal("0")),
+        fee=sum((fill.fee for fill in fills), Decimal("0")),
+        spread=sum((fill.spread_cost for fill in fills), Decimal("0")),
+        slippage=sum((fill.impact_cost for fill in fills), Decimal("0")),
+        fill_count=len(fills),
+        completed_at=max(
+            (fill.timestamp for fill in fills), default=active_at
+        ),
+        status=(
+            "FILLED"
+            if fully_filled
+            else "PARTIALLY_FILLED"
+            if fills
+            else "REJECTED"
+        ),
+        rejection_reason=rejection_reason,
+        leg_results=tuple(results),
+    )
+
+
+def _rejected_execution(
+    requested_notional: Decimal,
+    timestamp: datetime,
+    reason: str,
+) -> _ReplayExecution:
+    return _ReplayExecution(
+        fully_filled=False,
+        requested_notional=requested_notional,
+        filled_notional=Decimal("0"),
+        fee=Decimal("0"),
+        spread=Decimal("0"),
+        slippage=Decimal("0"),
+        fill_count=0,
+        completed_at=timestamp,
+        status="REJECTED",
+        rejection_reason=reason,
+    )
+
+
 def _close_position(
     position: _ReplayPosition,
     timestamp: datetime,
     prices: dict[tuple[str, str, str], Decimal],
     events: list[BacktestEvent],
     attribution: dict[str, dict[str, dict[str, Decimal]]],
+    snapshot: MarketSnapshot,
+    settings: Settings,
 ) -> Decimal:
     opportunity = position.opportunity
     exit_a = prices.get(
@@ -932,7 +1557,21 @@ def _close_position(
         opportunity.size_quotes,
         key=lambda value: abs(value.capital - position.capital),
     )
-    borrow_cost = _accrued_borrow_cost(position, timestamp)
+    execution = _simulate_replay_execution(
+        opportunity,
+        quote,
+        snapshot,
+        timestamp,
+        settings,
+        closing=True,
+        entry_prices=(position.entry_a, position.entry_b),
+    )
+    if not execution.fully_filled:
+        raise RuntimeError(
+            "historical replay cannot close a multi-leg position without full fills"
+        )
+    close_timestamp = execution.completed_at
+    borrow_cost = _accrued_borrow_cost(position, close_timestamp)
     market_pnl = pnl_a + pnl_b
     basis_pnl = (
         market_pnl
@@ -944,9 +1583,9 @@ def _close_position(
         "funding_pnl": position.funding_pnl,
         "basis_pnl": basis_pnl,
         "price_mismatch_pnl": mismatch_pnl,
-        "fees": position.entry_fees + quote.costs.exit_fees,
-        "spread": position.entry_spread + quote.costs.exit_spread,
-        "slippage": position.entry_slippage + quote.costs.exit_slippage,
+        "fees": position.entry_fees + execution.fee,
+        "spread": position.entry_spread + execution.spread,
+        "slippage": position.entry_slippage + execution.slippage,
         "borrow_cost": borrow_cost,
         "legging_cost": quote.costs.legging_cost,
         "other_costs": quote.costs.network_cost,
@@ -979,16 +1618,20 @@ def _close_position(
         [
             FillEvent(
                 event_id=f"close:{position.position_id}",
-                timestamp=timestamp,
+                timestamp=close_timestamp,
                 position_id=position.position_id,
-                notional=position.capital * Decimal("2"),
-                fee=quote.costs.exit_fees,
-                spread=quote.costs.exit_spread,
-                slippage=quote.costs.exit_slippage,
+                notional=execution.filled_notional,
+                requested_notional=execution.requested_notional,
+                fee=execution.fee,
+                spread=execution.spread,
+                slippage=execution.slippage,
+                status=execution.status,
+                fill_count=execution.fill_count,
+                latency_ms=settings.backtest_order_latency_ms,
             ),
             PositionEvent(
                 event_id=f"position-close:{position.position_id}",
-                timestamp=timestamp,
+                timestamp=close_timestamp,
                 position_id=position.position_id,
                 state="CLOSED",
                 pnl=market_pnl - borrow_cost - quote.costs.network_cost,
@@ -996,9 +1639,9 @@ def _close_position(
         ]
     )
     exit_cost = (
-        quote.costs.exit_fees
-        + quote.costs.exit_spread
-        + quote.costs.exit_slippage
+        execution.fee
+        + execution.spread
+        + execution.slippage
         + borrow_cost
         + quote.costs.network_cost
     )

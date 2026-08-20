@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from funding_arbitrage.domain.decisions import ExecutionReport, RiskDecision
 from funding_arbitrage.domain.events import (
@@ -16,7 +17,14 @@ from funding_arbitrage.domain.events import (
     OrderType,
     Side,
 )
-from funding_arbitrage.execution.oms import DurableOMS, JsonlOMSJournal, OMSOrderSnapshot
+from funding_arbitrage.execution.oms import (
+    DurableOMS,
+    InMemoryOMSJournal,
+    JsonlOMSJournal,
+    OMSEventType,
+    OMSJournalEntry,
+    OMSOrderSnapshot,
+)
 
 NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 
@@ -252,3 +260,193 @@ def test_journal_rejects_sequence_and_order_version_corruption(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="sequence"):
         DurableOMS(JsonlOMSJournal(path))
+
+def test_snapshot_and_in_memory_journal_reject_corrupt_state(tmp_path: Path) -> None:
+    order = _create(DurableOMS(JsonlOMSJournal(tmp_path / "snapshot.jsonl")))
+
+    with pytest.raises(ValidationError, match="cannot exceed requested"):
+        OMSOrderSnapshot.model_validate(
+            order.model_dump() | {"filled_quantity": Decimal("2.01")}
+        )
+
+    journal = InMemoryOMSJournal()
+    entry = OMSJournalEntry(
+        sequence=2,
+        event_id="event-2",
+        event_type=OMSEventType.CREATED,
+        timestamp=NOW,
+        snapshot=order,
+    )
+    with pytest.raises(ValueError, match="sequence is not contiguous"):
+        journal.append(entry)
+
+
+def test_oms_rejects_invalid_submit_report_cancel_and_expiry_states(
+    tmp_path: Path,
+) -> None:
+    oms = DurableOMS(JsonlOMSJournal(tmp_path / "lifecycle.jsonl"))
+    with pytest.raises(ValueError, match="limit order requires limit price"):
+        oms.create_order(
+            _decision(),
+            leg_index=1,
+            instrument=_instrument(),
+            side=Side.BUY,
+            order_type=OrderType.STOP_LIMIT,
+            quantity=Decimal("1"),
+            limit_price=None,
+            reduce_only=False,
+            timestamp=NOW,
+        )
+
+    order = _create(oms)
+    prepared = oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+    assert oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=2)) == prepared
+    with pytest.raises(ValueError, match="order is not cancellable"):
+        oms.prepare_cancel(order.client_order_id, NOW + timedelta(seconds=2))
+
+    mismatched = _report(
+        order.client_order_id,
+        OrderStatus.ACKNOWLEDGED,
+        "0",
+        offset=2,
+    ).model_copy(update={"requested_quantity": Decimal("3")})
+    with pytest.raises(ValueError, match="requested quantity mismatch"):
+        oms.apply_report(mismatched)
+
+    acknowledged = oms.apply_report(
+        _report(order.client_order_id, OrderStatus.ACKNOWLEDGED, "0", offset=3)
+    )
+    with pytest.raises(ValueError, match="only NEW"):
+        oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=4))
+
+    partial = oms.apply_report(
+        _report(
+            order.client_order_id,
+            OrderStatus.ACKNOWLEDGED,
+            "0.5",
+            offset=5,
+        )
+    )
+    assert partial.status is OrderStatus.PARTIALLY_FILLED
+    backwards = _report(
+        order.client_order_id,
+        OrderStatus.PARTIALLY_FILLED,
+        "0.4",
+        offset=6,
+    )
+    with pytest.raises(ValueError, match="moved backwards"):
+        oms.apply_report(backwards)
+
+    invalid_transition = _report(
+        order.client_order_id,
+        OrderStatus.ACKNOWLEDGED,
+        "0.5",
+        offset=7,
+    )
+    with pytest.raises(ValueError, match="invalid OMS report transition"):
+        oms.apply_report(invalid_transition)
+
+    pending = oms.prepare_cancel(order.client_order_id, NOW + timedelta(seconds=8))
+    assert oms.prepare_cancel(order.client_order_id, NOW + timedelta(seconds=9)) == pending
+    with pytest.raises(ValueError, match="order cannot expire"):
+        oms.expire(order.client_order_id, NOW + timedelta(seconds=10))
+    assert acknowledged.exchange_order_id == "venue-order-7"
+
+    with pytest.raises(ValueError, match="unknown OMS client order ID"):
+        oms.prepare_submit("missing", NOW)
+
+
+def test_unknown_and_reconciliation_are_strict_and_terminal_safe(tmp_path: Path) -> None:
+    terminal_oms = DurableOMS(JsonlOMSJournal(tmp_path / "terminal.jsonl"))
+    terminal = _create(terminal_oms)
+    terminal_oms.prepare_submit(terminal.client_order_id, NOW + timedelta(seconds=1))
+    terminal_oms.apply_report(
+        _report(terminal.client_order_id, OrderStatus.FILLED, "2", offset=2)
+    )
+    with pytest.raises(ValueError, match="terminal order cannot become unknown"):
+        terminal_oms.mark_unknown(terminal.client_order_id, NOW, "late timeout")
+
+    oms = DurableOMS(JsonlOMSJournal(tmp_path / "reconcile.jsonl"))
+    order = _create(oms)
+    with pytest.raises(ValueError, match="only unknown/cancel-pending"):
+        oms.start_reconciliation(order.client_order_id, NOW)
+    with pytest.raises(ValueError, match="order is not reconciling"):
+        oms.apply_reconciliation(
+            order.client_order_id,
+            status=OrderStatus.ACKNOWLEDGED,
+            filled_quantity=Decimal("0"),
+            exchange_order_id=None,
+            timestamp=NOW,
+        )
+
+    oms.prepare_submit(order.client_order_id, NOW)
+    oms.mark_unknown(order.client_order_id, NOW, "timeout")
+    oms.start_reconciliation(order.client_order_id, NOW)
+    for status in (
+        OrderStatus.UNKNOWN,
+        OrderStatus.RECONCILING,
+        OrderStatus.SUBMITTING,
+    ):
+        with pytest.raises(ValueError, match="observable venue state"):
+            oms.apply_reconciliation(
+                order.client_order_id,
+                status=status,
+                filled_quantity=Decimal("0"),
+                exchange_order_id=None,
+                timestamp=NOW,
+            )
+    with pytest.raises(ValueError, match="fill quantity is invalid"):
+        oms.apply_reconciliation(
+            order.client_order_id,
+            status=OrderStatus.ACKNOWLEDGED,
+            filled_quantity=Decimal("2.01"),
+            exchange_order_id=None,
+            timestamp=NOW,
+        )
+
+    filled = oms.apply_reconciliation(
+        order.client_order_id,
+        status=OrderStatus.ACKNOWLEDGED,
+        filled_quantity=Decimal("2"),
+        exchange_order_id="venue-reconciled",
+        timestamp=NOW,
+    )
+    assert filled.status is OrderStatus.FILLED
+    assert filled.exchange_order_id == "venue-reconciled"
+
+
+def test_recovery_rejects_sequence_first_version_and_version_gaps() -> None:
+    valid = InMemoryOMSJournal()
+    oms = DurableOMS(valid)
+    order = _create(oms)
+    oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+
+    sequence_gap = InMemoryOMSJournal()
+    sequence_gap.entries = [
+        valid.entries[0].model_copy(update={"sequence": 2})
+    ]
+    with pytest.raises(ValueError, match="replay sequence gap"):
+        DurableOMS(sequence_gap)
+
+    first_version_gap = InMemoryOMSJournal()
+    first_version_gap.entries = [
+        valid.entries[0].model_copy(
+            update={
+                "snapshot": valid.entries[0].snapshot.model_copy(update={"version": 2})
+            }
+        )
+    ]
+    with pytest.raises(ValueError, match="first order version"):
+        DurableOMS(first_version_gap)
+
+    order_version_gap = InMemoryOMSJournal()
+    order_version_gap.entries = [
+        valid.entries[0],
+        valid.entries[1].model_copy(
+            update={
+                "snapshot": valid.entries[1].snapshot.model_copy(update={"version": 3})
+            }
+        ),
+    ]
+    with pytest.raises(ValueError, match="order version gap"):
+        DurableOMS(order_version_gap)

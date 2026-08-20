@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from time import monotonic
 from typing import Any
 
 from funding_arbitrage.config import Settings
@@ -39,17 +41,26 @@ class CcxtTradingAdapter(TradingAdapter):
         exchange: Any,
         *,
         margin_mode: str,
+        fee_cache_ttl_seconds: float = 300.0,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
+        if fee_cache_ttl_seconds <= 0:
+            raise ValueError("fee cache TTL must be positive")
         self.name = name
         self.exchange = exchange
         self.margin_mode = margin_mode
+        self.fee_cache_ttl_seconds = fee_cache_ttl_seconds
+        self._clock = clock
         self._markets_loaded = False
         self._configured_derivatives: set[tuple[str, InstrumentType, int, str]] = set()
-        self._taker_fee_cache: dict[tuple[str, InstrumentType], Decimal] = {}
+        self._taker_fee_cache: dict[
+            tuple[str, InstrumentType], tuple[Decimal, float]
+        ] = {}
 
     async def initialize(self) -> None:
         self.exchange.check_required_credentials()
         await self.exchange.load_markets(reload=True)
+        self._taker_fee_cache.clear()
         self._markets_loaded = True
 
     async def close(self) -> None:
@@ -284,8 +295,10 @@ class CcxtTradingAdapter(TradingAdapter):
         self, exchange_symbol: str, instrument_type: InstrumentType
     ) -> Decimal:
         key = (exchange_symbol, instrument_type)
-        if key in self._taker_fee_cache:
-            return self._taker_fee_cache[key]
+        now = self._clock()
+        cached = self._taker_fee_cache.get(key)
+        if cached is not None and now - cached[1] <= self.fee_cache_ttl_seconds:
+            return cached[0]
         if not self.exchange.has.get("fetchTradingFee"):
             raise RuntimeError(f"{self.name} cannot verify the account taker fee")
         market = self._market(exchange_symbol, instrument_type)
@@ -293,7 +306,7 @@ class CcxtTradingAdapter(TradingAdapter):
         fee = _decimal(row.get("taker"))
         if fee < 0 or fee > Decimal("0.02"):
             raise RuntimeError(f"{self.name} returned an invalid taker fee")
-        self._taker_fee_cache[key] = fee
+        self._taker_fee_cache[key] = (fee, now)
         return fee
 
     async def normalize_base_quantity(

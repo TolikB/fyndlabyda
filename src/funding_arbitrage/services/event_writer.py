@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -20,7 +21,15 @@ class EventWriterFailed(RuntimeError):
     """Raw-event durability failed; market-data consumers must fail closed."""
 
 
+@dataclass(frozen=True)
+class _QueuedEvent:
+    event: EventEnvelope[Any]
+    durable: asyncio.Future[None]
+
+
 class CanonicalEventWriter:
+    """Batch events while acknowledging producers only after the DB commit."""
+
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
@@ -35,7 +44,7 @@ class CanonicalEventWriter:
         if flush_interval_seconds <= 0:
             raise ValueError("event writer flush interval must be positive")
         self.session_factory = session_factory
-        self.queue: asyncio.Queue[EventEnvelope[Any] | object] = asyncio.Queue(maxsize=queue_size)
+        self.queue: asyncio.Queue[_QueuedEvent | object] = asyncio.Queue(maxsize=queue_size)
         self.batch_size = batch_size
         self.flush_interval_seconds = flush_interval_seconds
         self.append_batch = append_batch
@@ -62,27 +71,53 @@ class CanonicalEventWriter:
         self._task = asyncio.create_task(self._run(), name="canonical-event-writer")
 
     async def publish(self, event: EventEnvelope[Any]) -> None:
+        """Return only after the event is committed or an existing ID is verified."""
+
+        loop = asyncio.get_running_loop()
+        durable: asyncio.Future[None] = loop.create_future()
+        queued = _QueuedEvent(event=event, durable=durable)
         async with self._publish_lock:
             self._raise_if_failed()
             task = self._task
             if not self._accepting or task is None:
                 raise RuntimeError("canonical event writer is not accepting events")
-            put_task = asyncio.create_task(self.queue.put(event))
+            put_task = asyncio.create_task(self.queue.put(queued))
             try:
-                done, _ = await asyncio.wait({put_task, task}, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(
+                    {put_task, task}, return_when=asyncio.FIRST_COMPLETED
+                )
                 if task in done:
-                    if not put_task.done():
-                        put_task.cancel()
-                        await asyncio.gather(put_task, return_exceptions=True)
+                    await _cancel(put_task)
                     self._raise_if_failed()
                     raise EventWriterFailed("canonical event writer stopped unexpectedly")
                 await put_task
             except BaseException:
-                if not put_task.done():
-                    put_task.cancel()
-                    await asyncio.gather(put_task, return_exceptions=True)
+                await _cancel(put_task)
                 raise
-            self._raise_if_failed()
+
+        task = self._task
+        if task is None:
+            raise EventWriterFailed("canonical event writer stopped before durability ACK")
+        durable_task = asyncio.create_task(_await_durable(durable))
+        try:
+            done, _ = await asyncio.wait(
+                {durable_task, task}, return_when=asyncio.FIRST_COMPLETED
+            )
+        except BaseException:
+            await _cancel(durable_task)
+            raise
+        if durable_task in done:
+            try:
+                await durable_task
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                self._raise_if_failed()
+                raise
+            return
+        await _cancel(durable_task)
+        self._raise_if_failed()
+        raise EventWriterFailed("canonical event writer stopped before durability ACK")
 
     async def stop(self) -> None:
         task = self._task
@@ -92,11 +127,11 @@ class CanonicalEventWriter:
             if self._accepting:
                 self._accepting = False
                 put_task = asyncio.create_task(self.queue.put(_STOP))
-                done, _ = await asyncio.wait({put_task, task}, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(
+                    {put_task, task}, return_when=asyncio.FIRST_COMPLETED
+                )
                 if task in done:
-                    if not put_task.done():
-                        put_task.cancel()
-                        await asyncio.gather(put_task, return_exceptions=True)
+                    await _cancel(put_task)
                     await task
                 await put_task
         try:
@@ -106,15 +141,20 @@ class CanonicalEventWriter:
         self._raise_if_failed()
 
     async def _run(self) -> None:
+        active: list[_QueuedEvent] = []
         try:
             stopping = False
             while not stopping:
                 item = await self.queue.get()
                 if item is _STOP:
                     break
-                batch: list[EventEnvelope[Any]] = [cast(EventEnvelope[Any], item)]
-                deadline = asyncio.get_running_loop().time() + self.flush_interval_seconds
-                while len(batch) < self.batch_size:
+                if not isinstance(item, _QueuedEvent):
+                    raise RuntimeError("canonical event queue item is invalid")
+                active = [item]
+                deadline = (
+                    asyncio.get_running_loop().time() + self.flush_interval_seconds
+                )
+                while len(active) < self.batch_size:
                     timeout = deadline - asyncio.get_running_loop().time()
                     if timeout <= 0:
                         break
@@ -125,16 +165,53 @@ class CanonicalEventWriter:
                     if item is _STOP:
                         stopping = True
                         break
-                    batch.append(cast(EventEnvelope[Any], item))
+                    if not isinstance(item, _QueuedEvent):
+                        raise RuntimeError("canonical event queue item is invalid")
+                    active.append(item)
                 async with self.session_factory() as session:
-                    self.persisted_events += await self.append_batch(session, batch)
+                    inserted = await self.append_batch(
+                        session, [queued.event for queued in active]
+                    )
+                self.persisted_events += inserted
+                for queued in active:
+                    if not queued.durable.done():
+                        queued.durable.set_result(None)
+                active = []
         except BaseException as exc:
             self._failure = exc
             self._accepting = False
+            self._fail_waiters(active, exc)
+            self._drain_waiters(exc)
             raise
+
+    @staticmethod
+    def _fail_waiters(waiters: Sequence[_QueuedEvent], error: BaseException) -> None:
+        for queued in waiters:
+            if not queued.durable.done():
+                queued.durable.set_exception(error)
+
+    def _drain_waiters(self, error: BaseException) -> None:
+        while True:
+            try:
+                item = self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if isinstance(item, _QueuedEvent) and not item.durable.done():
+                item.durable.set_exception(error)
 
     def _raise_if_failed(self) -> None:
         if self._failure is not None:
             raise EventWriterFailed(
                 f"canonical event writer failed: {type(self._failure).__name__}"
             ) from self._failure
+
+
+async def _await_durable(future: asyncio.Future[None]) -> None:
+    await future
+
+
+async def _cancel(task: asyncio.Task[object]) -> None:
+    if task.done():
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)

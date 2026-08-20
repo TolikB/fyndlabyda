@@ -98,6 +98,24 @@ def test_okx_snapshot_delta_heartbeat_and_sequence_reset() -> None:
     assert reset.book.bids[0].price == Decimal("100.6")
 
 
+def test_okx_deprecated_checksum_is_not_treated_as_authoritative() -> None:
+    normalizer = OkxOrderBookNormalizer(INSTRUMENT, depth=20)
+    payload = _row(
+        sequence=100,
+        previous_sequence=-1,
+        bids=[["100", "2"]],
+        asks=[["101", "4"]],
+    )
+    payload["checksum"] = "deprecated-non-authoritative-field"
+
+    update = normalizer.apply(payload, action="snapshot")
+
+    assert update is not None
+    assert update.result.status is BookApplyStatus.APPLIED
+    assert update.book is not None
+    assert update.book.sequence == 100
+
+
 def test_okx_gap_is_journalable_but_not_tradable() -> None:
     normalizer = OkxOrderBookNormalizer(INSTRUMENT, depth=20)
     normalizer.apply(

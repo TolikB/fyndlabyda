@@ -144,3 +144,71 @@ def test_instrument_mismatch_is_rejected_without_corrupting_current_book() -> No
     assert result.reason == "instrument_mismatch"
     assert book.sequence == 100
     assert book.tradable is True
+
+def test_checksum_failure_is_transactional_and_requires_snapshot_recovery() -> None:
+    book = LocalOrderBook(
+        INSTRUMENT,
+        checksum_validator=lambda _snapshot, checksum: checksum == "good",
+    )
+    initial = _snapshot().model_copy(update={"checksum": "good"})
+    assert book.apply_snapshot(initial).status is BookApplyStatus.APPLIED
+    authoritative = book.snapshot()
+
+    bad_delta = _delta(first=101, last=101, previous=100).model_copy(
+        update={"checksum": "bad"}
+    )
+    mismatch = book.apply_delta(bad_delta)
+
+    assert mismatch.status is BookApplyStatus.GAP
+    assert mismatch.reason == "delta_checksum_mismatch"
+    assert mismatch.sequence == 100
+    assert book.snapshot() == authoritative
+    assert book.tradable is False
+    blocked = book.apply_delta(
+        _delta(first=101, last=101, previous=100).model_copy(
+            update={"checksum": "good"}
+        )
+    )
+    assert blocked.reason == "snapshot_required"
+
+    recovery = _snapshot(sequence=200).model_copy(update={"checksum": "good"})
+    assert book.apply_snapshot(recovery).status is BookApplyStatus.APPLIED
+    assert book.sequence == 200
+    assert book.tradable is True
+
+
+def test_bad_snapshot_checksum_preserves_previous_authoritative_levels() -> None:
+    book = LocalOrderBook(
+        INSTRUMENT,
+        checksum_validator=lambda _snapshot, checksum: checksum == "good",
+    )
+    assert book.apply_snapshot(
+        _snapshot().model_copy(update={"checksum": "good"})
+    ).status is BookApplyStatus.APPLIED
+    authoritative = book.snapshot()
+    replacement = _snapshot(sequence=200).model_copy(
+        update={
+            "bids": (BookLevel(price=Decimal("98"), quantity=Decimal("9")),),
+            "checksum": "bad",
+        }
+    )
+
+    mismatch = book.apply_snapshot(replacement)
+
+    assert mismatch.status is BookApplyStatus.GAP
+    assert mismatch.reason == "snapshot_checksum_mismatch"
+    assert mismatch.sequence == 100
+    assert book.snapshot() == authoritative
+    assert book.tradable is False
+
+def test_checksum_bearing_payload_without_validator_fails_closed() -> None:
+    book = LocalOrderBook(INSTRUMENT)
+
+    result = book.apply_snapshot(
+        _snapshot().model_copy(update={"checksum": "venue-checksum"})
+    )
+
+    assert result.status is BookApplyStatus.GAP
+    assert result.reason == "snapshot_checksum_mismatch"
+    assert result.sequence is None
+    assert book.tradable is False

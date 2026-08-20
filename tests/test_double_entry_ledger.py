@@ -6,13 +6,16 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from funding_arbitrage.domain.events import Side
 from funding_arbitrage.portfolio.ledger import (
+    GENESIS_HASH,
     DoubleEntryLedger,
     JsonlLedgerJournal,
     LedgerAccountKind,
     LedgerPosting,
+    LedgerTransaction,
 )
 
 NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
@@ -330,3 +333,233 @@ def test_hash_chain_restart_and_tamper_detection(tmp_path: Path) -> None:
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="hash mismatch"):
         _ledger(path)
+
+def _balanced_postings() -> tuple[LedgerPosting, LedgerPosting]:
+    return (
+        LedgerPosting(
+            account="ASSET:CASH:BYBIT",
+            account_kind=LedgerAccountKind.ASSET,
+            asset="USDT",
+            amount=Decimal("1"),
+        ),
+        LedgerPosting(
+            account="EQUITY:CONTRIBUTED",
+            account_kind=LedgerAccountKind.EQUITY,
+            asset="USDT",
+            amount=Decimal("-1"),
+        ),
+    )
+
+
+def test_ledger_models_reject_blank_zero_prefix_and_reference_values() -> None:
+    base = {
+        "account": "ASSET:CASH",
+        "account_kind": LedgerAccountKind.ASSET,
+        "asset": "USDT",
+        "amount": Decimal("1"),
+    }
+    for update, message in (
+        ({"account": "  "}, "identity cannot be blank"),
+        ({"amount": Decimal("0")}, "amount cannot be zero"),
+        ({"account": "EXPENSE:FEES"}, "prefix disagrees"),
+    ):
+        with pytest.raises(ValidationError, match=message):
+            LedgerPosting.model_validate(base | update)
+
+    with pytest.raises(ValidationError, match="reference cannot be blank"):
+        LedgerTransaction(
+            sequence=1,
+            transaction_id="transaction-1",
+            timestamp=NOW,
+            reference_type=" ",
+            reference_id="reference-1",
+            description="invalid blank reference",
+            postings=_balanced_postings(),
+            previous_hash=GENESIS_HASH,
+            transaction_hash=GENESIS_HASH,
+        )
+
+
+def test_ledger_operations_reject_non_economic_inputs(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path / "invalid-operations.jsonl")
+
+    with pytest.raises(ValueError, match="deposit must be positive"):
+        ledger.deposit(
+            transaction_id="zero-deposit",
+            venue="bybit",
+            asset="USDT",
+            amount=Decimal("0"),
+            timestamp=NOW,
+        )
+    with pytest.raises(ValueError, match="fill fee cannot be negative"):
+        ledger.book_spot_fill(
+            transaction_id="negative-fee",
+            fill_id="fill-negative",
+            venue="bybit",
+            position_id="position-1",
+            strategy_id="strategy-1",
+            side=Side.BUY,
+            base_asset="BTC",
+            quote_asset="USDT",
+            quantity=Decimal("1"),
+            price=Decimal("100"),
+            fee_amount=Decimal("-0.01"),
+            fee_asset="USDT",
+            timestamp=NOW,
+        )
+    with pytest.raises(ValueError, match="no PnL to realize"):
+        ledger.realize_spot_clearing(
+            transaction_id="empty-clearing",
+            venue="bybit",
+            position_id="position-1",
+            strategy_id="strategy-1",
+            quote_asset="USDT",
+            timestamp=NOW,
+        )
+    with pytest.raises(ValueError, match="funding cashflow cannot be zero"):
+        ledger.post_funding(
+            transaction_id="zero-funding",
+            venue="bybit",
+            position_id="position-1",
+            strategy_id="strategy-1",
+            asset="USDT",
+            amount=Decimal("0"),
+            timestamp=NOW,
+        )
+    with pytest.raises(ValueError, match="realized PnL cannot be zero"):
+        ledger.post_realized_pnl(
+            transaction_id="zero-pnl",
+            venue="bybit",
+            position_id="position-1",
+            strategy_id="strategy-1",
+            asset="USDT",
+            amount=Decimal("0"),
+            timestamp=NOW,
+        )
+    with pytest.raises(ValueError, match="unsupported ledger expense"):
+        ledger.post_expense(
+            transaction_id="bad-expense",
+            venue="bybit",
+            asset="USDT",
+            amount=Decimal("1"),
+            component="unknown",
+            timestamp=NOW,
+        )
+    with pytest.raises(ValueError, match="cannot exceed sent amount"):
+        ledger.complete_transfer(
+            transaction_id="bad-transfer",
+            transfer_id="transfer-1",
+            source_venue="bybit",
+            destination_venue="gate",
+            asset="USDT",
+            amount_sent=Decimal("10"),
+            amount_received=Decimal("11"),
+            timestamp=NOW,
+        )
+    with pytest.raises(ValueError, match="mark is unchanged"):
+        ledger.mark_unrealized_pnl(
+            transaction_id="unchanged-mark",
+            venue="bybit",
+            position_id="position-1",
+            strategy_id="strategy-1",
+            asset="USDT",
+            target_unrealized_pnl=Decimal("0"),
+            timestamp=NOW,
+        )
+
+
+def test_ledger_snapshot_and_apply_reject_in_memory_corruption(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path / "snapshot.jsonl")
+    ledger.balances[("ASSET:CASH:BYBIT", "USDT")] = Decimal("1")
+    with pytest.raises(ValueError, match="global trial balance failed"):
+        ledger.snapshot()
+
+    source = _ledger(tmp_path / "source.jsonl")
+    transaction = source.deposit(
+        transaction_id="deposit-1",
+        venue="bybit",
+        asset="USDT",
+        amount=Decimal("10"),
+        timestamp=NOW,
+    )
+    sequence_target = _ledger(tmp_path / "sequence-target.jsonl")
+    with pytest.raises(ValueError, match="apply sequence gap"):
+        sequence_target._apply(transaction.model_copy(update={"sequence": 2}))
+
+    with pytest.raises(ValueError, match="apply hash chain mismatch"):
+        source._apply(
+            transaction.model_copy(
+                update={"sequence": 2, "previous_hash": "f" * 64}
+            )
+        )
+
+
+class DuplicateReplayJournal:
+    def __init__(self, transaction: LedgerTransaction) -> None:
+        self.transaction = transaction
+
+    def load(self) -> tuple[LedgerTransaction, ...]:
+        return self.transaction, self.transaction
+
+    def append(self, transaction: LedgerTransaction) -> None:
+        raise AssertionError("replay journal must not append")
+
+
+def test_ledger_replay_rejects_duplicate_transaction_id(tmp_path: Path) -> None:
+    source = _ledger(tmp_path / "duplicate-source.jsonl")
+    transaction = source.deposit(
+        transaction_id="deposit-1",
+        venue="bybit",
+        asset="USDT",
+        amount=Decimal("10"),
+        timestamp=NOW,
+    )
+
+    with pytest.raises(ValueError, match="duplicate ledger transaction ID"):
+        DoubleEntryLedger(DuplicateReplayJournal(transaction))  # type: ignore[arg-type]
+
+
+def test_jsonl_ledger_rejects_sequence_and_previous_hash_corruption(
+    tmp_path: Path,
+) -> None:
+    def _two_transactions(path: Path) -> list[dict[str, object]]:
+        ledger = _ledger(path)
+        ledger.deposit(
+            transaction_id="deposit-1",
+            venue="bybit",
+            asset="USDT",
+            amount=Decimal("10"),
+            timestamp=NOW,
+        )
+        ledger.post_expense(
+            transaction_id="fee-1",
+            venue="bybit",
+            asset="USDT",
+            amount=Decimal("1"),
+            component="fees",
+            timestamp=NOW + timedelta(seconds=1),
+        )
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+
+    sequence_path = tmp_path / "bad-sequence.jsonl"
+    sequence_rows = _two_transactions(sequence_path)
+    sequence_rows[1]["sequence"] = 3
+    sequence_path.write_text(
+        "\n".join(json.dumps(row) for row in sequence_rows) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sequence is not contiguous"):
+        JsonlLedgerJournal(sequence_path).load()
+
+    hash_path = tmp_path / "bad-previous-hash.jsonl"
+    hash_rows = _two_transactions(hash_path)
+    hash_rows[1]["previous_hash"] = GENESIS_HASH
+    hash_path.write_text(
+        "\n".join(json.dumps(row) for row in hash_rows) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="previous hash mismatch"):
+        JsonlLedgerJournal(hash_path).load()

@@ -94,6 +94,7 @@ class EventKind(StrEnum):
     CANDLE = "CANDLE"
     FUNDING_SNAPSHOT = "FUNDING_SNAPSHOT"
     OPEN_INTEREST_SNAPSHOT = "OPEN_INTEREST_SNAPSHOT"
+    LIQUIDATION_TICK = "LIQUIDATION_TICK"
     ORDER_UPDATE = "ORDER_UPDATE"
     FILL = "FILL"
     POSITION_SNAPSHOT = "POSITION_SNAPSHOT"
@@ -293,12 +294,20 @@ class OpenInterestSnapshot(ExchangeTimedModel):
         return self
 
 
+class LiquidationTick(ExchangeTimedModel):
+    instrument: InstrumentKey
+    liquidation_id: str = Field(min_length=1)
+    side: Side | None = None
+    price: Decimal = Field(gt=0)
+    quantity: Decimal = Field(gt=0)
+
+
 class OrderUpdate(ExchangeTimedModel):
     instrument: InstrumentKey
     client_order_id: str = Field(min_length=1)
     exchange_order_id: str | None = None
     status: OrderStatus
-    side: Side
+    side: Side | None = None
     order_type: OrderType
     requested_quantity: Decimal = Field(gt=0)
     filled_quantity: Decimal = Field(ge=0)
@@ -319,7 +328,7 @@ class FillEvent(ExchangeTimedModel):
     fill_id: str = Field(min_length=1)
     client_order_id: str = Field(min_length=1)
     exchange_order_id: str = Field(min_length=1)
-    side: Side
+    side: Side | None = None
     price: Decimal = Field(gt=0)
     quantity: Decimal = Field(gt=0)
     fee_amount: Decimal = Field(ge=0)
@@ -365,6 +374,7 @@ EventPayload = (
     | Candle
     | FundingSnapshot
     | OpenInterestSnapshot
+    | LiquidationTick
     | OrderUpdate
     | FillEvent
     | PositionSnapshot
@@ -378,6 +388,7 @@ PAYLOAD_KIND: dict[type[BaseModel], EventKind] = {
     Candle: EventKind.CANDLE,
     FundingSnapshot: EventKind.FUNDING_SNAPSHOT,
     OpenInterestSnapshot: EventKind.OPEN_INTEREST_SNAPSHOT,
+    LiquidationTick: EventKind.LIQUIDATION_TICK,
     OrderUpdate: EventKind.ORDER_UPDATE,
     FillEvent: EventKind.FILL,
     PositionSnapshot: EventKind.POSITION_SNAPSHOT,
@@ -395,6 +406,7 @@ class EventMetadata(BaseModel):
     receive_timestamp: datetime
     monotonic_ns: int = Field(ge=0)
     sequence_id: str = Field(min_length=1)
+    native_sequence: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
     source: str = Field(min_length=1)
     correlation_id: str = Field(min_length=1)
     payload_version: int = Field(ge=1)
@@ -439,12 +451,17 @@ def deterministic_event_id(
     exchange_timestamp: datetime,
     payload: BaseModel,
 ) -> str:
-    """Return a stable event ID for replay, reconnect, and duplicate suppression."""
+    """Return a stable logical ID independent of corrected payload content.
 
+    ``payload`` remains in the signature for producer compatibility. Its checksum
+    is stored separately by the journal, where conflicting content for the same
+    logical event is rejected as an integrity collision.
+    """
+
+    del payload
     canonical = {
         "exchange_timestamp": _utc(exchange_timestamp).isoformat(),
         "kind": kind.value,
-        "payload": payload.model_dump(mode="json"),
         "sequence_id": sequence_id,
         "source": source,
     }

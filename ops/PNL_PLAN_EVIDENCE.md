@@ -63,11 +63,10 @@ goal remains open until every row is proven, including the last two rows.
 | Clean 72-hour canary | Boundary `2026-08-14T08:40:00Z`; earliest audit `2026-08-17T08:41:00Z` | Pending time gate |
 | 30-day out-of-sample acceptance | Same boundary; earliest audit `2026-09-13T08:41:00Z` | Pending time gate |
 
-## Current safety boundary
+## Historical safety boundary (inactive)
 
-- VM: Contabo `169.58.161.34` only.
-- Project directory: `/opt/funding_arbitrage_paper`.
-- Compose project: `funding_arbitrage_paper`.
+- The previous VM deployment was deleted. The runtime observations below are
+  historical evidence only and are not an active deployment target.
 - Project-scoped container inspection proves enforced limits: app `0.70 CPU /
   640 MiB`, PostgreSQL `0.25 CPU / 384 MiB`, and Redis `0.10 CPU / 96 MiB`.
   The observed memory snapshot was approximately `292 MiB`, `179 MiB`, and

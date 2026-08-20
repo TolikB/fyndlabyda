@@ -274,6 +274,27 @@ async def test_htx_instruments_and_funding_use_dynamic_exact_settlement() -> Non
             return httpx.Response(200, json={"status": "ok", "data": [_htx_contract()]})
         if request.url.path == "/v1/common/symbols":
             return httpx.Response(200, json={"status": "ok", "data": [_htx_spot()]})
+        if request.url.path == "/linear-swap-api/v1/swap_index":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "data": [
+                        {"contract_code": "BTC-USDT", "index_price": "99990"}
+                    ],
+                },
+            )
+        if request.url.path == "/index/market/history/linear_swap_mark_price_kline":
+            assert request.url.params["contract_code"] == "BTC-USDT"
+            assert request.url.params["period"] == "1min"
+            assert request.url.params["size"] == "1"
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "data": [{"id": 1735689600, "close": "100010"}],
+                },
+            )
         assert request.url.path == "/linear-swap-api/v1/swap_batch_funding_rate"
         return httpx.Response(
             200,
@@ -284,6 +305,7 @@ async def test_htx_instruments_and_funding_use_dynamic_exact_settlement() -> Non
                         "contract_code": "BTC-USDT",
                         "funding_rate": "0.0003",
                         "funding_time": "1735704000000",
+                        "next_funding_time": "1735718400000",
                     },
                     {
                         "contract_code": "BTC-USDT-250103",
@@ -312,7 +334,9 @@ async def test_htx_instruments_and_funding_use_dynamic_exact_settlement() -> Non
     assert spot.step_size == Decimal("0.00001")
     assert len(funding) == 1
     assert funding[0].funding_interval_hours == Decimal("4")
-    assert funding[0].next_funding_time == datetime(2025, 1, 1, 4, tzinfo=UTC)
+    assert funding[0].next_funding_time == datetime(2025, 1, 1, 8, tzinfo=UTC)
+    assert funding[0].mark_price == Decimal("100010")
+    assert funding[0].index_price == Decimal("99990")
 
 
 def test_htx_gzip_websocket_parsers_keep_contract_quantities_in_base_units() -> None:

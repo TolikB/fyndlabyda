@@ -534,6 +534,10 @@ def test_historical_strategy_replay_is_deterministic_and_no_lookahead() -> None:
     first = replay.simulate(dataset, "candidate", Decimal("15000"), settings)
     second = replay.simulate(dataset, "candidate", Decimal("15000"), settings)
 
+    assert first.oms_event_count == second.oms_event_count
+    assert first.oms_terminal_order_count == second.oms_terminal_order_count
+    assert first.oms_terminal_order_count > 0
+    assert first.oms_event_count >= first.oms_terminal_order_count * 3
     assert first.position_count > 0
     assert first.attribution["strategy"]
     entry_fills = [
@@ -542,7 +546,13 @@ def test_historical_strategy_replay_is_deterministic_and_no_lookahead() -> None:
         if event.event_type == "fill" and event.event_id.startswith("candidate:entry:")
     ]
     assert entry_fills
+    assert all(event.status == "FILLED" for event in entry_fills)
+    assert all(event.fill_count == 2 for event in entry_fills)
+    assert all(event.requested_notional is not None for event in entry_fills)
+    assert all(event.latency_ms == settings.backtest_order_latency_ms for event in entry_fills)
     assert max(event.notional for event in entry_fills) <= Decimal("3000")
+    event_ids = [event.event_id for event in first.events]
+    assert len(event_ids) == len(set(event_ids))
     assert [event.model_dump(mode="json") for event in first.events] == [
         event.model_dump(mode="json") for event in second.events
     ]
@@ -690,7 +700,10 @@ def test_historical_snapshots_mark_open_positions_and_reconcile_final_pnl(
         dataset,
         "baseline",
         Decimal("1000"),
-        Settings(PAPER_POSITION_SIZE_USD="250"),
+        Settings(
+            PAPER_POSITION_SIZE_USD="250",
+            BACKTEST_FILL_MODEL_ENABLED=False,
+        ),
     )
     event_result = BacktestEngine().run(
         replay.events,

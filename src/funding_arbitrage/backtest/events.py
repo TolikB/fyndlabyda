@@ -54,6 +54,12 @@ class FillEvent(BacktestEvent):
     fee: Decimal
     spread: Decimal = Decimal("0")
     slippage: Decimal = Decimal("0")
+    requested_notional: Decimal | None = None
+    status: str = "FILLED"
+    rejection_reason: str | None = None
+    fill_count: int = 1
+    latency_ms: int = 0
+    cancel_race_fill: bool = False
 
 
 class PositionEvent(BacktestEvent):

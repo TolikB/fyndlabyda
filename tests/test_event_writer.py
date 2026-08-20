@@ -103,11 +103,9 @@ async def test_writer_rejects_publish_before_start_and_after_storage_failure() -
     with pytest.raises(RuntimeError, match="not accepting"):
         await writer.publish(_event(1))
     writer.start()
-    await writer.publish(_event(1))
-    for _ in range(100):
-        if writer.failed:
-            break
-        await asyncio.sleep(0)
+    with pytest.raises(EventWriterFailed, match="OSError"):
+        await writer.publish(_event(1))
+    assert writer.failed
 
     with pytest.raises(EventWriterFailed, match="OSError"):
         await writer.publish(_event(2))
@@ -141,15 +139,16 @@ async def test_writer_flushes_publish_already_in_flight_before_stop_sentinel() -
         append_batch=controlled_append,
     )
     writer.start()
-    await writer.publish(_event(1))
+    first_publish = asyncio.create_task(writer.publish(_event(1)))
     await first_batch_started.wait()
-    await writer.publish(_event(2))
+    second_publish = asyncio.create_task(writer.publish(_event(2)))
+    await asyncio.sleep(0)
     final_publish = asyncio.create_task(writer.publish(_event(3)))
     await asyncio.sleep(0)
     stop = asyncio.create_task(writer.stop())
 
     release_first_batch.set()
-    await final_publish
+    await asyncio.gather(first_publish, second_publish, final_publish)
     await stop
     await engine.dispose()
 

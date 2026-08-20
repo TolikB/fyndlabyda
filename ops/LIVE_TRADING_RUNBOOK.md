@@ -55,6 +55,20 @@ smallest useful `LIVE_VENUES` subset, and insert only those venue credentials.
 The exact confirmation phrase and `LIVE_ARMED=true` are mandatory. Keep the
 initial $100 per-leg limit and 1x leverage for the canary.
 
+Create `secrets/exchange/credential-policy.json` (directory mode `0700`, file
+mode `0600`, owned by the runtime operator). The versioned policy must contain
+exactly one entry for every `LIVE_VENUES` value. Each entry records the SHA-256
+fingerprint of that venue's API key (the Hyperliquid wallet address), a
+non-main dedicated subaccount ID, permissions exactly `read` and `trade`, the
+fixed egress host as a `/32` or `/128`, issue/expiry and recent verification
+timestamps, and explicit `withdrawals_enabled=false` plus
+`transfers_enabled=false`. Set the same host in `LIVE_EXPECTED_EGRESS_IP`.
+Live startup fails closed if the policy is missing, mismatched, stale, expired,
+over 90 days, over-privileged, or bound to another key/IP. Re-check the key in
+the exchange console and refresh `verified_at` immediately before each live
+start; configuration evidence does not replace the exchange's own permission
+screen.
+
 For the first credential/reconciliation startup, override
 `LIVE_AUTOTRADE=false`. This prevents the entry pipeline before fee lookups,
 derivative configuration, intent creation, or order submission. Confirm private

@@ -34,6 +34,7 @@ class ReconciliationResult:
     reason: str | None
     balances: dict[str, VenueBalance]
     positions: tuple[VenuePosition, ...]
+    open_orders: tuple[TradingOrderResult, ...]
     details: dict[str, object]
 
 
@@ -249,6 +250,7 @@ class LiveReconciler:
             reason=reason,
             balances=balances,
             positions=tuple(actual_positions),
+            open_orders=tuple(open_orders),
             details=details,
         )
         async with self.session_factory() as session:

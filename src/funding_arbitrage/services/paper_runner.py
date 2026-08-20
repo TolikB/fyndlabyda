@@ -35,6 +35,7 @@ from funding_arbitrage.exchanges.base.models import (
     FundingSnapshot,
     InstrumentType,
 )
+from funding_arbitrage.exchanges.public_events import PublicEventSupervisor
 from funding_arbitrage.execution.base import PaperFill
 from funding_arbitrage.execution.paper import PaperTradingExecutor
 from funding_arbitrage.market_data.collector import MarketDataCollector, MarketSnapshot
@@ -146,10 +147,12 @@ class PaperTestRunner:
         runtime: RuntimeState,
         session_factory: async_sessionmaker[AsyncSession],
         collector: MarketDataCollector | None = None,
+        public_events: PublicEventSupervisor | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
         self.session_factory = session_factory
+        self.public_events = public_events
         self._owns_collector = collector is None
         self.collector = collector or MarketDataCollector(
             runtime.adapters.values(),
@@ -246,6 +249,8 @@ class PaperTestRunner:
         await self.stop()
         if self._owns_collector:
             await self.collector.close()
+        if self.public_events is not None:
+            await self.public_events.close()
         await self.daily_report.close()
 
     async def restore(self, *, restore_history: bool) -> None:
@@ -262,6 +267,8 @@ class PaperTestRunner:
     ) -> MarketSnapshot:
         now = datetime.now(UTC)
         stage_started = time.monotonic()
+        if self.public_events is not None:
+            await self.public_events.start()
         runners = (self, *peers)
         required_history: dict[str, set[str]] = {}
         forced_history: dict[str, set[str]] = {}
@@ -313,6 +320,8 @@ class PaperTestRunner:
         }
         if missing_mark_venues:
             raise IncompleteMarketSnapshotError(tuple(sorted(missing_mark_venues)))
+        if self.public_events is not None:
+            await self.public_events.observe_snapshot(snapshot)
         if periodic_history_refresh:
             self._last_history_refresh = snapshot.captured_at
         if refresh_history:

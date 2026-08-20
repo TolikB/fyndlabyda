@@ -70,6 +70,35 @@ def _typed_snapshot(price_spot: str = "1", price_perp: str = "2") -> MarketSnaps
     return MarketSnapshot([], tickers, [], books, now)
 
 
+def test_snapshot_keeps_spot_and_perpetual_instrument_metadata_distinct() -> None:
+    now = datetime.now(UTC)
+    spot = NormalizedInstrument(
+        exchange="gate",
+        exchange_symbol="TUT_USDT",
+        base_asset="TUT",
+        quote_asset="USDT",
+        instrument_type=InstrumentType.SPOT,
+        tick_size=Decimal("0.0001"),
+        step_size=Decimal("1"),
+        min_order_size=Decimal("10"),
+    )
+    perpetual = spot.model_copy(
+        update={
+            "instrument_type": InstrumentType.PERPETUAL,
+            "step_size": Decimal("0.1"),
+            "min_order_size": Decimal("1"),
+        }
+    )
+    snapshot = MarketSnapshot([spot, perpetual], [], [], {}, now)
+
+    assert snapshot.instrument("gate", "TUT_USDT", InstrumentType.SPOT) == spot
+    assert (
+        snapshot.instrument("gate", "TUT_USDT", InstrumentType.PERPETUAL)
+        == perpetual
+    )
+    assert snapshot.instrument("gate", "TUT_USDT") is None
+
+
 def _spot_perp_opportunity() -> Opportunity:
     return Opportunity(
         strategy=StrategyName.SPOT_PERP,

@@ -1,0 +1,31 @@
+global:
+  resolve_timeout: 5m
+  telegram_bot_token_file: /run/secrets/telegram-bot-token
+
+route:
+  receiver: telegram-operator
+  group_by: ["alertname", "severity", "exchange"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ["alertname", "exchange"]
+
+receivers:
+  - name: telegram-operator
+    telegram_configs:
+      - chat_id_file: /run/secrets/telegram-chat-id
+        send_resolved: true
+        parse_mode: ""
+        message: |-
+          {{ range .Alerts }}
+          [{{ .Status }}][{{ .Labels.severity }}] {{ .Annotations.summary }}
+          Impact: {{ .Annotations.impact }}
+          Action: {{ .Annotations.action }}
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}

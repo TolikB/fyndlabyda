@@ -356,30 +356,52 @@ async def save_backtest_result(
     """Persist reproducibility metadata and metrics for an event-driven run."""
 
     finished_at = datetime.now(UTC)
-    session.add(
-        BacktestRunRecord(
-            run_id=run_id,
-            config_hash=result.config_hash,
-            dataset_version=result.dataset_version,
-            git_commit=result.git_commit,
-            started_at=started_at,
-            finished_at=finished_at,
-            status="completed",
-            config_json=config if isinstance(config, dict) else None,
-        )
+    metrics = result.metrics.model_dump(mode="json")
+    monthly_distribution = {"monthly_returns": metrics["monthly_returns"]}
+    run = await session.scalar(
+        select(BacktestRunRecord)
+        .where(BacktestRunRecord.run_id == run_id)
+        .with_for_update()
     )
-    session.add(
-        BacktestResultRecord(
-            run_id=run_id,
-            metrics=result.metrics.model_dump(mode="json"),
-            monthly_distribution={
-                "monthly_returns": result.metrics.model_dump(mode="json")[
-                    "monthly_returns"
-                ],
-            },
-            created_at=finished_at,
+    if run is None:
+        session.add(
+            BacktestRunRecord(
+                run_id=run_id,
+                config_hash=result.config_hash,
+                dataset_version=result.dataset_version,
+                git_commit=result.git_commit,
+                started_at=started_at,
+                finished_at=finished_at,
+                status="completed",
+                config_json=config if isinstance(config, dict) else None,
+            )
         )
+    elif (
+        run.config_hash != result.config_hash
+        or run.dataset_version != result.dataset_version
+        or run.git_commit != result.git_commit
+    ):
+        raise ValueError("backtest run ID conflicts with persisted reproducibility data")
+
+    stored_result = await session.scalar(
+        select(BacktestResultRecord)
+        .where(BacktestResultRecord.run_id == run_id)
+        .with_for_update()
     )
+    if stored_result is None:
+        session.add(
+            BacktestResultRecord(
+                run_id=run_id,
+                metrics=metrics,
+                monthly_distribution=monthly_distribution,
+                created_at=finished_at,
+            )
+        )
+    elif (
+        stored_result.metrics != metrics
+        or stored_result.monthly_distribution != monthly_distribution
+    ):
+        raise ValueError("backtest run ID conflicts with persisted result data")
     await session.commit()
 
 

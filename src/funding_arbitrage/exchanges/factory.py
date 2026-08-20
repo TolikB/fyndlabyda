@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from funding_arbitrage.config import Settings
-from funding_arbitrage.domain.events import BookEvent
+from funding_arbitrage.domain.events import BookEvent, InstrumentType
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
@@ -16,6 +16,7 @@ from funding_arbitrage.exchanges.kucoin import KucoinPublicAdapter
 from funding_arbitrage.exchanges.mexc import MexcPublicAdapter
 from funding_arbitrage.exchanges.mock import MockExchangeAdapter
 from funding_arbitrage.exchanges.okx import OkxPublicAdapter
+from funding_arbitrage.market_data.orderbook_protocols import orderbook_protocol
 
 
 def create_public_adapters(
@@ -24,7 +25,7 @@ def create_public_adapters(
     canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
 ) -> dict[str, ExchangeAdapter]:
     if settings.market_data_mode == "mock":
-        return {
+        adapters: dict[str, ExchangeAdapter] = {
             name: MockExchangeAdapter(name)
             for name in (
                 "bybit",
@@ -37,7 +38,9 @@ def create_public_adapters(
                 "htx",
             )
         }
-    return {
+        _validate_orderbook_protocols(adapters)
+        return adapters
+    adapters = {
         "bybit": BybitPublicAdapter(
             base_url=settings.bybit_base_url,
             websocket_url=settings.bybit_ws_url,
@@ -110,6 +113,17 @@ def create_public_adapters(
             timeout_seconds=settings.request_timeout_seconds,
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,
+            funding_symbol_limit=settings.htx_funding_symbol_limit,
             canonical_book_event_sink=canonical_book_event_sink,
         ),
     }
+    _validate_orderbook_protocols(adapters)
+    return adapters
+
+
+def _validate_orderbook_protocols(adapters: dict[str, ExchangeAdapter]) -> None:
+    """Fail startup if a configured CEX lacks an explicit book recovery contract."""
+
+    for venue in adapters:
+        orderbook_protocol(venue, InstrumentType.SPOT)
+        orderbook_protocol(venue, InstrumentType.PERPETUAL)

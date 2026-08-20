@@ -50,7 +50,9 @@ class MarketSnapshot:
     _funding_index: dict[tuple[str, str], FundingSnapshot] = field(
         init=False, repr=False, compare=False
     )
-    _instrument_index: dict[tuple[str, str], NormalizedInstrument] = field(
+    _instrument_index: dict[
+        tuple[str, str, InstrumentType], NormalizedInstrument
+    ] = field(
         init=False, repr=False, compare=False
     )
 
@@ -72,7 +74,7 @@ class MarketSnapshot:
             self,
             "_instrument_index",
             {
-                (item.exchange, item.exchange_symbol): item
+                (item.exchange, item.exchange_symbol, item.instrument_type): item
                 for item in self.instruments
             },
         )
@@ -85,8 +87,20 @@ class MarketSnapshot:
     def funding_rate(self, exchange: str, symbol: str) -> FundingSnapshot | None:
         return self._funding_index.get((exchange, symbol))
 
-    def instrument(self, exchange: str, symbol: str) -> NormalizedInstrument | None:
-        return self._instrument_index.get((exchange, symbol))
+    def instrument(
+        self,
+        exchange: str,
+        symbol: str,
+        instrument_type: InstrumentType | None = None,
+    ) -> NormalizedInstrument | None:
+        if instrument_type is not None:
+            return self._instrument_index.get((exchange, symbol, instrument_type))
+        matches = [
+            instrument
+            for (venue, venue_symbol, _kind), instrument in self._instrument_index.items()
+            if venue == exchange and venue_symbol == symbol
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     def orderbook(
         self, exchange: str, symbol: str, instrument_type: InstrumentType

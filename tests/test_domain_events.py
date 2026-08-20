@@ -86,6 +86,18 @@ def test_event_id_and_serialization_are_deterministic() -> None:
     assert first.payload.instrument.canonical_id == "BYBIT:BTC-USDT:PERPETUAL"
 
 
+def test_event_id_tracks_logical_identity_not_payload_revision() -> None:
+    original = TradeTick(
+        instrument=INSTRUMENT,
+        trade_id="trade-1",
+        price=Decimal("62000.10"),
+        quantity=Decimal("0.25"),
+        exchange_timestamp=NOW,
+    )
+    corrected = original.model_copy(update={"price": Decimal("62000.20")})
+
+    assert _metadata(original).event_id == _metadata(corrected).event_id
+
 def test_envelope_rejects_kind_or_exchange_timestamp_mismatch() -> None:
     tick = TradeTick(
         instrument=INSTRUMENT,

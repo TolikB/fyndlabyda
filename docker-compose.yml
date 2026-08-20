@@ -33,21 +33,33 @@ services:
       - /tmp:size=64m,mode=1777
     volumes:
       - runtime_state:/app/.runtime
+      - ${LIVE_SECRETS_DIR:-./secrets/exchange}:/run/secrets/exchange:ro
+      - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     pids_limit: 256
     logging: *bounded-logging
-    env_file: .env
+    env_file:
+      - path: ${APP_ENV_FILE:-.env}
+        required: true
+      - path: ${APP_RUNTIME_SECRETS_ENV_FILE:-./secrets/exchange/runtime.env}
+        required: false
+      - path: ${APP_TELEGRAM_SECRETS_ENV_FILE:-./secrets/exchange/telegram.env}
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: ["sh", "-c", "alembic upgrade head && uvicorn funding_arbitrage.main:app --host 0.0.0.0 --port 8000"]
-    ports:
-      - "127.0.0.1:8000:8000"
+    expose:
+      - "8000"
+    networks:
+      - default
+      - control_plane
+      - data_plane
     cpus: "1.00"
     mem_limit: 1024m
     healthcheck:
@@ -59,20 +71,82 @@ services:
     stop_grace_period: 90s
     restart: unless-stopped
 
+  control-plane:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    profiles: ["secure-control"]
+    user: "101:101"
+    init: true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=16m,mode=0750,uid=101,gid=101
+      - /var/run:size=1m,mode=0750,uid=101,gid=101
+    volumes:
+      - ./docker/nginx/control-plane.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${CONTROL_PLANE_TLS_CERT_PATH:-./secrets/control-plane-server.crt}:/run/secrets/control-plane-server.crt:ro
+      - ${CONTROL_PLANE_TLS_KEY_PATH:-./secrets/control-plane-server.key}:/run/secrets/control-plane-server.key:ro
+      - ${CONTROL_PLANE_CLIENT_CA_PATH:-./secrets/control-plane-client-ca.crt}:/run/secrets/control-plane-client-ca.crt:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:8443"
+    networks:
+      control_plane:
+        ipv4_address: 172.30.241.10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 32
+    cpus: "0.10"
+    mem_limit: 64m
+    logging: *bounded-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/proxy-health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-funding}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-funding}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/internal/postgres-server.crt
+      - -c
+      - ssl_key_file=/run/secrets/internal/postgres-server.key
+      - -c
+      - ssl_ca_file=/run/secrets/internal/ca.crt
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - password_encryption=scram-sha-256
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
+    networks:
+      - data_plane
     cpus: "0.25"
     mem_limit: 384m
     shm_size: 128m
     logging: *bounded-logging
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-funding} -d ${POSTGRES_DB:-funding}"]
+      test:
+        - CMD-SHELL
+        - >-
+          PGPASSWORD="$${POSTGRES_PASSWORD}" psql
+          --username "$${POSTGRES_USER}" --dbname "$${POSTGRES_DB}"
+          --command "SELECT 1" >/dev/null
       interval: 5s
       timeout: 5s
       retries: 10
@@ -80,28 +154,31 @@ services:
 
   redis:
     image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
-    command:
-      - redis-server
-      - --save
-      - ""
-      - --appendonly
-      - "no"
-      - --maxmemory
-      - 64mb
-      - --maxmemory-policy
-      - allkeys-lru
+    command: ["sh", "/etc/redis/secure-entrypoint.sh"]
+    volumes:
+      - ./docker/redis/secure-entrypoint.sh:/etc/redis/secure-entrypoint.sh:ro
+      - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    networks:
+      - data_plane
     cpus: "0.10"
     mem_limit: 96m
     logging: *bounded-logging
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD-SHELL
+        - >-
+          REDISCLI_AUTH="$$(cat /run/secrets/internal/redis-password)"
+          redis-cli --tls --cacert /run/secrets/internal/ca.crt
+          --sni redis --user funding --host redis ping | grep -q PONG
       interval: 5s
       timeout: 3s
       retries: 10
     restart: unless-stopped
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
     profiles: ["analytics"]
     environment:
       CLICKHOUSE_DB: funding_analytics
@@ -111,9 +188,13 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./docker/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./docker/clickhouse/config.d/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
+      - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
     expose:
-      - "8123"
-      - "9000"
+      - "8443"
+      - "9440"
+    networks:
+      - data_plane
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -126,18 +207,51 @@ services:
       test:
         - CMD-SHELL
         - >-
-          clickhouse-client --user "$${CLICKHOUSE_USER}"
-          --password "$${CLICKHOUSE_PASSWORD}" --query "SELECT 1"
+          SSL_CERT_FILE=/run/secrets/internal/ca.crt
+          clickhouse-client --secure --host clickhouse --port 9440
+          --user "$${CLICKHOUSE_USER}" --password "$${CLICKHOUSE_PASSWORD}"
+          --query "SELECT 1"
       interval: 10s
       timeout: 5s
       retries: 10
     restart: unless-stopped
 
-  prometheus:
-    image: prom/prometheus:v2.54.1
+  alertmanager:
+    image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
     profiles: ["observability"]
+    user: "65534:65534"
+    init: true
+    read_only: true
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --enable-feature=utf8-strict-mode
+    volumes:
+      - ./docker/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${ALERTMANAGER_TELEGRAM_BOT_TOKEN_FILE:-./secrets/telegram-bot-token}:/run/secrets/telegram-bot-token:ro
+      - ${ALERTMANAGER_TELEGRAM_CHAT_ID_FILE:-./secrets/telegram-chat-id}:/run/secrets/telegram-chat-id:ro
+    tmpfs:
+      - /alertmanager:size=32m,mode=0700,uid=65534,gid=65534
+    ports:
+      - "127.0.0.1:9093:9093"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    cpus: "0.10"
+    mem_limit: 96m
+    logging: *bounded-logging
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    profiles: ["observability"]
+    depends_on:
+      - alertmanager
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus-alerts.yml:/etc/prometheus/rules/prometheus-alerts.yml:ro
     ports:
       - "127.0.0.1:9090:9090"
     cpus: "0.10"
@@ -146,12 +260,33 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
     profiles: ["observability"]
+    user: "472:0"
+    init: true
+    read_only: true
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-funding_admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: "10s"
     depends_on:
       - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /var/log/grafana:size=16m,mode=0750,uid=472,gid=0
     ports:
       - "127.0.0.1:3000:3000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
     cpus: "0.20"
     mem_limit: 256m
     logging: *bounded-logging
@@ -161,3 +296,11 @@ volumes:
   clickhouse_data:
   postgres_data:
   runtime_state:
+
+networks:
+  data_plane:
+    internal: true
+  control_plane:
+    ipam:
+      config:
+        - subnet: 172.30.241.0/24

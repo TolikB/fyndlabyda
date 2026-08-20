@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly expected_project="funding_arbitrage_v1"
+readonly marker_value="funding-arbitrage-v1"
+readonly required_confirmation="RESTORE_FUNDING_V1_POSTGRES_AND_KEEP_APP_STOPPED"
+
+archive="${1:-}"
+backup_root="${BACKUP_ROOT:-/var/backups/funding-arbitrage-v1}"
+compose_file="${COMPOSE_FILE:-docker-compose.yml}"
+env_file="${COMPOSE_ENV_FILE:-.env.live}"
+project="${COMPOSE_PROJECT_NAME:-$expected_project}"
+pre_restore_backup="${PRE_RESTORE_BACKUP:-}"
+confirmation="${CONFIRM_RESTORE:-}"
+change_ticket="${RESTORE_CHANGE_TICKET:-}"
+max_pre_restore_age_seconds="${MAX_PRE_RESTORE_BACKUP_AGE_SECONDS:-900}"
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "required command is unavailable: $1" >&2
+    exit 2
+  }
+}
+for command_name in age date docker jq realpath sha256sum; do
+  require_command "$command_name"
+done
+
+if [[ "$project" != "$expected_project" ]]; then
+  echo "refusing unexpected Compose project: $project" >&2
+  exit 2
+fi
+if [[ "$confirmation" != "$required_confirmation" ]]; then
+  echo "exact CONFIRM_RESTORE phrase is required" >&2
+  exit 2
+fi
+if [[ ! "$change_ticket" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$ ]]; then
+  echo "RESTORE_CHANGE_TICKET must be a traceable identifier" >&2
+  exit 2
+fi
+if [[ ! "$max_pre_restore_age_seconds" =~ ^[0-9]+$ ]] ||
+   (( max_pre_restore_age_seconds < 60 || max_pre_restore_age_seconds > 3600 )); then
+  echo "MAX_PRE_RESTORE_BACKUP_AGE_SECONDS must be between 60 and 3600" >&2
+  exit 2
+fi
+if [[ -z "$archive" || -z "$pre_restore_backup" ]]; then
+  echo "usage: restore_state.sh <archive.dump.age>; PRE_RESTORE_BACKUP is required" >&2
+  exit 2
+fi
+if [[ ! -f "$compose_file" || ! -f "$env_file" ]]; then
+  echo "Compose file and live env file must exist" >&2
+  exit 2
+fi
+
+compose_env_args=(--env-file "$env_file")
+for overlay in secrets/exchange/runtime.env secrets/exchange/telegram.env; do
+  if [[ -f "$overlay" ]]; then
+    compose_env_args+=(--env-file "$overlay")
+  fi
+done
+
+backup_root="$(realpath -e -- "$backup_root")"
+archive="$(realpath -e -- "$archive")"
+pre_restore_backup="$(realpath -e -- "$pre_restore_backup")"
+if [[ "$backup_root" == "/" || ! -f "$backup_root/.funding-backup-root" ]]; then
+  echo "backup root identity marker is missing" >&2
+  exit 2
+fi
+if [[ "$(tr -d '\r\n' < "$backup_root/.funding-backup-root")" != "$marker_value" ]]; then
+  echo "backup root identity marker is invalid" >&2
+  exit 2
+fi
+archive_created_at=""
+pre_restore_created_at=""
+for candidate in "$archive" "$pre_restore_backup"; do
+  if [[ "$candidate" != "$backup_root/"* || "$candidate" != *.dump.age ]]; then
+    echo "backup artifact is outside the verified root or has an invalid extension" >&2
+    exit 2
+  fi
+  if [[ ! -f "$candidate.sha256" || ! -f "$candidate.json" ]]; then
+    echo "backup checksum or manifest is missing: $candidate" >&2
+    exit 2
+  fi
+  (
+    cd "$backup_root"
+    sha256sum --check --status "$(basename "$candidate.sha256")"
+  ) || {
+    echo "backup checksum validation failed: $candidate" >&2
+    exit 1
+  }
+  actual_hash="$(sha256sum "$candidate" | awk '{print $1}')"
+  if ! jq --exit-status \
+    --arg archive "$(basename "$candidate")" \
+    --arg hash "$actual_hash" \
+    --arg project "$project" \
+    '.archive == $archive and
+     .sha256 == $hash and
+     .compose_project == $project and
+     .encrypted == true and
+     (.size_bytes | type == "number" and . > 0) and
+     (.created_at_utc | type == "string" and test("^[0-9]{8}T[0-9]{6}Z$")) and
+     (.alembic_head | type == "string" and test("^[A-Za-z0-9_-]{1,64}$"))' \
+    "$candidate.json" >/dev/null; then
+    echo "backup manifest validation failed: $candidate" >&2
+    exit 1
+  fi
+  created_at="$(jq --raw-output '.created_at_utc' "$candidate.json")"
+  if [[ "$candidate" == "$archive" ]]; then
+    archive_created_at="$created_at"
+  else
+    pre_restore_created_at="$created_at"
+  fi
+done
+if [[ "$archive" == "$pre_restore_backup" ]]; then
+  echo "PRE_RESTORE_BACKUP must be a distinct newer safety backup" >&2
+  exit 2
+fi
+if [[ ! "$pre_restore_created_at" > "$archive_created_at" ]]; then
+  echo "PRE_RESTORE_BACKUP manifest must be newer than the restore target" >&2
+  exit 2
+fi
+pre_restore_iso="${pre_restore_created_at:0:4}-${pre_restore_created_at:4:2}-${pre_restore_created_at:6:2}T${pre_restore_created_at:9:2}:${pre_restore_created_at:11:2}:${pre_restore_created_at:13:2}Z"
+if ! pre_restore_epoch="$(date -u -d "$pre_restore_iso" +%s 2>/dev/null)"; then
+  echo "PRE_RESTORE_BACKUP timestamp cannot be parsed" >&2
+  exit 2
+fi
+now_epoch="$(date -u +%s)"
+pre_restore_age_seconds=$((now_epoch - pre_restore_epoch))
+if (( pre_restore_age_seconds < 0 || pre_restore_age_seconds > max_pre_restore_age_seconds )); then
+  echo "PRE_RESTORE_BACKUP is not a fresh current-state safety backup" >&2
+  exit 2
+fi
+
+docker compose --project-name "$project" "${compose_env_args[@]}" \
+  --file "$compose_file" config --quiet
+running_services="$(docker compose --project-name "$project" "${compose_env_args[@]}" \
+  --file "$compose_file" ps --status running --services)"
+if grep -Fxq app <<<"$running_services"; then
+  echo "refusing restore while the application service is running" >&2
+  exit 2
+fi
+if ! grep -Fxq postgres <<<"$running_services"; then
+  echo "PostgreSQL must be running in the expected Compose project" >&2
+  exit 2
+fi
+
+postgres_user="${POSTGRES_USER:-funding}"
+postgres_db="${POSTGRES_DB:-funding}"
+current_migration_head="$(docker compose --project-name "$project" "${compose_env_args[@]}" \
+  --file "$compose_file" exec -T postgres psql --username "$postgres_user" \
+  --dbname "$postgres_db" --tuples-only --no-align \
+  --command 'SELECT version_num FROM alembic_version LIMIT 1' | tr -d '\r\n')"
+pre_restore_migration_head="$(jq --raw-output '.alembic_head' "$pre_restore_backup.json")"
+if [[ ! "$current_migration_head" =~ ^[A-Za-z0-9_-]{1,64}$ ]] ||
+   [[ "$pre_restore_migration_head" != "$current_migration_head" ]]; then
+  echo "PRE_RESTORE_BACKUP does not match the current database migration head" >&2
+  exit 2
+fi
+
+age --decrypt "$archive" \
+  | docker compose --project-name "$project" "${compose_env_args[@]}" \
+      --file "$compose_file" exec -T postgres \
+      pg_restore --username "$postgres_user" --dbname "$postgres_db" \
+      --clean --if-exists --single-transaction --exit-on-error \
+      --no-owner --no-acl
+
+docker compose --project-name "$project" "${compose_env_args[@]}" \
+  --file "$compose_file" run --rm --no-deps app alembic upgrade head
+docker compose --project-name "$project" "${compose_env_args[@]}" \
+  --file "$compose_file" exec -T postgres psql --username "$postgres_user" \
+  --dbname "$postgres_db" --set ON_ERROR_STOP=1 \
+  --command 'SELECT version_num FROM alembic_version; SELECT COUNT(*) FROM canonical_events;'
+
+echo "restore verified for ticket $change_ticket; application intentionally remains stopped"

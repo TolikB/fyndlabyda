@@ -1,0 +1,172 @@
+groups:
+  - name: funding-bot-actionable-alerts
+    interval: 15s
+    rules:
+      - alert: FundingMarketDataStale
+        expr: (time() - funding_exchange_stream_last_message_timestamp > 90) and funding_exchange_stream_last_message_timestamp > 0
+        for: 2m
+        labels: {severity: critical, category: stale_data}
+        annotations:
+          summary: "Market-data stream is stale on {{ $labels.exchange }} ({{ $labels.stream }})"
+          impact: "Entries may use obsolete prices or funding state."
+          action: "Pause entries for the venue; inspect stream reconnects and REST recovery."
+          runbook_url: "ops/ALERT_RUNBOOK.md#market-data-stale-or-never-started"
+
+      - alert: FundingMarketDataNeverStarted
+        expr: funding_exchange_stream_last_message_timestamp == 0
+        for: 5m
+        labels: {severity: critical, category: stale_data}
+        annotations:
+          summary: "Requested stream never produced data on {{ $labels.exchange }} ({{ $labels.stream }})"
+          impact: "The production-like data path has no fresh stream evidence."
+          action: "Keep entries disabled; verify subscription, symbols, endpoint, and credentials if private."
+          runbook_url: "ops/ALERT_RUNBOOK.md#market-data-stale-or-never-started"
+
+      - alert: FundingMarketDataGapOrInvalid
+        expr: increase(funding_market_data_dropped_total{reason=~".*(gap|checksum|stream_error|invalid).*"}[5m]) > 0
+        for: 1m
+        labels: {severity: critical, category: data_gap}
+        annotations:
+          summary: "Market-data gap or invalid record detected on {{ $labels.exchange }}"
+          impact: "Order books or signals may not be reconstructable."
+          action: "Pause the affected venue, force a REST snapshot, then verify sequence recovery."
+          runbook_url: "ops/ALERT_RUNBOOK.md#market-data-gap-or-invalid"
+
+      - alert: FundingOrderP99LatencyHigh
+        expr: histogram_quantile(0.99, sum by (le, exchange) (rate(funding_live_order_submission_latency_seconds_bucket[10m]))) > 2
+        for: 5m
+        labels: {severity: critical, category: latency}
+        annotations:
+          summary: "Live order P99 latency exceeds 2 seconds on {{ $labels.exchange }}"
+          impact: "Legging, slippage, and unknown-order risk are elevated."
+          action: "Disable new entries; inspect venue/network latency and reconcile every non-terminal order."
+          runbook_url: "ops/ALERT_RUNBOOK.md#execution-latency"
+
+      - alert: FundingPaperCycleP99LatencyHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(funding_paper_runner_cycle_duration_seconds_bucket[15m]))) > 30
+        for: 10m
+        labels: {severity: warning, category: latency}
+        annotations:
+          summary: "Paper runner P99 cycle latency exceeds 30 seconds"
+          impact: "Opportunity coverage and settlement timing evidence are degraded."
+          action: "Inspect per-stage latency, rate limits, and stale order-book counts."
+          runbook_url: "ops/ALERT_RUNBOOK.md#runner-latency"
+
+      - alert: FundingLiveRejectBurst
+        expr: sum by (exchange) (increase(funding_live_orders_total{status="REJECTED"}[5m])) >= 3
+        for: 1m
+        labels: {severity: warning, category: rejects}
+        annotations:
+          summary: "Three or more live orders were rejected on {{ $labels.exchange }} in five minutes"
+          impact: "Venue configuration, balance, precision, or market state may be invalid."
+          action: "Stop new entries and inspect normalized rejection evidence and venue limits."
+          runbook_url: "ops/ALERT_RUNBOOK.md#order-rejects"
+
+      - alert: FundingLiveUnknownOrder
+        expr: sum by (exchange) (increase(funding_live_orders_total{status=~"UNKNOWN|EXCEPTION"}[5m])) > 0
+        for: 0m
+        labels: {severity: critical, category: unknown_order}
+        annotations:
+          summary: "Unknown live order outcome on {{ $labels.exchange }}"
+          impact: "A duplicate order or unhedged position is possible."
+          action: "Do not retry; engage the kill switch and reconcile by client and exchange order IDs."
+          runbook_url: "ops/ALERT_RUNBOOK.md#unknown-order"
+
+      - alert: FundingLiveExposureNearLimit
+        expr: funding_live_exposure_limit_utilization >= 0.8 and funding_live_exposure_limit_utilization < 1
+        for: 2m
+        labels: {severity: warning, category: exposure}
+        annotations:
+          summary: "Live gross exposure exceeds 80 percent of its configured limit"
+          impact: "Remaining capacity for compensation and risk reduction is low."
+          action: "Stop adding exposure and verify per-asset, venue, and strategy concentrations."
+          runbook_url: "ops/ALERT_RUNBOOK.md#exposure-limit"
+
+      - alert: FundingLiveExposureLimitBreached
+        expr: funding_live_exposure_limit_utilization >= 1
+        for: 0m
+        labels: {severity: critical, category: exposure}
+        annotations:
+          summary: "Live gross exposure reached or exceeded its configured limit"
+          impact: "Portfolio risk policy is breached."
+          action: "Engage the kill switch; reconcile positions and reduce exposure using guarded close orders."
+          runbook_url: "ops/ALERT_RUNBOOK.md#exposure-limit"
+
+      - alert: FundingLiveDrawdownNearLimit
+        expr: funding_live_drawdown_limit_utilization >= 0.8 and funding_live_drawdown_limit_utilization < 1
+        for: 1m
+        labels: {severity: warning, category: drawdown}
+        annotations:
+          summary: "Live drawdown exceeds 80 percent of the configured limit"
+          impact: "The portfolio is close to its mandatory loss interlock."
+          action: "Block new entries and inspect PnL attribution, basis movement, and venue equity."
+          runbook_url: "ops/ALERT_RUNBOOK.md#drawdown-limit"
+
+      - alert: FundingLiveDrawdownLimitBreached
+        expr: funding_live_drawdown_limit_utilization >= 1
+        for: 0m
+        labels: {severity: critical, category: drawdown}
+        annotations:
+          summary: "Live drawdown reached the configured limit"
+          impact: "Loss limit is breached and live entries must remain disabled."
+          action: "Verify the persistent kill switch; reconcile and follow operator-approved risk reduction."
+          runbook_url: "ops/ALERT_RUNBOOK.md#drawdown-limit"
+
+      - alert: FundingLiveReconciliationUnhealthy
+        expr: funding_live_reconciliation_healthy == 0 and funding_live_runner_last_cycle_timestamp > 0
+        for: 1m
+        labels: {severity: critical, category: reconciliation}
+        annotations:
+          summary: "Latest authenticated venue reconciliation is unhealthy"
+          impact: "Local orders, fills, balances, positions, or funding may differ from the venue."
+          action: "Keep the interlock engaged and classify every reconciliation difference before recovery."
+          runbook_url: "ops/ALERT_RUNBOOK.md#reconciliation-drift"
+
+      - alert: FundingPrivateStreamUnhealthy
+        expr: funding_live_private_stream_healthy == 0 and funding_live_runner_last_cycle_timestamp > 0
+        for: 30s
+        labels: {severity: critical, category: reconciliation}
+        annotations:
+          summary: "Authenticated private stream is unhealthy"
+          impact: "Order, fill, balance, or position updates may be delayed until REST reconciliation."
+          action: "Block entries; inspect the affected venue channel and reconcile before recovery."
+          runbook_url: "ops/ALERT_RUNBOOK.md#private-stream-unhealthy"
+
+      - alert: FundingLiveReconciliationFailure
+        expr: increase(funding_live_reconciliation_failures_total[5m]) > 0
+        for: 0m
+        labels: {severity: critical, category: reconciliation}
+        annotations:
+          summary: "Authenticated reconciliation failed"
+          impact: "Authoritative private state is unavailable or inconsistent."
+          action: "Do not submit or retry orders; restore private API access and run a full reconciliation."
+          runbook_url: "ops/ALERT_RUNBOOK.md#reconciliation-drift"
+      - alert: FundingLiveRunnerStalled
+        expr: (time() - funding_live_runner_last_cycle_timestamp > 180) and funding_live_runner_last_cycle_timestamp > 0
+        for: 2m
+        labels: {severity: critical, category: runner}
+        annotations:
+          summary: "Live runner has not completed a cycle for more than three minutes"
+          impact: "Risk, funding, equity, and reconciliation checks are not advancing."
+          action: "Keep entries disabled; inspect container health and restart only after order-state reconciliation."
+          runbook_url: "ops/ALERT_RUNBOOK.md#runner-stalled"
+
+      - alert: FundingPaperRunnerStalled
+        expr: (time() - funding_paper_runner_last_cycle_timestamp > 300) and funding_paper_runner_last_cycle_timestamp > 0
+        for: 5m
+        labels: {severity: warning, category: runner}
+        annotations:
+          summary: "Paper runner has not completed a cycle for more than five minutes"
+          impact: "Paper evidence and daily PnL reports are incomplete."
+          action: "Inspect stage timings, market-data health, database health, and runner errors."
+          runbook_url: "ops/ALERT_RUNBOOK.md#runner-stalled"
+
+      - alert: FundingLiveKillSwitchEngaged
+        expr: funding_live_trading_paused == 1
+        for: 0m
+        labels: {severity: critical, category: interlock}
+        annotations:
+          summary: "Persistent live-trading interlock is engaged"
+          impact: "New live entries are disabled due to an operator or safety condition."
+          action: "Read the persisted reason; never clear the interlock before reconciliation and approval."
+          runbook_url: "ops/ALERT_RUNBOOK.md#kill-switch"

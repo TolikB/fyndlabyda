@@ -1,0 +1,156 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "funding_market_data_age_seconds", "legendFormat": "{{exchange}}"}],
+      "title": "Market data age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "funding_orderbook_coverage_ratio", "legendFormat": "{{exchange}}"}],
+      "title": "Order-book coverage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 0},
+      "id": 3,
+      "targets": [
+        {"expr": "funding_opportunity_candidates", "legendFormat": "{{strategy}} candidates"},
+        {"expr": "funding_confirmed_opportunities_total", "legendFormat": "confirmed"}
+      ],
+      "title": "Strategy opportunities",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 7},
+      "id": 4,
+      "targets": [
+        {"expr": "funding_live_exposure_limit_utilization", "legendFormat": "exposure / limit"},
+        {"expr": "funding_live_drawdown_limit_utilization", "legendFormat": "drawdown / limit"}
+      ],
+      "title": "Risk limit utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 7},
+      "id": 5,
+      "targets": [{"expr": "sum by (exchange, status) (rate(funding_live_orders_total[5m]))", "legendFormat": "{{exchange}} {{status}}"}],
+      "title": "OMS order outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 7},
+      "id": 6,
+      "targets": [
+        {"expr": "funding_paper_equity", "legendFormat": "paper equity"},
+        {"expr": "funding_live_equity_usd", "legendFormat": "live equity"}
+      ],
+      "title": "Portfolio equity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 14},
+      "id": 7,
+      "targets": [
+        {"expr": "funding_paper_pnl_total", "legendFormat": "paper net PnL"},
+        {"expr": "funding_paper_funding_pnl_total", "legendFormat": "paper funding"},
+        {"expr": "funding_live_pnl_usd", "legendFormat": "live PnL"}
+      ],
+      "title": "Portfolio PnL",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"max": 1, "min": 0}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 14},
+      "id": 8,
+      "targets": [
+        {"expr": "funding_live_reconciliation_healthy", "legendFormat": "REST reconciliation"},
+        {"expr": "funding_live_private_stream_healthy", "legendFormat": "{{exchange}} private stream"},
+        {"expr": "increase(funding_live_reconciliation_failures_total[15m])", "legendFormat": "reconciliation failures / 15m"},
+        {"expr": "sum by (exchange, stream) (increase(funding_live_private_stream_normalization_errors_total[15m]))", "legendFormat": "{{exchange}} {{stream}} normalization errors"}
+      ],
+      "title": "Reconciliation",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 14},
+      "id": 9,
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum by (le, exchange) (rate(funding_live_order_submission_latency_seconds_bucket[10m])))", "legendFormat": "{{exchange}} order P99"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(funding_paper_runner_cycle_duration_seconds_bucket[15m])))", "legendFormat": "paper cycle P99"}
+      ],
+      "title": "Latency P99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 21},
+      "id": 10,
+      "targets": [
+        {"expr": "funding_live_positions_open", "legendFormat": "live"},
+        {"expr": "funding_paper_positions_open", "legendFormat": "paper"}
+      ],
+      "title": "Open positions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 21},
+      "id": 11,
+      "targets": [
+        {"expr": "sum by (exchange, reason) (increase(funding_market_data_dropped_total[15m]))", "legendFormat": "{{exchange}} {{reason}}"}
+      ],
+      "title": "Market-data rejects and gaps",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "funding-prometheus"},
+      "fieldConfig": {"defaults": {"max": 1, "min": 0}, "overrides": []},
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 21},
+      "id": 12,
+      "targets": [
+        {"expr": "funding_live_trading_paused", "legendFormat": "live paused"},
+        {"expr": "funding_opportunity_coverage_ratio", "legendFormat": "opportunity coverage"}
+      ],
+      "title": "Safety and coverage",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["funding-arbitrage", "v1"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Funding Arbitrage V1 Operations",
+  "uid": "funding-v1-operations",
+  "version": 1
+}

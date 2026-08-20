@@ -26,6 +26,7 @@ from funding_arbitrage.execution.trading import (
     LiveOrderStatus,
     TradingOrderRequest,
 )
+from tests.live_security import live_credential_policy_json
 
 
 def _perpetual() -> NormalizedInstrument:
@@ -147,10 +148,29 @@ def test_live_factory_uses_native_mexc_adapter_without_network_calls() -> None:
         RUN_MODE="live",
         MARKET_DATA_MODE="live_public",
         EXECUTION_MODE="live",
+        DATABASE_URL=(
+            "postgresql+asyncpg://funding:"
+            "database-secret-0123456789abcdef@postgres:5432/funding"
+        ),
+        REDIS_URL="rediss://redis:6379/0",
+        REDIS_USERNAME="funding",
+        REDIS_PASSWORD="redis-secret-0123456789abcdefabcd",
+        INTERNAL_SERVICE_TLS_REQUIRED=True,
+        INTERNAL_TLS_CA_FILE="/run/secrets/internal/ca.crt",
+        INTERNAL_TLS_CLIENT_CERT_FILE="/run/secrets/internal/app.crt",
+        INTERNAL_TLS_CLIENT_KEY_FILE="/run/secrets/internal/app.key",
+        CONTROL_PLANE_SECURITY_ENABLED=True,
+        CONTROL_PLANE_JWT_SECRET="0123456789abcdef0123456789abcdef",
+        CONTROL_PLANE_MTLS_REQUIRED=True,
+        CONTROL_PLANE_MTLS_CERTIFICATE_HEADER_REQUIRED=True,
+        CONTROL_PLANE_RATE_LIMIT_BACKEND="redis",
+        CONTROL_PLANE_MTLS_CLIENT_FINGERPRINTS="a" * 64,
         LIVE_ARMED=True,
         LIVE_AUTOTRADE=True,
         LIVE_TRADING_CONFIRM="I_UNDERSTAND_THIS_SENDS_REAL_ORDERS",
         LIVE_VENUES="mexc",
+        LIVE_EXPECTED_EGRESS_IP="203.0.113.10",
+        LIVE_CREDENTIAL_POLICY_JSON=live_credential_policy_json({"mexc": "mexc-key"}),
         MEXC_API_KEY="mexc-key",
         MEXC_API_SECRET="mexc-secret",
         TELEGRAM_ENABLED=True,

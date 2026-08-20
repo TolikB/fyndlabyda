@@ -68,6 +68,8 @@ class OkxOrderBookNormalizer:
             raise InvalidResponseError("invalid OKX WebSocket orderbook action")
         sequence = _nonnegative_integer(payload.get("seqId"), "seqId")
         previous_sequence = _previous_sequence(payload.get("prevSeqId"))
+        # OKX deprecated checksum validation on 2026-06-23 and now publishes 0.
+        # Sequence continuity is the authoritative corruption/gap detector.
         exchange_timestamp = _timestamp_ms(payload.get("ts"), "ts")
         received_at = receive_timestamp or datetime.now(UTC)
         received_at = (

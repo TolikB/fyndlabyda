@@ -12,12 +12,20 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from funding_arbitrage.config import Settings
+from funding_arbitrage.internal_tls import create_internal_ssl_context
 
 from .models import Base
 
 
 def create_database(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True, future=True)
+    ssl_context = create_internal_ssl_context(settings)
+    connect_args = {"ssl": ssl_context} if ssl_context is not None else {}
+    engine = create_async_engine(
+        settings.database_url,
+        connect_args=connect_args,
+        pool_pre_ping=True,
+        future=True,
+    )
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 

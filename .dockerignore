@@ -16,3 +16,5 @@ ops
 tests
 requirements-dev.lock
 requirements-dev-linux.lock
+secrets
+secrets/**

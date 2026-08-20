@@ -5,8 +5,12 @@ from funding_arbitrage.services.runtime import RuntimeState
 def test_runtime_entry_health_fails_closed_without_blocking_state_access() -> None:
     health = [True, None]
     runtime = RuntimeState(
-        Settings(market_data_mode="mock"),
-        {},
+        Settings(
+            run_mode="paper_test",
+            market_data_mode="mock",
+            execution_mode="paper",
+            trading_mode="PAPER",
+        ),        {},
         entry_health=lambda: (bool(health[0]), health[1]),
     )
 

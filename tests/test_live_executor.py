@@ -21,16 +21,21 @@ from funding_arbitrage.database.repositories.live import (
     save_live_position,
     save_pending_live_order,
 )
+from funding_arbitrage.domain.decisions import LiveExecutionApproval
+from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
+from funding_arbitrage.domain.events import TradingMode
 from funding_arbitrage.exchanges.base.models import (
     FundingSnapshot,
     InstrumentType,
+    NormalizedInstrument,
     OrderBook,
     OrderBookLevel,
     Ticker,
 )
-from funding_arbitrage.execution.live import LiveTradingExecutor
+from funding_arbitrage.execution.live import LiveExecutionError, LiveTradingExecutor
 from funding_arbitrage.execution.reconciliation import LiveReconciler
 from funding_arbitrage.execution.trading import (
+    LiveLeg,
     LiveOrderStatus,
     LivePosition,
     LivePositionState,
@@ -42,6 +47,7 @@ from funding_arbitrage.execution.trading import (
     VenuePosition,
 )
 from funding_arbitrage.market_data.collector import MarketSnapshot
+from funding_arbitrage.market_data.venue_metadata import VenueMetadataRegistry
 from funding_arbitrage.opportunity.models import (
     CostBreakdown,
     Opportunity,
@@ -50,7 +56,9 @@ from funding_arbitrage.opportunity.models import (
     StrategyName,
 )
 from funding_arbitrage.risk.live import LiveRiskController, LiveTradingPaused
+from funding_arbitrage.services.decision_pipeline import FundingLiveDecisionService
 from funding_arbitrage.services.live_runner import LiveTradingRunner
+from tests.live_security import live_credential_policy_json
 
 
 class FakeTradingAdapter(TradingAdapter):
@@ -148,6 +156,16 @@ class FakeTradingAdapter(TradingAdapter):
         return None
 
 
+class AcceptedThenRaisesAdapter(FakeTradingAdapter):
+    """Model an exchange accepting a request before the client times out."""
+
+    async def submit_ioc_order(
+        self, request: TradingOrderRequest, timeout_seconds: float
+    ) -> TradingOrderResult:
+        self.requests.append(request)
+        raise TimeoutError("simulated transport timeout after remote acceptance")
+
+
 class SpotFeeTradingAdapter(FakeTradingAdapter):
     """Model a spot buy whose base-asset commission is omitted from the order."""
 
@@ -195,11 +213,32 @@ def live_settings(tmp_path: Path) -> Settings:
         RUN_MODE="live",
         MARKET_DATA_MODE="live_public",
         EXECUTION_MODE="live",
+        DATABASE_URL=(
+            "postgresql+asyncpg://funding:"
+            "database-secret-0123456789abcdef@postgres:5432/funding"
+        ),
+        REDIS_URL="rediss://redis:6379/0",
+        REDIS_USERNAME="funding",
+        REDIS_PASSWORD="redis-secret-0123456789abcdefabcd",
+        INTERNAL_SERVICE_TLS_REQUIRED=True,
+        INTERNAL_TLS_CA_FILE="/run/secrets/internal/ca.crt",
+        INTERNAL_TLS_CLIENT_CERT_FILE="/run/secrets/internal/app.crt",
+        INTERNAL_TLS_CLIENT_KEY_FILE="/run/secrets/internal/app.key",
+        CONTROL_PLANE_SECURITY_ENABLED=True,
+        CONTROL_PLANE_JWT_SECRET="0123456789abcdef0123456789abcdef",
+        CONTROL_PLANE_MTLS_REQUIRED=True,
+        CONTROL_PLANE_MTLS_CERTIFICATE_HEADER_REQUIRED=True,
+        CONTROL_PLANE_RATE_LIMIT_BACKEND="redis",
+        CONTROL_PLANE_MTLS_CLIENT_FINGERPRINTS="a" * 64,
         LIVE_ARMED=True,
         LIVE_AUTOTRADE=True,
         LIVE_TRADING_CONFIRM="I_UNDERSTAND_THIS_SENDS_REAL_ORDERS",
         LIVE_VENUES="bybit,gate",
         LIVE_ALLOWED_ASSETS="BTC",
+        LIVE_EXPECTED_EGRESS_IP="203.0.113.10",
+        LIVE_CREDENTIAL_POLICY_JSON=live_credential_policy_json(
+            {"bybit": "key", "gate": "key"}
+        ),
         BYBIT_API_KEY="key",
         BYBIT_API_SECRET="secret",
         GATE_API_KEY="key",
@@ -312,8 +351,23 @@ def market_snapshot(*, stale: bool = False) -> MarketSnapshot:
         )
         for exchange, symbol in (("bybit", "BTCUSDT"), ("gate", "BTC_USDT"))
     ]
+    instruments = [
+        NormalizedInstrument(
+            exchange=exchange,
+            exchange_symbol=symbol,
+            base_asset="BTC",
+            quote_asset="USDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            settlement_asset="USDT",
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_order_size=Decimal("0.001"),
+            funding_interval=1,
+        )
+        for exchange, symbol in (("bybit", "BTCUSDT"), ("gate", "BTC_USDT"))
+    ]
     return MarketSnapshot(
-        instruments=[],
+        instruments=instruments,
         tickers=tickers,
         funding=funding,
         orderbooks=books,
@@ -340,8 +394,18 @@ def spot_perp_snapshot() -> MarketSnapshot:
         best_ask=Decimal("100"),
         timestamp=snapshot.captured_at,
     )
+    spot_instrument = NormalizedInstrument(
+        exchange="bybit",
+        exchange_symbol="BTCUSDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        instrument_type=InstrumentType.SPOT,
+        tick_size=Decimal("0.1"),
+        step_size=Decimal("0.001"),
+        min_order_size=Decimal("0.001"),
+    )
     return MarketSnapshot(
-        instruments=snapshot.instruments,
+        instruments=[*snapshot.instruments, spot_instrument],
         tickers=[*snapshot.tickers, spot_ticker],
         funding=snapshot.funding,
         orderbooks={
@@ -349,6 +413,45 @@ def spot_perp_snapshot() -> MarketSnapshot:
             ("bybit", "BTCUSDT", InstrumentType.SPOT): spot_book,
         },
         captured_at=snapshot.captured_at,
+    )
+
+
+def live_approval(
+    settings: Settings,
+    candidate: Opportunity,
+    snapshot: MarketSnapshot,
+    key: str,
+) -> LiveExecutionApproval:
+    authority_settings = settings.model_copy(
+        update={"live_armed": True, "live_autotrade": True}
+    )
+    service = FundingLiveDecisionService(
+        authority_settings,
+        LiveRiskController(authority_settings),
+    )
+    return service.approve(
+        candidate,
+        candidate.size_quotes[0],
+        snapshot,
+        key,
+        now=snapshot.captured_at,
+    )
+
+
+async def open_approved(
+    executor: LiveTradingExecutor,
+    settings: Settings,
+    candidate: Opportunity,
+    snapshot: MarketSnapshot,
+    key: str,
+    venue_balances: dict[str, VenueBalance],
+    open_notional: Decimal = Decimal("0"),
+) -> LivePosition:
+    return await executor.open_position(
+        live_approval(settings, candidate, snapshot, key),
+        snapshot,
+        venue_balances,
+        open_notional,
     )
 
 
@@ -382,8 +485,8 @@ async def test_live_open_and_close_use_exact_filled_base_quantities(
         LiveRiskController(settings),
     )
 
-    position = await executor.open_position(
-        opportunity(), Decimal("100"), market_snapshot(), "key", balances(), Decimal("0")
+    position = await open_approved(
+        executor, settings, opportunity(), market_snapshot(), "key", balances()
     )
     assert position.state is LivePositionState.OPEN
     assert position.leg_a is not None and position.leg_b is not None
@@ -416,13 +519,13 @@ async def test_disarmed_autotrade_stops_before_intent_or_exchange_action(
     )
 
     with pytest.raises(LiveTradingPaused, match="live_autotrade_not_armed"):
-        await executor.open_position(
+        await open_approved(
+            executor,
+            settings,
             opportunity(),
-            Decimal("100"),
             market_snapshot(),
             "disabled-key",
             balances(),
-            Decimal("0"),
         )
 
     async with factory() as session:
@@ -450,9 +553,10 @@ async def test_spot_base_fee_is_hedged_from_balance_delta_and_dust_is_reconciled
     risk = LiveRiskController(settings)
     executor = LiveTradingExecutor(settings, {"bybit": adapter}, factory, risk)
 
-    position = await executor.open_position(
+    position = await open_approved(
+        executor,
+        settings,
         spot_perp_opportunity(),
-        Decimal("100"),
         spot_perp_snapshot(),
         "spot-key",
         {"bybit": VenueBalance(
@@ -460,7 +564,6 @@ async def test_spot_base_fee_is_hedged_from_balance_delta_and_dust_is_reconciled
             free={"USDT": Decimal("1000")},
             total={"USDT": Decimal("1000")},
         )},
-        Decimal("0"),
     )
 
     assert position.state is LivePositionState.OPEN
@@ -498,8 +601,8 @@ async def test_second_leg_rejection_unwinds_first_leg(
         LiveRiskController(settings),
     )
 
-    position = await executor.open_position(
-        opportunity(), Decimal("100"), market_snapshot(), "key", balances(), Decimal("0")
+    position = await open_approved(
+        executor, settings, opportunity(), market_snapshot(), "key", balances()
     )
 
     assert position.state is LivePositionState.FAILED
@@ -522,8 +625,8 @@ async def test_unknown_order_state_trips_persistent_kill_switch(
         settings, {"bybit": bybit, "gate": gate}, factory, risk
     )
 
-    position = await executor.open_position(
-        opportunity(), Decimal("100"), market_snapshot(), "key", balances(), Decimal("0")
+    position = await open_approved(
+        executor, settings, opportunity(), market_snapshot(), "key", balances()
     )
 
     assert position.state is LivePositionState.MANUAL_INTERVENTION
@@ -531,6 +634,45 @@ async def test_unknown_order_state_trips_persistent_kill_switch(
     assert risk.kill_switch_path.read_text(encoding="utf-8").strip() == (
         "first_leg_order_state_unknown"
     )
+    assert gate.requests == []
+
+
+@pytest.mark.asyncio
+async def test_submission_exception_is_durable_unknown_and_never_retried(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]], tmp_path: Path
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path)
+    risk = LiveRiskController(settings)
+    bybit = AcceptedThenRaisesAdapter("bybit", [])
+    gate = FakeTradingAdapter("gate", [])
+    executor = LiveTradingExecutor(
+        settings, {"bybit": bybit, "gate": gate}, factory, risk
+    )
+
+    candidate = opportunity()
+    snapshot = market_snapshot()
+    approval = live_approval(settings, candidate, snapshot, "timeout-key")
+    position = await executor.open_position(
+        approval, snapshot, balances(), Decimal("0")
+    )
+
+    assert position.state is LivePositionState.MANUAL_INTERVENTION
+    assert position.failure_reason == "first_leg_order_state_unknown"
+    assert risk.paused_reason == "order_submission_outcome_unknown"
+    assert len(bybit.requests) == 1
+    assert gate.requests == []
+    async with factory() as session:
+        order = await session.scalar(select(LiveOrderRecord))
+    assert order is not None
+    assert order.status == LiveOrderStatus.UNKNOWN.value
+    assert order.payload["raw"] == {"submission_error_type": "TimeoutError"}
+
+    with pytest.raises(LiveTradingPaused, match="order_submission_outcome_unknown"):
+        await executor.open_position(
+            approval, snapshot, balances(), Decimal("0")
+        )
+    assert len(bybit.requests) == 1
     assert gate.requests == []
 
 
@@ -549,8 +691,9 @@ async def test_stale_book_fails_before_any_exchange_submission(
         LiveRiskController(settings),
     )
 
-    position = await executor.open_position(
-        opportunity(), Decimal("100"), market_snapshot(stale=True), "key", balances(), Decimal("0")
+    stale_snapshot = market_snapshot(stale=True)
+    position = await open_approved(
+        executor, settings, opportunity(), stale_snapshot, "key", balances()
     )
 
     assert position.state is LivePositionState.FAILED
@@ -576,13 +719,13 @@ async def test_spot_entry_rejects_funds_held_only_in_derivatives_wallet(
         derivative_free_collateral_usd=Decimal("1000"),
     )
 
-    position = await executor.open_position(
+    position = await open_approved(
+        executor,
+        settings,
         spot_perp_opportunity(),
-        Decimal("100"),
         spot_perp_snapshot(),
         "wallet-key",
         {"bybit": aggregate_only},
-        Decimal("0"),
     )
 
     assert position.state is LivePositionState.FAILED
@@ -794,3 +937,409 @@ async def test_balance_refresh_pauses_on_venue_identity_mismatch(tmp_path: Path)
         await runner._fetch_fresh_balances()
 
     assert runner.risk.kill_switch_path.exists()
+
+class _DynamicMetadataExchange:
+    rateLimit = 50
+    precisionMode = 4
+    has = {"createOrder": True}
+
+    def __init__(self, symbol: str, *, active: bool) -> None:
+        market = {
+            "id": symbol,
+            "symbol": symbol,
+            "base": "BTC",
+            "quote": "USDT",
+            "settle": "USDT",
+            "spot": False,
+            "swap": True,
+            "future": False,
+            "active": active,
+            "contractSize": "0.001",
+            "precision": {"price": "0.1", "amount": "1"},
+            "limits": {
+                "amount": {"min": "1"},
+                "cost": {"min": "5"},
+            },
+            "maker": "0.0002",
+            "taker": "0.0005",
+        }
+        self.markets = {symbol: market}
+
+
+@pytest.mark.asyncio
+async def test_live_entry_consumes_dynamic_metadata_and_rejects_inactive_market(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]], tmp_path: Path
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path)
+    registry = VenueMetadataRegistry()
+    observed_at = datetime.now(UTC)
+    registry.update_from_ccxt(
+        venue="bybit",
+        account="linear",
+        exchange=_DynamicMetadataExchange("BTCUSDT", active=True),
+        expected_type=DomainInstrumentType.PERPETUAL,
+        observed_at=observed_at,
+        server_time_ms=None,
+    )
+    registry.update_from_ccxt(
+        venue="gate",
+        account="linear",
+        exchange=_DynamicMetadataExchange("BTC_USDT", active=False),
+        expected_type=DomainInstrumentType.PERPETUAL,
+        observed_at=observed_at,
+        server_time_ms=None,
+    )
+    bybit = FakeTradingAdapter("bybit", [])
+    gate = FakeTradingAdapter("gate", [])
+    executor = LiveTradingExecutor(
+        settings,
+        {"bybit": bybit, "gate": gate},
+        factory,
+        LiveRiskController(settings),
+        metadata_registry=registry,
+    )
+
+    with pytest.raises(LiveExecutionError, match="metadata is inactive"):
+        await open_approved(
+            executor,
+            settings,
+            opportunity(),
+            market_snapshot(),
+            "metadata-key",
+            balances(),
+        )
+
+    assert bybit.requests == []
+    assert gate.requests == []
+
+def test_live_decision_service_builds_bounded_immutable_authority(
+    tmp_path: Path,
+) -> None:
+    settings = live_settings(tmp_path)
+    snapshot = market_snapshot()
+    authority = live_approval(settings, opportunity(), snapshot, "decision-key")
+
+    assert authority.market_snapshot_at == snapshot.captured_at
+    assert authority.risk_decision.approved_quantity == Decimal("1")
+    assert authority.plan.instructions[0].side.value == "SELL"
+    assert authority.plan.instructions[0].limit_price is not None
+    assert authority.plan.instructions[0].limit_price < Decimal("100")
+    assert authority.plan.instructions[1].side.value == "BUY"
+    assert authority.plan.instructions[1].limit_price is not None
+    assert authority.plan.instructions[1].limit_price > Decimal("100")
+
+    tampered_instruction = authority.plan.instructions[1].model_copy(
+        update={"side": authority.plan.instructions[0].side}
+    )
+    tampered_plan = authority.plan.model_copy(
+        update={
+            "instructions": (
+                authority.plan.instructions[0],
+                tampered_instruction,
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="changed approved exposure"):
+        LiveExecutionApproval.model_validate(
+            authority.model_dump() | {"plan": tampered_plan.model_dump()}
+        )
+
+
+@pytest.mark.asyncio
+async def test_live_executor_rejects_unapproved_snapshot_before_exchange_action(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    tmp_path: Path,
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path)
+    bybit = FakeTradingAdapter("bybit", [])
+    gate = FakeTradingAdapter("gate", [])
+    executor = LiveTradingExecutor(
+        settings,
+        {"bybit": bybit, "gate": gate},
+        factory,
+        LiveRiskController(settings),
+    )
+    approved_snapshot = market_snapshot()
+    authority = live_approval(
+        settings,
+        opportunity(),
+        approved_snapshot,
+        "snapshot-key",
+    )
+    different_snapshot = replace(
+        approved_snapshot,
+        captured_at=approved_snapshot.captured_at + timedelta(milliseconds=1),
+    )
+
+    with pytest.raises(LiveExecutionError, match="differs from approved snapshot"):
+        await executor.open_position(
+            authority,
+            different_snapshot,
+            balances(),
+            Decimal("0"),
+        )
+
+    assert bybit.requests == []
+    assert gate.requests == []
+
+def test_live_decision_service_rejects_non_executable_inputs(tmp_path: Path) -> None:
+    settings = live_settings(tmp_path)
+    snapshot = market_snapshot()
+    candidate = opportunity()
+    quote = candidate.size_quotes[0]
+    service = FundingLiveDecisionService(settings, LiveRiskController(settings))
+
+    cases: tuple[tuple[str, Opportunity, SizeQuote], ...] = (
+        (
+            "only confirmed opportunities",
+            candidate.model_copy(update={"status": OpportunityStatus.CANDIDATE}),
+            quote,
+        ),
+        (
+            "positive net edge after costs",
+            candidate.model_copy(update={"net_edge": Decimal("0")}),
+            quote,
+        ),
+        (
+            "positive net edge after costs",
+            candidate,
+            quote.model_copy(update={"net_profit": Decimal("0")}),
+        ),
+        (
+            "fully executable positive size",
+            candidate,
+            quote.model_copy(update={"capital": Decimal("0")}),
+        ),
+        (
+            "fully executable positive size",
+            candidate,
+            quote.model_copy(update={"fully_filled": False}),
+        ),
+        (
+            "asset is not live-allowlisted",
+            candidate.model_copy(update={"asset": "DOGE"}),
+            quote,
+        ),
+        (
+            "strategy is not live-allowlisted",
+            candidate.model_copy(update={"strategy": StrategyName.PERP_PERP}),
+            quote,
+        ),
+    )
+    for message, changed_candidate, changed_quote in cases:
+        with pytest.raises(ValueError, match=message):
+            service.approve(
+                changed_candidate,
+                changed_quote,
+                snapshot,
+                "invalid-input",
+                now=snapshot.captured_at,
+            )
+
+
+def test_live_decision_service_rejects_mode_expiry_and_metadata_gaps(
+    tmp_path: Path,
+) -> None:
+    settings = live_settings(tmp_path)
+    snapshot = market_snapshot()
+    candidate = opportunity()
+    quote = candidate.size_quotes[0]
+
+    paper_settings = settings.model_copy(update={"trading_mode": TradingMode.PAPER})
+    paper_service = FundingLiveDecisionService(
+        paper_settings,
+        LiveRiskController(paper_settings),
+    )
+    with pytest.raises(ValueError, match="does not authorize exchange orders"):
+        paper_service.approve(
+            candidate,
+            quote,
+            snapshot,
+            "paper-mode",
+            now=snapshot.captured_at,
+        )
+
+    service = FundingLiveDecisionService(settings, LiveRiskController(settings))
+    expired = candidate.model_copy(
+        update={"expires_at": snapshot.captured_at - timedelta(microseconds=1)}
+    )
+    with pytest.raises(ValueError, match="expired before live decision"):
+        service.approve(
+            expired,
+            quote,
+            snapshot,
+            "expired",
+            now=snapshot.captured_at,
+        )
+
+    missing_symbol = candidate.model_copy(update={"symbol_a": None})
+    with pytest.raises(ValueError, match="exact exchange symbols"):
+        service.approve(
+            missing_symbol,
+            quote,
+            snapshot,
+            "missing-symbol",
+            now=snapshot.captured_at,
+        )
+
+    without_instruments = replace(snapshot, instruments=[])
+    with pytest.raises(ValueError, match="active typed instrument metadata"):
+        service.approve(
+            candidate,
+            quote,
+            without_instruments,
+            "missing-metadata",
+            now=snapshot.captured_at,
+        )
+
+class VenueIdentityMismatchAdapter(FakeTradingAdapter):
+    async def fetch_balance(self) -> VenueBalance:
+        return VenueBalance(exchange="wrong-venue")
+
+
+class RichUnexpectedStateAdapter(FakeTradingAdapter):
+    async def fetch_balance(self) -> VenueBalance:
+        return VenueBalance(
+            exchange=self.name,
+            free={
+                "USDT": Decimal("1000"),
+                "BTC": Decimal("0.5"),
+                "DOGE": Decimal("2"),
+            },
+            total={
+                "USDT": Decimal("1000"),
+                "BTC": Decimal("0.5"),
+                "DOGE": Decimal("2"),
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_treats_venue_identity_failure_as_private_api_outage(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    tmp_path: Path,
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path)
+    risk = LiveRiskController(settings)
+    adapter = VenueIdentityMismatchAdapter("bybit", [])
+    reconciler = LiveReconciler(settings, {"bybit": adapter}, factory, risk)
+
+    with pytest.raises(LiveTradingPaused, match="private_api_unavailable"):
+        await reconciler.reconcile(startup=True)
+
+    assert reconciler.last_result is not None
+    assert reconciler.last_result.details["api_errors"] == {"bybit": "ValueError"}
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_blocks_manual_intervention_position(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    tmp_path: Path,
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path)
+    position = LivePosition(
+        position_id="manual-position",
+        intent_id="manual-intent",
+        opportunity_id="manual-opportunity",
+        opportunity_key="manual-key",
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING.value,
+        asset="BTC",
+        capital_per_leg=Decimal("100"),
+        state=LivePositionState.MANUAL_INTERVENTION,
+    )
+    async with factory() as session:
+        await create_live_intent(
+            session,
+            position.intent_id,
+            opportunity(),
+            position.capital_per_leg,
+        )
+        await save_live_position(session, position)
+
+    reconciler = LiveReconciler(
+        settings,
+        {"bybit": FakeTradingAdapter("bybit", [])},
+        factory,
+        LiveRiskController(settings),
+    )
+    with pytest.raises(LiveTradingPaused, match="manual_intervention_position"):
+        await reconciler.reconcile()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_detects_spot_derivative_balance_and_order_drift(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    tmp_path: Path,
+) -> None:
+    _, factory = database
+    settings = live_settings(tmp_path)
+    adapter = RichUnexpectedStateAdapter("bybit", [])
+    adapter.orders.append(
+        TradingOrderResult(
+            exchange="bybit",
+            exchange_order_id="venue-orphan",
+            client_order_id="orphan-client-order",
+            exchange_symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            side="SELL",
+            requested_base_quantity=Decimal("1"),
+            filled_base_quantity=Decimal("0"),
+            status=LiveOrderStatus.OPEN,
+        )
+    )
+    position = LivePosition(
+        position_id="open-position",
+        intent_id="open-intent",
+        opportunity_id="open-opportunity",
+        opportunity_key="open-key",
+        strategy=StrategyName.SPOT_PERP.value,
+        asset="BTC",
+        capital_per_leg=Decimal("100"),
+        state=LivePositionState.OPEN,
+        leg_a=LiveLeg(
+            exchange="bybit",
+            exchange_symbol="BTCUSDT",
+            instrument_type=InstrumentType.SPOT,
+            side="BUY",
+            requested_base_quantity=Decimal("1"),
+            filled_base_quantity=Decimal("1"),
+            average_price=Decimal("100"),
+        ),
+        leg_b=LiveLeg(
+            exchange="bybit",
+            exchange_symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            side="SELL",
+            requested_base_quantity=Decimal("1"),
+            filled_base_quantity=Decimal("1"),
+            average_price=Decimal("100"),
+        ),
+    )
+    async with factory() as session:
+        await create_live_intent(
+            session,
+            position.intent_id,
+            opportunity(),
+            position.capital_per_leg,
+        )
+        await save_live_position(session, position)
+
+    reconciler = LiveReconciler(
+        settings,
+        {"bybit": adapter},
+        factory,
+        LiveRiskController(settings),
+    )
+    with pytest.raises(LiveTradingPaused) as exc_info:
+        await reconciler.reconcile()
+
+    reason = str(exc_info.value)
+    assert "derivative_position_mismatch" in reason
+    assert "spot_inventory_mismatch" in reason
+    assert "unexpected_spot_balance" in reason
+    assert "unexpected_open_order" in reason
+    assert "non_terminal_live_order" in reason

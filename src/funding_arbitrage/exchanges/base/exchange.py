@@ -56,7 +56,7 @@ class ExchangeAdapter(ABC):
         raise NotImplementedError("orderbook streaming is not implemented by this adapter")
 
     def stream_funding(self, symbols: list[str]) -> AsyncIterator[FundingSnapshot]:
-        raise NotImplementedError("funding streaming is not part of PHASE 2")
+        raise NotImplementedError("native funding streaming is unavailable for this adapter")
 
     async def get_candles(
         self,

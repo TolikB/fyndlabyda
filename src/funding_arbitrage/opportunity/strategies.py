@@ -500,7 +500,9 @@ def scan_cross_exchange_funding(
         ticker = _ticker(snapshot, funding.exchange, funding.symbol, InstrumentType.PERPETUAL)
         if ticker is None:
             continue
-        instrument = snapshot.instrument(funding.exchange, funding.symbol)
+        instrument = snapshot.instrument(
+            funding.exchange, funding.symbol, InstrumentType.PERPETUAL
+        )
         if instrument is not None:
             key = (funding.exchange, funding.symbol)
             points = (snapshot.funding_history or {}).get(key, [])

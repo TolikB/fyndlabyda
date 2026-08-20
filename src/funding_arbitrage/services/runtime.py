@@ -45,6 +45,8 @@ class RuntimeState:
         entry_health: Callable[[], tuple[bool, str | None]] | None = None,
     ) -> None:
         self.settings = settings
+        self.trading_mode = settings.effective_trading_mode
+        self.mode_contract = settings.mode_contract
         self.adapters = adapters
         self.emit_metrics = emit_metrics
         self.entry_health = entry_health
@@ -190,9 +192,13 @@ class RuntimeState:
         return self.portfolio.snapshot().equity
 
     def entries_allowed(self) -> bool:
+        if not self.mode_contract.new_positions_enabled:
+            return False
         return self.entry_health is None or self.entry_health()[0]
 
     def entry_block_reason(self) -> str | None:
+        if not self.mode_contract.new_positions_enabled:
+            return f"trading_mode_{self.trading_mode.value.lower()}_blocks_entries"
         if self.entry_health is None:
             return None
         healthy, reason = self.entry_health()

@@ -40,8 +40,10 @@ class HtxTradingAdapter(CcxtTradingAdapter):
         if instrument_type is InstrumentType.SPOT:
             return await super().fetch_taker_fee(exchange_symbol, instrument_type)
         key = (exchange_symbol, instrument_type)
-        if key in self._taker_fee_cache:
-            return self._taker_fee_cache[key]
+        now = self._clock()
+        cached = self._taker_fee_cache.get(key)
+        if cached is not None and now - cached[1] <= self.fee_cache_ttl_seconds:
+            return cached[0]
         market = self._market(exchange_symbol, instrument_type)
         response = await self.exchange.request(
             "linear-swap-api/v1/swap_fee",
@@ -68,7 +70,7 @@ class HtxTradingAdapter(CcxtTradingAdapter):
         fee = max(open_fee, close_fee)
         if open_fee < 0 or close_fee < 0 or fee > Decimal("0.02"):
             raise RuntimeError("htx returned an invalid derivative taker fee")
-        self._taker_fee_cache[key] = fee
+        self._taker_fee_cache[key] = (fee, now)
         return fee
 
     async def fetch_funding_payments(self, since: datetime) -> list[VenueFundingPayment]:

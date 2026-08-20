@@ -26,19 +26,28 @@ async def live_status(request: Request) -> dict[str, object]:
     if runner is None:
         return {"enabled": False, "armed": False, "ready": False}
     reconciliation = runner.reconciler.last_result
+    private_streams = runner.private_streams
+    private_stream_status = (
+        private_streams.snapshot() if private_streams is not None else None
+    )
     return {
         "enabled": True,
         "armed": runner.settings.live_armed,
         "autotrade": runner.settings.live_autotrade,
         "sandbox": runner.settings.live_sandbox,
         "venues": list(runner.settings.live_venue_values),
-        "ready": runner.initialized and not runner.risk.paused,
+        "ready": (
+            runner.initialized
+            and not runner.risk.paused
+            and (private_stream_status is None or private_stream_status["healthy"] is True)
+        ),
         "paused": runner.risk.paused,
         "paused_reason": runner.risk.paused_reason,
         "startup_error": runner.startup_error,
         "reconciliation_passed": (
             reconciliation.passed if reconciliation is not None else False
         ),
+        "private_streams": private_stream_status,
         "open_positions": sum(
             position.state == "OPEN" for position in runner.positions.values()
         ),

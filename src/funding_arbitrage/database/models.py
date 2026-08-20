@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     UniqueConstraint,
@@ -292,7 +293,9 @@ class PaperRuntimeIncidentRecord(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     simulation_version: Mapped[str] = mapped_column(String(32), index=True)
     category: Mapped[str] = mapped_column(String(32), index=True)
@@ -325,6 +328,29 @@ class BacktestResultRecord(Base):
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
     monthly_distribution: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class MarketReplayJobRecord(Base):
+    """Durable, leased market-replay job state for restart-safe execution."""
+
+    __tablename__ = "market_replay_jobs"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    job_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    stage: Mapped[str] = mapped_column(String(64))
+    request_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class TelegramDailyReportRecord(Base):
@@ -478,7 +504,12 @@ class CanonicalEventRecord(Base):
             "monotonic_ns",
             "event_id",
         ),
-        Index("ix_canonical_events_source_sequence", "source", "sequence_id"),
+        Index(
+            "ix_canonical_events_source_sequence",
+            "source",
+            "native_sequence",
+            "sequence_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -488,6 +519,7 @@ class CanonicalEventRecord(Base):
     kind: Mapped[str] = mapped_column(String(40), index=True)
     source: Mapped[str] = mapped_column(String(128), index=True)
     sequence_id: Mapped[str] = mapped_column(String(128))
+    native_sequence: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     correlation_id: Mapped[str] = mapped_column(String(128), index=True)
     payload_version: Mapped[int] = mapped_column(Integer)
     quality: Mapped[str] = mapped_column(String(24), index=True)
@@ -496,6 +528,17 @@ class CanonicalEventRecord(Base):
     monotonic_ns: Mapped[int] = mapped_column(BigInteger)
     payload_hash: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class AnalyticsReplicationCheckpointRecord(Base):
+    """Durable cursor from authoritative PostgreSQL events into ClickHouse."""
+
+    __tablename__ = "analytics_replication_checkpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    consumer_name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    last_event_row_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class RiskDecisionRecord(Base):
@@ -702,6 +745,33 @@ class WithdrawalStateRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ApiIdempotencyRecord(Base):
+    """Durable response cache and replay guard for authenticated control writes."""
+
+    __tablename__ = "api_idempotency_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_id",
+            "idempotency_key",
+            name="uq_api_idempotency_principal_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    principal_id: Mapped[str] = mapped_column(String(128), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(16), index=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    response_headers: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class ImmutableAuditRecord(Base):

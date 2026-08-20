@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ssl
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from funding_arbitrage.domain.decisions import SignalIntent
 from funding_arbitrage.domain.events import EventEnvelope
@@ -26,7 +34,7 @@ ALLOWED_TABLES = frozenset(
 class ClickHouseStoragePolicy(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    url: str = "http://clickhouse:8123"
+    url: str = "https://clickhouse:8443"
     database: str = "funding_analytics"
     username: str = Field(min_length=1)
     password: SecretStr
@@ -34,6 +42,12 @@ class ClickHouseStoragePolicy(BaseModel):
     request_timeout_seconds: float = Field(default=10, gt=0)
     maximum_batch_rows: int = Field(default=5000, gt=0)
     maximum_batch_bytes: int = Field(default=8_000_000, gt=0)
+
+    @model_validator(mode="after")
+    def require_encrypted_transport(self) -> ClickHouseStoragePolicy:
+        if self.verify_tls and not self.url.lower().startswith("https://"):
+            raise ValueError("verified ClickHouse transport requires HTTPS")
+        return self
 
 
 class FeatureAnalyticsEvent(BaseModel):
@@ -79,15 +93,30 @@ class ClickHouseHttpWriter:
         self,
         policy: ClickHouseStoragePolicy,
         client: httpx.AsyncClient | None = None,
+        *,
+        tls_context: ssl.SSLContext | None = None,
     ) -> None:
         self.policy = policy
         self._owns_client = client is None
+        verification: bool | ssl.SSLContext = (
+            tls_context if policy.verify_tls and tls_context is not None else policy.verify_tls
+        )
         self.client = client or httpx.AsyncClient(
             base_url=policy.url,
             auth=(policy.username, policy.password.get_secret_value()),
-            verify=policy.verify_tls,
+            verify=verification,
             timeout=policy.request_timeout_seconds,
         )
+
+    async def ping(self) -> None:
+        response = await self.client.post(
+            "/",
+            params={"database": self.policy.database, "query": "SELECT 1"},
+        )
+        if response.status_code >= 300:
+            raise RuntimeError(
+                f"ClickHouse health query failed with HTTP {response.status_code}"
+            )
 
     async def close(self) -> None:
         if self._owns_client:

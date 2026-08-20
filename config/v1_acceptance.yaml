@@ -53,10 +53,17 @@ requirements:
   - id: ARCH-001
     category: architecture
     title: Strategy intent is separated from validation, risk, execution plan, OMS, and adapter
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/domain/decisions.py
+      - src/funding_arbitrage/services/decision_pipeline.py
+      - src/funding_arbitrage/services/live_runner.py
+      - src/funding_arbitrage/execution/oms.py
+      - src/funding_arbitrage/execution/live.py
       - tests/test_domain_decisions.py
+      - tests/test_decision_pipeline.py
+      - tests/test_durable_oms.py
+      - tests/test_live_executor.py
   - id: ARCH-002
     category: architecture
     title: Canonical typed models cover market, account, order, fill, position, and balance events
@@ -74,23 +81,31 @@ requirements:
   - id: ARCH-004
     category: architecture
     title: Event processing is idempotent, restart-safe, deterministic, and replayable
-    status: partial
+    status: implemented
     evidence:
+      - src/funding_arbitrage/domain/events.py
       - src/funding_arbitrage/database/repositories/events.py
       - migrations/versions/0011_canonical_events.py
-      - tests/test_event_journal.py
       - src/funding_arbitrage/services/event_writer.py
+      - src/funding_arbitrage/services/event_router.py
+      - tests/test_domain_events.py
+      - tests/test_event_journal.py
       - tests/test_event_writer.py
   - id: MODE-001
     category: architecture
     title: BACKTEST, REPLAY, SHADOW, PAPER, LIMITED_LIVE, LIVE, and SAFE_MODE share explicit contracts
-    status: partial
+    status: implemented
     evidence:
+      - src/funding_arbitrage/domain/modes.py
+      - src/funding_arbitrage/domain/decisions.py
       - src/funding_arbitrage/config.py
+      - src/funding_arbitrage/services/runtime.py
+      - tests/test_runtime_modes.py
+      - docs/V1_RUNTIME_MODES.md
   - id: MD-001
     category: market_data
     title: Native public WebSocket and REST recovery adapters cover all eight existing CEX venues
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/exchanges
       - src/funding_arbitrage/exchanges/bybit/orderbook.py
@@ -120,36 +135,71 @@ requirements:
       - tests/test_remaining_canonical_orderbooks.py
       - scripts/remaining_cex_canonical_book_probe.py
       - ops/REMAINING_CEX_CANONICAL_BOOK_EVIDENCE.md
+      - src/funding_arbitrage/exchanges/factory.py
+      - tests/test_native_market_data_coverage.py
   - id: MD-002
     category: market_data
     title: Private order, fill, position, balance, and account streams are normalized and reconciled
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/exchanges/private_streams.py
+      - src/funding_arbitrage/execution/reconciliation.py
+      - src/funding_arbitrage/services/live_runner.py
+      - tests/test_private_streams.py
+      - docs/V1_PRIVATE_STREAMS.md
   - id: MD-003
     category: market_data
     title: L1 and L2 books reconstruct snapshot plus deltas with sequence and checksum recovery
     status: partial
     evidence:
       - src/funding_arbitrage/market_data/l2_book.py
+      - src/funding_arbitrage/market_data/orderbook_protocols.py
+      - src/funding_arbitrage/exchanges
       - tests/test_l2_book.py
+      - tests/test_orderbook_protocols.py
+      - tests/test_binance_canonical_orderbook.py
+      - tests/test_bybit_canonical_orderbook.py
+      - tests/test_gate_canonical_orderbook.py
+      - tests/test_okx_canonical_orderbook.py
+      - tests/test_hyperliquid_canonical_orderbook.py
+      - tests/test_mexc_canonical_orderbook.py
+      - tests/test_remaining_canonical_orderbooks.py
+      - docs/V1_ORDERBOOK_RECOVERY.md
   - id: MD-004
     category: market_data
     title: Tick trades, OHLCV, mark, index, funding, OI, and public liquidations are collected
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/exchanges/base/models.py
+      - src/funding_arbitrage/exchanges/public_events.py
+      - src/funding_arbitrage/domain/events.py
+      - src/funding_arbitrage/services/event_writer.py
+      - tests/test_public_events.py
+      - tests/test_event_journal.py
+      - docs/V1_PUBLIC_EVENTS.md
   - id: MD-005
     category: market_data
     title: Data quality states detect stale, gap, crossed, invalid, recovering, and unavailable streams
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/market_data/health.py
+      - src/funding_arbitrage/market_data/quality.py
+      - src/funding_arbitrage/services/event_router.py
+      - src/funding_arbitrage/exchanges/public_events.py
+      - src/funding_arbitrage/main.py
+      - tests/test_data_quality_monitor.py
+      - tests/test_runtime_entry_health.py
+      - tests/test_public_events.py
   - id: MD-006
     category: market_data
     title: Instrument metadata, capabilities, precision, fees, rate limits, and clock skew are dynamic per venue
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/exchanges
+      - src/funding_arbitrage/market_data/venue_metadata.py
+      - src/funding_arbitrage/exchanges/public_events.py
+      - src/funding_arbitrage/exchanges/trading.py
+      - src/funding_arbitrage/execution/live.py
+      - tests/test_venue_metadata.py
+      - tests/test_trading_fee_cache.py
+      - tests/test_live_executor.py
   - id: FEAT-001
     category: features
     title: Incremental EMA, ATR, ADX, efficiency ratio, VWAP, and volume profile features exist
@@ -404,25 +454,47 @@ requirements:
   - id: BT-001
     category: backtest
     title: Deterministic event-driven backtest and replay use the same strategy, risk, and OMS contracts as runtime
-    status: partial
+    status: implemented
     evidence:
-      - src/funding_arbitrage/backtest
+      - src/funding_arbitrage/domain/decisions.py
+      - src/funding_arbitrage/services/decision_pipeline.py
+      - src/funding_arbitrage/execution/oms.py
+      - src/funding_arbitrage/backtest/historical_replay.py
+      - tests/test_decision_pipeline.py
+      - tests/test_durable_oms.py
+      - tests/test_historical_replay.py
+      - docs/V1_REPLAY_RUNTIME_PARITY.md
   - id: BT-002
     category: backtest
     title: Fill models cover aggressive, passive queue, latency, partials, impact, rejections, cancel races, and funding
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/backtest/fills.py
+      - src/funding_arbitrage/backtest/historical_replay.py
+      - tests/test_backtest_fill_model.py
+      - tests/test_historical_replay.py
+      - tests/test_pnl_v2.py
+      - docs/V1_BACKTEST_FILL_MODEL.md
   - id: BT-003
     category: backtest
     title: Research prevents look-ahead and survivorship bias and supports walk-forward, Monte Carlo, and stress
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/backtest/research.py
+      - src/funding_arbitrage/strategies/universe.py
+      - tests/test_research_validation.py
+      - tests/test_universe_selector.py
+      - docs/V1_RESEARCH_VALIDATION.md
   - id: BT-004
     category: backtest
     title: Research gates enforce profitability, expectancy, Sharpe, drawdown, diversification, and doubled-slippage robustness
-    status: partial
+    status: implemented
     evidence:
+      - src/funding_arbitrage/backtest/gates.py
       - src/funding_arbitrage/backtest/comparison.py
+      - tests/test_research_gates.py
+      - tests/test_comparison.py
+      - docs/V1_RESEARCH_VALIDATION.md
   - id: DATA-001
     category: storage
     title: PostgreSQL operational schema covers instruments, intents, orders, fills, positions, balances, risk, reconciliation, and audit
@@ -435,10 +507,13 @@ requirements:
   - id: DATA-002
     category: storage
     title: ClickHouse stores raw market events, features, signals, and telemetry with retention
-    status: implemented
+    status: partial
     evidence:
       - docker/clickhouse/init/001_v1_analytics.sql
       - src/funding_arbitrage/storage/clickhouse.py
+      - src/funding_arbitrage/storage/replication.py
+      - src/funding_arbitrage/main.py
+      - migrations/versions/0016_analytics_replication.py
       - tests/test_analytics_storage.py
       - docker-compose.yml
   - id: DATA-003
@@ -473,45 +548,97 @@ requirements:
       - docs/V1_DATA_RETENTION.md
   - id: SEC-001
     category: security
-    title: Control plane enforces JWT, mTLS, RBAC, idempotency, rate limits, and immutable audit
-    status: missing
-    evidence: []
+    title: Control plane enforces JWT revocation, mTLS, RBAC, idempotency, rate limits, and immutable audit
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/security/control_plane.py
+      - src/funding_arbitrage/security/rate_limit.py
+      - src/funding_arbitrage/security/revocation.py
+      - src/funding_arbitrage/database/repositories/control_plane.py
+      - src/funding_arbitrage/database/repositories/audit.py
+      - migrations/versions/0014_control_plane_security.py
+      - docker/nginx/control-plane.conf
+      - docker-compose.yml
+      - tests/test_control_plane_security.py
+      - docs/V1_CONTROL_PLANE_SECURITY.md
   - id: SEC-002
     category: security
     title: Secrets use least privilege, no-withdraw keys by default, IP allowlists, subaccounts, rotation, and redaction
-    status: partial
+    status: implemented
     evidence:
+      - src/funding_arbitrage/credential_policy.py
       - src/funding_arbitrage/config.py
       - .env.live.example
+      - docker-compose.yml
+      - tests/test_credential_policy.py
+      - tests/test_live_config.py
+      - ops/LIVE_TRADING_RUNBOOK.md
   - id: SEC-003
     category: security
     title: Databases are non-public and service traffic supports TLS and authenticated access
-    status: partial
+    status: implemented
     evidence:
+      - src/funding_arbitrage/internal_tls.py
+      - src/funding_arbitrage/database/session.py
+      - migrations/env.py
+      - src/funding_arbitrage/security/rate_limit.py
+      - src/funding_arbitrage/security/revocation.py
+      - src/funding_arbitrage/storage/clickhouse.py
       - docker-compose.yml
+      - docker/postgres/pg_hba.conf
+      - docker/redis/secure-entrypoint.sh
+      - docker/clickhouse/config.d/tls.xml
+      - tests/test_internal_tls.py
+      - tests/test_deployment_safety.py
+      - tests/test_analytics_storage.py
+      - docs/V1_INTERNAL_SERVICE_SECURITY.md
   - id: OBS-001
     category: monitoring
     title: Prometheus and Grafana expose market, strategy, risk, OMS, portfolio, reconciliation, and latency telemetry
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/monitoring/metrics.py
       - docker/prometheus.yml
+      - docker/grafana/provisioning/datasources/prometheus.yml
+      - docker/grafana/provisioning/dashboards/dashboards.yml
+      - docker/grafana/dashboards/funding-v1-operations.json
+      - tests/test_observability_alerts.py
+      - docs/V1_OBSERVABILITY.md
   - id: OBS-002
     category: monitoring
     title: Actionable alerts cover stale data, gaps, latency, rejects, unknown orders, exposure, drawdown, and reconciliation drift
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - docker/prometheus-alerts.yml
+      - docker/prometheus.yml
+      - docker/alertmanager/alertmanager.yml
+      - src/funding_arbitrage/monitoring/metrics.py
+      - src/funding_arbitrage/execution/live.py
+      - src/funding_arbitrage/services/live_runner.py
+      - tests/test_observability_alerts.py
+      - ops/ALERT_RUNBOOK.md
+      - docs/V1_ALERTING.md
   - id: API-001
     category: security
     title: Read and controlled-write API endpoints are authenticated, authorized, idempotent, validated, and audited
-    status: missing
-    evidence: []
+    status: implemented
+    evidence:
+      - src/funding_arbitrage/security/control_plane.py
+      - src/funding_arbitrage/api/routes/control.py
+      - src/funding_arbitrage/api/routes/websocket.py
+      - src/funding_arbitrage/database/repositories/backtest_jobs.py
+      - src/funding_arbitrage/main.py
+      - tests/test_control_plane_security.py
+      - tests/test_backtest_job_persistence.py
   - id: QA-001
     category: delivery
     title: Unit, integration, contract, replay, and failure-injection suites meet 85 percent overall and 95 percent critical coverage
-    status: partial
+    status: implemented
     evidence:
       - tests
+      - scripts/coverage_gate.py
+      - pyproject.toml
+      - .github/workflows/release-gate.yml
   - id: QA-002
     category: delivery
     title: CI runs lint, type, unit, integration, replay, security, container scan, signing, shadow deploy, and manual live gate
@@ -521,13 +648,28 @@ requirements:
   - id: QA-003
     category: delivery
     title: Docker Compose, Terraform, Vault integration, Chrony, backups, restore, and runbooks are verified
-    status: missing
-    evidence: []
+    status: partial
+    evidence:
+      - docker-compose.yml
+      - infra/terraform
+      - infra/vault
+      - scripts/host_preflight.sh
+      - scripts/backup_state.sh
+      - scripts/restore_state.sh
+      - ops/INFRASTRUCTURE_RUNBOOK.md
+      - ops/BACKUP_RESTORE_RUNBOOK.md
+      - tests/test_infrastructure_delivery.py
+      - .github/workflows/release-gate.yml
   - id: QA-004
     category: delivery
     title: P99 latency budgets and reliability SLOs are measured under representative load
-    status: missing
-    evidence: []
+    status: partial
+    evidence:
+      - src/funding_arbitrage/qa/load_slo.py
+      - scripts/load_slo.py
+      - tests/test_load_slo.py
+      - docs/V1_PERFORMANCE_SLO.md
+      - .github/workflows/release-gate.yml
   - id: GATE-001
     category: delivery
     title: Shadow acceptance window completes without accounting, risk, or reconciliation violations

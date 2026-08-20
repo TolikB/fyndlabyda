@@ -539,7 +539,9 @@ class KucoinPublicAdapter(ExchangeAdapter):
         stream: str,
         depth: int,
     ) -> AsyncIterator[Ticker | OrderBook]:
-        queue: asyncio.Queue[Ticker | OrderBook | BaseException] = asyncio.Queue()
+        queue: asyncio.Queue[Ticker | OrderBook | BaseException] = asyncio.Queue(
+            maxsize=max(64, len(symbols) * 4)
+        )
 
         async def pump(kind: InstrumentType, requested: list[str]) -> None:
             try:
