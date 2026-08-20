@@ -99,7 +99,10 @@ def test_duplicate_is_idempotent_but_gap_fails_closed_until_new_snapshot() -> No
     assert blocked.reason == "snapshot_required"
     assert book.tradable is False
 
-    recovered = book.apply_snapshot(_snapshot(sequence=200))
+    recovery_snapshot = _snapshot(sequence=200).model_copy(
+        update={"exchange_timestamp": NOW + timedelta(seconds=1)}
+    )
+    recovered = book.apply_snapshot(recovery_snapshot)
     assert recovered.quality is DataQuality.VALID
     assert book.tradable is True
 
@@ -171,7 +174,12 @@ def test_checksum_failure_is_transactional_and_requires_snapshot_recovery() -> N
     )
     assert blocked.reason == "snapshot_required"
 
-    recovery = _snapshot(sequence=200).model_copy(update={"checksum": "good"})
+    recovery = _snapshot(sequence=200).model_copy(
+        update={
+            "checksum": "good",
+            "exchange_timestamp": NOW + timedelta(seconds=1),
+        }
+    )
     assert book.apply_snapshot(recovery).status is BookApplyStatus.APPLIED
     assert book.sequence == 200
     assert book.tradable is True
@@ -211,4 +219,100 @@ def test_checksum_bearing_payload_without_validator_fails_closed() -> None:
     assert result.status is BookApplyStatus.GAP
     assert result.reason == "snapshot_checksum_mismatch"
     assert result.sequence is None
+    assert book.tradable is False
+
+def test_regressed_snapshot_is_rejected_without_rewinding_authoritative_book() -> None:
+    book = LocalOrderBook(INSTRUMENT)
+    current = _snapshot(sequence=200).model_copy(
+        update={"exchange_timestamp": NOW + timedelta(seconds=2)}
+    )
+    assert book.apply_snapshot(current).status is BookApplyStatus.APPLIED
+
+    regressed = _snapshot(sequence=100)
+    result = book.apply_snapshot(regressed)
+
+    assert result.status is BookApplyStatus.REJECTED
+    assert result.quality is DataQuality.INVALID
+    assert result.reason == "snapshot_timestamp_regressed"
+    assert book.sequence == 200
+    assert book.snapshot() == current
+    assert book.tradable is True
+
+
+def test_same_snapshot_is_idempotent_but_conflicting_identity_fails_closed() -> None:
+    book = LocalOrderBook(INSTRUMENT)
+    snapshot = _snapshot()
+    assert book.apply_snapshot(snapshot).status is BookApplyStatus.APPLIED
+    assert book.apply_snapshot(snapshot).status is BookApplyStatus.DUPLICATE
+
+    collision = snapshot.model_copy(
+        update={
+            "bids": (BookLevel(price=Decimal("99.5"), quantity=Decimal("9")),)
+        }
+    )
+    result = book.apply_snapshot(collision)
+
+    assert result.status is BookApplyStatus.GAP
+    assert result.reason == "snapshot_identity_collision"
+    assert book.snapshot() == snapshot
+    assert book.tradable is False
+
+def test_duplicate_snapshot_still_validates_checksum() -> None:
+    book = LocalOrderBook(
+        INSTRUMENT,
+        checksum_validator=lambda _snapshot, checksum: checksum == "good",
+    )
+    snapshot = _snapshot().model_copy(update={"checksum": "good"})
+    assert book.apply_snapshot(snapshot).status is BookApplyStatus.APPLIED
+
+    result = book.apply_snapshot(snapshot.model_copy(update={"checksum": "bad"}))
+
+    assert result.status is BookApplyStatus.GAP
+    assert result.reason == "snapshot_checksum_mismatch"
+    assert book.tradable is False
+
+def test_regressed_delta_is_rejected_without_rewinding_authoritative_book() -> None:
+    book = LocalOrderBook(INSTRUMENT)
+    current = _snapshot().model_copy(
+        update={"exchange_timestamp": NOW + timedelta(seconds=2)}
+    )
+    assert book.apply_snapshot(current).status is BookApplyStatus.APPLIED
+    authoritative = book.snapshot()
+    regressed = _delta(first=101, last=101, previous=100).model_copy(
+        update={"exchange_timestamp": NOW + timedelta(seconds=1)}
+    )
+
+    result = book.apply_delta(regressed)
+
+    assert result.status is BookApplyStatus.REJECTED
+    assert result.quality is DataQuality.INVALID
+    assert result.reason == "delta_timestamp_regressed"
+    assert book.snapshot() == authoritative
+    assert book.tradable is True
+
+
+def test_conflicting_duplicate_delta_fails_closed_without_mutating_levels() -> None:
+    book = LocalOrderBook(INSTRUMENT)
+    book.apply_snapshot(_snapshot())
+    applied = _delta(first=101, last=101, previous=100)
+    assert book.apply_delta(applied).status is BookApplyStatus.APPLIED
+    authoritative = book.snapshot()
+    collision = applied.model_copy(
+        update={
+            "updates": (
+                BookDeltaLevel(
+                    side=BookSide.BID,
+                    action=BookDeltaAction.UPSERT,
+                    price=Decimal("99.5"),
+                    quantity=Decimal("9"),
+                ),
+            )
+        }
+    )
+
+    result = book.apply_delta(collision)
+
+    assert result.status is BookApplyStatus.GAP
+    assert result.reason == "delta_identity_collision"
+    assert book.snapshot() == authoritative
     assert book.tradable is False

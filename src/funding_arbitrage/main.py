@@ -75,7 +75,10 @@ from funding_arbitrage.storage.clickhouse import (
     ClickHouseHttpWriter,
     ClickHouseStoragePolicy,
 )
-from funding_arbitrage.storage.replication import ClickHouseEventReplicator
+from funding_arbitrage.storage.replication import (
+    ClickHouseDecisionReplicator,
+    ClickHouseEventReplicator,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -91,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     clickhouse_writer: ClickHouseHttpWriter | None = None
     clickhouse_replicator: ClickHouseEventReplicator | None = None
+    clickhouse_decision_replicator: ClickHouseDecisionReplicator | None = None
     if active_settings.clickhouse_enabled:
         tls_context = create_internal_ssl_context(active_settings)
         if tls_context is None:
@@ -109,6 +113,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tls_context=tls_context,
         )
         clickhouse_replicator = ClickHouseEventReplicator(
+            session_factory,
+            clickhouse_writer,
+            batch_size=active_settings.clickhouse_replication_batch_size,
+            poll_seconds=active_settings.clickhouse_replication_poll_seconds,
+        )
+        clickhouse_decision_replicator = ClickHouseDecisionReplicator(
             session_factory,
             clickhouse_writer,
             batch_size=active_settings.clickhouse_replication_batch_size,
@@ -138,6 +148,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return False, "canonical_event_journal_unavailable"
         if clickhouse_replicator is not None and not clickhouse_replicator.healthy:
             return False, clickhouse_replicator.health_reason
+        if (
+            clickhouse_decision_replicator is not None
+            and not clickhouse_decision_replicator.healthy
+        ):
+            return False, clickhouse_decision_replicator.health_reason
         if multi_regime_runtime is not None and not multi_regime_runtime.healthy:
             return False, (
                 "multi_regime_runtime_failed:"
@@ -225,6 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_quality_monitor = event_quality_monitor
         app.state.multi_regime_runtime = multi_regime_runtime
         app.state.clickhouse_replicator = clickhouse_replicator
+        app.state.clickhouse_decision_replicator = clickhouse_decision_replicator
         app.state.public_events = public_events
         runner: PaperTestRunner | SharedMarketPaperComparisonRunner | LiveTradingRunner | None = (
             None
@@ -241,6 +257,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             runtime.background_tasks.add(analytics_task)
             analytics_task.add_done_callback(runtime.background_tasks.discard)
+        if clickhouse_decision_replicator is not None:
+            decision_analytics_task = asyncio.create_task(
+                clickhouse_decision_replicator.run(),
+                name="clickhouse-decision-replicator",
+            )
+            runtime.background_tasks.add(decision_analytics_task)
+            decision_analytics_task.add_done_callback(
+                runtime.background_tasks.discard
+            )
         recovery_task = asyncio.create_task(
             market_backtest_recovery_loop(
                 runtime,

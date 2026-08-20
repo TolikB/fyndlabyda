@@ -12,7 +12,11 @@ from funding_arbitrage.domain.decisions import (
     SignalType,
 )
 from funding_arbitrage.domain.events import (
+    BookDelta,
+    BookDeltaAction,
+    BookDeltaLevel,
     BookLevel,
+    BookSide,
     BookSnapshot,
     Candle,
     DataQuality,
@@ -217,7 +221,7 @@ def _engine() -> MultiRegimeEngine:
 
 def _envelope(
     kind: EventKind,
-    payload: BookSnapshot | Candle,
+    payload: BookSnapshot | BookDelta | Candle,
     sequence: int,
 ) -> EventEnvelope:
     timestamp = payload.exchange_timestamp
@@ -346,6 +350,99 @@ def test_future_book_is_unavailable_and_cannot_leak_into_decision_time() -> None
 
     assert batches
     assert batches[-1].orderflow.data_quality is DataQuality.UNAVAILABLE
+
+
+def test_canonical_book_delta_updates_runtime_l2_and_gap_blocks_quality() -> None:
+    engine = _engine()
+    snapshot = BookSnapshot(
+        instrument=INSTRUMENT,
+        bids=(BookLevel(price=Decimal("100"), quantity=Decimal("2")),),
+        asks=(BookLevel(price=Decimal("101"), quantity=Decimal("3")),),
+        sequence=100,
+        exchange_timestamp=START,
+    )
+    engine.process(_envelope(EventKind.BOOK_SNAPSHOT, snapshot, 100))
+    delta = BookDelta(
+        instrument=INSTRUMENT,
+        updates=(
+            BookDeltaLevel(
+                side=BookSide.BID,
+                action=BookDeltaAction.UPSERT,
+                price=Decimal("100.5"),
+                quantity=Decimal("4"),
+            ),
+        ),
+        first_sequence=101,
+        last_sequence=101,
+        previous_sequence=100,
+        exchange_timestamp=START + timedelta(milliseconds=1),
+    )
+    engine.process(_envelope(EventKind.BOOK_DELTA, delta, 101))
+    state = engine._states[INSTRUMENT.canonical_id]
+
+    assert state.latest_book is not None
+    assert state.latest_book.sequence == 101
+    assert state.latest_book.bids[0].price == Decimal("100.5")
+    assert state.latest_book_quality is DataQuality.VALID
+
+    gap = delta.model_copy(
+        update={
+            "first_sequence": 103,
+            "last_sequence": 103,
+            "previous_sequence": 102,
+            "exchange_timestamp": START + timedelta(milliseconds=2),
+        }
+    )
+    engine.process(_envelope(EventKind.BOOK_DELTA, gap, 103))
+
+    assert state.latest_book.sequence == 101
+    assert state.latest_book_quality is DataQuality.GAP
+
+
+def test_source_invalid_snapshot_cannot_poison_runtime_authoritative_book() -> None:
+    engine = _engine()
+    valid = BookSnapshot(
+        instrument=INSTRUMENT,
+        bids=(BookLevel(price=Decimal("100"), quantity=Decimal("2")),),
+        asks=(BookLevel(price=Decimal("101"), quantity=Decimal("3")),),
+        sequence=100,
+        exchange_timestamp=START,
+    )
+    engine.process(_envelope(EventKind.BOOK_SNAPSHOT, valid, 100))
+    future = valid.model_copy(
+        update={
+            "sequence": 200,
+            "exchange_timestamp": START + timedelta(seconds=10),
+            "bids": (BookLevel(price=Decimal("200"), quantity=Decimal("2")),),
+            "asks": (BookLevel(price=Decimal("201"), quantity=Decimal("3")),),
+        }
+    )
+    invalid_event = _envelope(EventKind.BOOK_SNAPSHOT, future, 200).model_copy(
+        update={
+            "metadata": _envelope(
+                EventKind.BOOK_SNAPSHOT, future, 200
+            ).metadata.model_copy(update={"quality": DataQuality.INVALID})
+        }
+    )
+    engine.process(invalid_event)
+    state = engine._states[INSTRUMENT.canonical_id]
+
+    assert state.latest_book == valid
+    assert state.local_book.sequence == 100
+    assert state.latest_book_quality is DataQuality.INVALID
+
+    recovery = valid.model_copy(
+        update={
+            "sequence": 101,
+            "exchange_timestamp": START + timedelta(seconds=1),
+            "bids": (BookLevel(price=Decimal("100.5"), quantity=Decimal("2")),),
+        }
+    )
+    engine.process(_envelope(EventKind.BOOK_SNAPSHOT, recovery, 101))
+
+    assert state.latest_book == recovery
+    assert state.local_book.sequence == 101
+    assert state.latest_book_quality is DataQuality.VALID
 
 
 def test_runtime_risk_context_uses_canonical_uppercase_venue_exposure() -> None:

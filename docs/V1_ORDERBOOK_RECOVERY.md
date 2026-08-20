@@ -7,6 +7,14 @@ The V1 contract never converts a full-book snapshot into an invented delta. Ever
 
 L1 is the best bid/ask view of the validated L2 state. A crossed, empty, stale, gapped, invalid, or unavailable L2 state cannot produce a tradable L1.
 
+The canonical multi-regime runtime independently replays every BookSnapshot and
+BookDelta through LocalOrderBook; it never assumes that an adapter's legacy
+OrderBook projection is authoritative. Source-invalid events are journaled but
+cannot mutate the runtime book. Duplicate snapshots are idempotent, conflicting
+snapshot identities fail closed, and regressed snapshot timestamps cannot rewind
+the last authoritative state. A sequence gap keeps the last levels only for
+diagnosis and marks them non-tradable until a fresh valid snapshot arrives.
+
 ## Venue matrix
 
 | Venue | Selected V1 feed behavior | Continuity | Recovery |

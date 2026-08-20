@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -60,6 +62,10 @@ class LocalOrderBook:
         self.exchange_timestamp: datetime | None = None
         self.quality = DataQuality.RECOVERING
         self.recovery_reason: str | None = "snapshot_required"
+        self._delta_fingerprints: OrderedDict[
+            tuple[int, int, int | None, datetime], str
+        ] = OrderedDict()
+        self._delta_history_limit = max(128, max_depth * 4)
 
     @property
     def tradable(self) -> bool:
@@ -82,6 +88,42 @@ class LocalOrderBook:
     def apply_snapshot(self, snapshot: BookSnapshot) -> BookApplyResult:
         if snapshot.instrument != self.instrument:
             return self._reject("instrument_mismatch")
+        if (
+            self.exchange_timestamp is not None
+            and snapshot.exchange_timestamp < self.exchange_timestamp
+        ):
+            return self._reject("snapshot_timestamp_regressed", DataQuality.INVALID)
+        if (
+            self.sequence is not None
+            and snapshot.sequence == self.sequence
+            and snapshot.exchange_timestamp == self.exchange_timestamp
+        ):
+            candidate = self._candidate_snapshot(
+                bids=self._trim(
+                    {level.price: level.quantity for level in snapshot.bids},
+                    reverse=True,
+                ),
+                asks=self._trim(
+                    {level.price: level.quantity for level in snapshot.asks},
+                    reverse=False,
+                ),
+                sequence=snapshot.sequence,
+                exchange_timestamp=snapshot.exchange_timestamp,
+                checksum=snapshot.checksum,
+            )
+            if not self._checksum_valid(candidate, snapshot.checksum):
+                return self._gap("snapshot_checksum_mismatch")
+            if (
+                candidate.model_dump(mode="json", exclude={"checksum"})
+                != self.snapshot().model_dump(mode="json", exclude={"checksum"})
+            ):
+                return self._gap("snapshot_identity_collision")
+            return BookApplyResult(
+                status=BookApplyStatus.DUPLICATE,
+                quality=self.quality,
+                sequence=self.sequence,
+                reason="already_applied",
+            )
         candidate = self._candidate_snapshot(
             bids=self._trim(
                 {level.price: level.quantity for level in snapshot.bids},
@@ -98,6 +140,7 @@ class LocalOrderBook:
         if not self._checksum_valid(candidate, snapshot.checksum):
             return self._gap("snapshot_checksum_mismatch")
         self._commit(candidate)
+        self._delta_fingerprints.clear()
         return BookApplyResult(
             status=BookApplyStatus.APPLIED,
             quality=self.quality,
@@ -115,16 +158,35 @@ class LocalOrderBook:
             DataQuality.UNAVAILABLE,
         }:
             return self._gap("snapshot_required")
-        sequence_reset = (
-            delta.previous_sequence == self.sequence and delta.last_sequence < self.sequence
-        )
-        if delta.last_sequence <= self.sequence and not sequence_reset:
+        identity = self._delta_identity(delta)
+        fingerprint = self._delta_fingerprint(delta)
+        previous_fingerprint = self._delta_fingerprints.get(identity)
+        if previous_fingerprint is not None:
+            if previous_fingerprint != fingerprint:
+                return self._gap("delta_identity_collision")
             return BookApplyResult(
                 status=BookApplyStatus.DUPLICATE,
                 quality=self.quality,
                 sequence=self.sequence,
                 reason="already_applied",
             )
+        sequence_reset = (
+            delta.previous_sequence == self.sequence and delta.last_sequence < self.sequence
+        )
+        if delta.last_sequence <= self.sequence and not sequence_reset:
+            if any(key[1] == delta.last_sequence for key in self._delta_fingerprints):
+                return self._gap("delta_identity_collision")
+            return BookApplyResult(
+                status=BookApplyStatus.DUPLICATE,
+                quality=self.quality,
+                sequence=self.sequence,
+                reason="already_applied",
+            )
+        if (
+            self.exchange_timestamp is not None
+            and delta.exchange_timestamp < self.exchange_timestamp
+        ):
+            return self._reject("delta_timestamp_regressed", DataQuality.INVALID)
         if not self._is_contiguous(delta):
             return self._gap("sequence_gap")
         bids = dict(self._bids)
@@ -145,6 +207,7 @@ class LocalOrderBook:
         if not self._checksum_valid(candidate, delta.checksum):
             return self._gap("delta_checksum_mismatch")
         self._commit(candidate)
+        self._remember_delta(identity, fingerprint)
         return BookApplyResult(
             status=BookApplyStatus.APPLIED,
             quality=self.quality,
@@ -215,6 +278,30 @@ class LocalOrderBook:
         self.sequence = snapshot.sequence
         self.exchange_timestamp = snapshot.exchange_timestamp
         self._refresh_quality()
+
+    @staticmethod
+    def _delta_identity(delta: BookDelta) -> tuple[int, int, int | None, datetime]:
+        return (
+            delta.first_sequence,
+            delta.last_sequence,
+            delta.previous_sequence,
+            delta.exchange_timestamp,
+        )
+
+    @staticmethod
+    def _delta_fingerprint(delta: BookDelta) -> str:
+        return hashlib.sha256(delta.model_dump_json().encode("utf-8")).hexdigest()
+
+    def _remember_delta(
+        self,
+        identity: tuple[int, int, int | None, datetime],
+        fingerprint: str,
+    ) -> None:
+        self._delta_fingerprints[identity] = fingerprint
+        self._delta_fingerprints.move_to_end(identity)
+        while len(self._delta_fingerprints) > self._delta_history_limit:
+            self._delta_fingerprints.popitem(last=False)
+
     def _is_contiguous(self, delta: BookDelta) -> bool:
         if self.sequence is None:
             return False
@@ -259,10 +346,14 @@ class LocalOrderBook:
             reason=reason,
         )
 
-    def _reject(self, reason: str) -> BookApplyResult:
+    def _reject(
+        self,
+        reason: str,
+        quality: DataQuality | None = None,
+    ) -> BookApplyResult:
         return BookApplyResult(
             status=BookApplyStatus.REJECTED,
-            quality=self.quality,
+            quality=quality or self.quality,
             sequence=self.sequence,
             reason=reason,
         )

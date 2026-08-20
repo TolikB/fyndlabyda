@@ -18,6 +18,7 @@ from funding_arbitrage.domain.decisions import (
     SignalIntent,
 )
 from funding_arbitrage.domain.events import (
+    BookDelta,
     BookSnapshot,
     Candle,
     DataQuality,
@@ -47,6 +48,7 @@ from funding_arbitrage.features.technical import (
     TechnicalFeatureEngine,
     TechnicalFeatureSnapshot,
 )
+from funding_arbitrage.market_data.l2_book import BookApplyStatus, LocalOrderBook
 from funding_arbitrage.regime import (
     RegimeClassifier,
     RegimeObservation,
@@ -158,7 +160,7 @@ class MultiRegimeDecisionBatch(BaseModel):
 
 class _InstrumentState:
     def __init__(self, instrument: InstrumentKey, config: MultiRegimeEngineConfig) -> None:
-
+        self.local_book = LocalOrderBook(instrument)
         self.strategy_candles = CandleAggregator(
             instrument,
             source_interval_seconds=config.source_interval_seconds,
@@ -241,10 +243,23 @@ class MultiRegimeEngine:
         instrument = getattr(event.payload, "instrument", None)
         if not isinstance(instrument, InstrumentKey) or not self._eligible(instrument):
             return None
-        stream_name = event.kind.value
-        if isinstance(event.payload, Candle):
-            stream_name = f"{stream_name}:{event.payload.interval_seconds}"
+        payload = event.payload
+        stream_name = (
+            "BOOK"
+            if isinstance(payload, (BookSnapshot, BookDelta))
+            else event.kind.value
+        )
+        if isinstance(payload, Candle):
+            stream_name = f"{stream_name}:{payload.interval_seconds}"
         stream_key = (instrument.canonical_id, stream_name)
+        state = self._state(instrument)
+        if event.metadata.quality is not DataQuality.VALID:
+            if isinstance(payload, (BookSnapshot, BookDelta)):
+                state.latest_book_quality = event.metadata.quality
+            elif isinstance(payload, Candle):
+                state.strategy_candles.reset()
+                state.regime_candles.reset()
+            return None
         latest_timestamp = self._latest_stream_timestamp.get(stream_key)
         if (
             latest_timestamp is not None
@@ -252,31 +267,36 @@ class MultiRegimeEngine:
         ):
             self.skipped_out_of_order_events += 1
             return None
-        self._latest_stream_timestamp[stream_key] = event.metadata.exchange_timestamp
-        state = self._state(instrument)
-        payload = event.payload
-        if isinstance(payload, BookSnapshot):
-            state.latest_book = payload
-            state.latest_book_quality = event.metadata.quality
-            state.orderflow_engine.on_book(payload, quality=event.metadata.quality)
+        if isinstance(payload, (BookSnapshot, BookDelta)):
+            result = (
+                state.local_book.apply_snapshot(payload)
+                if isinstance(payload, BookSnapshot)
+                else state.local_book.apply_delta(payload)
+            )
+            state.latest_book_quality = result.quality
+            if result.status in {BookApplyStatus.APPLIED, BookApplyStatus.DUPLICATE}:
+                self._latest_stream_timestamp[stream_key] = (
+                    event.metadata.exchange_timestamp
+                )
+            if result.status is BookApplyStatus.APPLIED:
+                reconstructed = state.local_book.snapshot()
+                state.latest_book = reconstructed
+                state.orderflow_engine.on_book(
+                    reconstructed,
+                    quality=state.latest_book_quality,
+                )
             return None
+        self._latest_stream_timestamp[stream_key] = event.metadata.exchange_timestamp
         if isinstance(payload, TradeTick):
-            if event.metadata.quality is DataQuality.VALID:
-                state.orderflow_engine.on_trade(payload)
+            state.orderflow_engine.on_trade(payload)
             return None
         if isinstance(payload, FundingSnapshot):
-            if event.metadata.quality is DataQuality.VALID:
-                state.derivatives = state.derivatives_engine.on_funding(payload)
+            state.derivatives = state.derivatives_engine.on_funding(payload)
             return None
         if isinstance(payload, OpenInterestSnapshot):
-            if event.metadata.quality is DataQuality.VALID:
-                state.derivatives = state.derivatives_engine.on_open_interest(payload)
+            state.derivatives = state.derivatives_engine.on_open_interest(payload)
             return None
         if not isinstance(payload, Candle):
-            return None
-        if event.metadata.quality is not DataQuality.VALID:
-            state.strategy_candles.reset()
-            state.regime_candles.reset()
             return None
         strategy_candle = state.strategy_candles.on_candle(payload)
         regime_candle = state.regime_candles.on_candle(payload)

@@ -155,7 +155,7 @@ requirements:
   - id: MD-003
     category: market_data
     title: L1 and L2 books reconstruct snapshot plus deltas with sequence and checksum recovery
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/market_data/l2_book.py
       - src/funding_arbitrage/market_data/orderbook_protocols.py
@@ -169,6 +169,7 @@ requirements:
       - tests/test_hyperliquid_canonical_orderbook.py
       - tests/test_mexc_canonical_orderbook.py
       - tests/test_remaining_canonical_orderbooks.py
+      - tests/test_multi_regime_runtime.py
       - docs/V1_ORDERBOOK_RECOVERY.md
   - id: MD-004
     category: market_data
@@ -529,14 +530,16 @@ requirements:
   - id: DATA-002
     category: storage
     title: ClickHouse stores raw market events, features, signals, and telemetry with retention
-    status: partial
+    status: implemented
     evidence:
       - docker/clickhouse/init/001_v1_analytics.sql
+      - docker/clickhouse/init/002_v1_typed_analytics_upgrade.sql
       - src/funding_arbitrage/storage/clickhouse.py
       - src/funding_arbitrage/storage/replication.py
       - src/funding_arbitrage/main.py
       - migrations/versions/0016_analytics_replication.py
       - tests/test_analytics_storage.py
+      - docs/V1_ANALYTICS_STORAGE.md
       - docker-compose.yml
   - id: DATA-003
     category: storage

@@ -108,8 +108,14 @@ class DataQualityMonitor:
             state.last_exchange_timestamp is not None
             and metadata.exchange_timestamp < state.last_exchange_timestamp
         ):
-            quality = DataQuality.INVALID
-            reason = "exchange_timestamp_regressed"
+            return StreamQualitySnapshot(
+                identity=key,
+                quality=DataQuality.INVALID,
+                reason="exchange_timestamp_regressed",
+                last_exchange_timestamp=state.last_exchange_timestamp,
+                last_receive_timestamp=state.last_receive_timestamp,
+                last_sequence=state.last_sequence,
+            )
         elif quality is not DataQuality.VALID:
             reason = f"source_quality_{quality.value.lower()}"
         elif isinstance(payload, BookSnapshot):

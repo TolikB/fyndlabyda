@@ -195,6 +195,23 @@ def test_required_stream_gate_reports_every_non_valid_identity() -> None:
     assert usable is False
     assert reasons == ("MEXC:LIQUIDATIONS:BTC-USDT:UNAVAILABLE",)
 
+def test_regressed_event_is_invalid_without_rewinding_quality_cursor() -> None:
+    monitor = _monitor()
+    current = _snapshot(sequence=200).model_copy(
+        update={"exchange_timestamp": NOW + timedelta(seconds=2)}
+    )
+    monitor.observe(_event(current), identity=IDENTITY)
+
+    regressed = monitor.observe(_event(_snapshot(sequence=100)), identity=IDENTITY)
+    status = monitor.status(IDENTITY, now=NOW + timedelta(seconds=2))
+
+    assert regressed.quality is DataQuality.INVALID
+    assert regressed.reason == "exchange_timestamp_regressed"
+    assert regressed.last_exchange_timestamp == current.exchange_timestamp
+    assert status.quality is DataQuality.VALID
+    assert status.last_sequence == 200
+
+
 class _RecordingWriter:
     def __init__(self) -> None:
         self.events: list[EventEnvelope] = []
