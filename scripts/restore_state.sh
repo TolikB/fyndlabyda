@@ -11,6 +11,7 @@ compose_file="${COMPOSE_FILE:-docker-compose.yml}"
 env_file="${COMPOSE_ENV_FILE:-.env.live}"
 project="${COMPOSE_PROJECT_NAME:-$expected_project}"
 pre_restore_backup="${PRE_RESTORE_BACKUP:-}"
+identity_file="${AGE_IDENTITY_FILE:-}"
 confirmation="${CONFIRM_RESTORE:-}"
 change_ticket="${RESTORE_CHANGE_TICKET:-}"
 max_pre_restore_age_seconds="${MAX_PRE_RESTORE_BACKUP_AGE_SECONDS:-900}"
@@ -21,7 +22,7 @@ require_command() {
     exit 2
   }
 }
-for command_name in age date docker jq realpath sha256sum; do
+for command_name in age date docker jq realpath sha256sum stat; do
   require_command "$command_name"
 done
 
@@ -46,6 +47,10 @@ if [[ -z "$archive" || -z "$pre_restore_backup" ]]; then
   echo "usage: restore_state.sh <archive.dump.age>; PRE_RESTORE_BACKUP is required" >&2
   exit 2
 fi
+if [[ -z "$identity_file" ]]; then
+  echo "AGE_IDENTITY_FILE must name one explicit private age identity file" >&2
+  exit 2
+fi
 if [[ ! -f "$compose_file" || ! -f "$env_file" ]]; then
   echo "Compose file and live env file must exist" >&2
   exit 2
@@ -61,6 +66,22 @@ done
 backup_root="$(realpath -e -- "$backup_root")"
 archive="$(realpath -e -- "$archive")"
 pre_restore_backup="$(realpath -e -- "$pre_restore_backup")"
+identity_file="$(realpath -e -- "$identity_file")"
+if [[ ! -f "$identity_file" || ! -r "$identity_file" ]]; then
+  echo "AGE_IDENTITY_FILE must be a readable regular file" >&2
+  exit 2
+fi
+identity_mode="$(stat -c '%a' "$identity_file")"
+identity_uid="$(stat -c '%u' "$identity_file")"
+if [[ ! "$identity_mode" =~ ^[0-7]{3,4}$ ]]; then
+  echo "AGE_IDENTITY_FILE permissions are invalid: $identity_mode" >&2
+  exit 2
+fi
+identity_mode_value=$((8#$identity_mode))
+if (( (identity_mode_value & 077) != 0 )) || [[ "$identity_uid" != "$EUID" ]]; then
+  echo "AGE_IDENTITY_FILE must be owned by the current user without group/world access" >&2
+  exit 2
+fi
 if [[ "$backup_root" == "/" || ! -f "$backup_root/.funding-backup-root" ]]; then
   echo "backup root identity marker is missing" >&2
   exit 2
@@ -156,7 +177,7 @@ if [[ ! "$current_migration_head" =~ ^[A-Za-z0-9_-]{1,64}$ ]] ||
   exit 2
 fi
 
-age --decrypt "$archive" \
+age --decrypt --identity "$identity_file" "$archive" \
   | docker compose --project-name "$project" "${compose_env_args[@]}" \
       --file "$compose_file" exec -T postgres \
       pg_restore --username "$postgres_user" --dbname "$postgres_db" \

@@ -39,17 +39,20 @@ sudo systemctl stop funding-arbitrage-v1.service
 export BACKUP_ROOT=/var/backups/funding-arbitrage-v1
 export COMPOSE_PROJECT_NAME=funding_arbitrage_v1
 export PRE_RESTORE_BACKUP=/var/backups/funding-arbitrage-v1/funding-v1-postgres-NEW.dump.age
+export AGE_IDENTITY_FILE=/root/.config/age/funding-v1-backup-identity.txt
 export CONFIRM_RESTORE=RESTORE_FUNDING_V1_POSTGRES_AND_KEEP_APP_STOPPED
 export RESTORE_CHANGE_TICKET=DRILL-2026-001
 export MAX_PRE_RESTORE_BACKUP_AGE_SECONDS=900
-sudo --preserve-env=BACKUP_ROOT,COMPOSE_PROJECT_NAME,PRE_RESTORE_BACKUP,CONFIRM_RESTORE,RESTORE_CHANGE_TICKET,MAX_PRE_RESTORE_BACKUP_AGE_SECONDS \
+sudo --preserve-env=BACKUP_ROOT,COMPOSE_PROJECT_NAME,PRE_RESTORE_BACKUP,AGE_IDENTITY_FILE,CONFIRM_RESTORE,RESTORE_CHANGE_TICKET,MAX_PRE_RESTORE_BACKUP_AGE_SECONDS \
   bash scripts/restore_state.sh \
   /var/backups/funding-arbitrage-v1/funding-v1-postgres-TARGET.dump.age
 ```
 
 `pg_restore` uses `--single-transaction --exit-on-error`; after restore, Alembic
 is advanced and critical tables are queried. The application intentionally stays
-stopped. Run reconciliation, ledger invariants, deterministic replay, and report
+stopped. `AGE_IDENTITY_FILE` is mandatory, resolved to a regular file, must be
+owned by the restore operator, and must not expose any group/world permission
+bits. Run reconciliation, ledger invariants, deterministic replay, and report
 checks before an explicit operator restart.
 
 ## Schedule and evidence

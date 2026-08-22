@@ -118,7 +118,10 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert "MAX_PRE_RESTORE_BACKUP_AGE_SECONDS" in restore
     assert "not a fresh current-state safety backup" in restore
     assert "does not match the current database migration head" in restore
-    assert "age --decrypt" in restore
+    assert 'identity_file="${AGE_IDENTITY_FILE:-}"' in restore
+    assert "AGE_IDENTITY_FILE must name one explicit private age identity file" in restore
+    assert "without group/world access" in restore
+    assert 'age --decrypt --identity "$identity_file"' in restore
     assert "--clean --if-exists --single-transaction --exit-on-error" in restore
     assert "application intentionally remains stopped" in restore
     assert "docker system prune" not in restore
@@ -180,4 +183,5 @@ def test_infrastructure_and_restore_runbooks_preserve_safety_boundary() -> None:
     assert "plaintext is never written to disk" in restore
     assert "disposable isolated VM" in restore
     assert "application intentionally stays stopped" in restore
+    assert "`AGE_IDENTITY_FILE` is mandatory" in restore
     assert "quarterly" in restore.lower()
