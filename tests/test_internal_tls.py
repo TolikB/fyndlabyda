@@ -30,6 +30,7 @@ def _files(tmp_path: Path) -> tuple[Path, Path, Path]:
     key = tmp_path / "app-client.key"
     for path in (ca, cert, key):
         path.write_text("test", encoding="utf-8")
+    key.chmod(0o600)
     return ca, cert, key
 
 
