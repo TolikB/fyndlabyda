@@ -109,6 +109,10 @@ def test_backup_is_stream_encrypted_atomic_and_scoped() -> None:
     assert "migration_head_before" in backup
     assert "migration_head_after" in backup
     assert 'mv -- "$tmp_complete" "$complete"' in backup
+    assert "RELEASE_COMMIT_SHA" in backup
+    assert '"$script_root/.release-sha"' in backup
+    assert "release commit provenance sources disagree" in backup
+    assert 'commit_sha="unknown"' not in backup
     assert "postgres_user=" not in backup
     assert "postgres_db=" not in backup
     assert "docker system prune" not in backup
@@ -125,6 +129,7 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert "sha256sum --check --status" in restore
     assert "jq --exit-status" in restore
     assert ".compose_project == $project" in restore
+    assert ".git_commit" in restore
     assert "PRE_RESTORE_BACKUP manifest must be newer" in restore
     assert "MAX_PRE_RESTORE_BACKUP_AGE_SECONDS" in restore
     assert "not a fresh current-state safety backup" in restore
@@ -208,6 +213,8 @@ def test_infrastructure_and_restore_runbooks_preserve_safety_boundary() -> None:
     assert "docker system prune" in infrastructure
     assert "projects other than `funding_arbitrage_v1`" in infrastructure
     assert "plaintext is never written to disk" in restore
+    assert "The source commit is mandatory" in restore
+    assert "`unknown` provenance is rejected" in restore
     assert "disposable isolated VM" in restore
     assert "application remains stopped and fenced" in restore
     assert restore.index("RESTORE_MAINTENANCE_MARKER") < restore.index("systemctl stop")

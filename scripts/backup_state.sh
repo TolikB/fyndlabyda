@@ -15,7 +15,7 @@ require_command() {
     exit 2
   }
 }
-for command_name in age awk cat docker flock git realpath sha256sum stat; do
+for command_name in age awk cat dirname docker flock git realpath sha256sum stat; do
   require_command "$command_name"
 done
 
@@ -130,9 +130,39 @@ postgres_exec pg_dump \
 test -s "$tmp_archive"
 archive_hash="$(sha256sum "$tmp_archive" | awk '{print $1}')"
 archive_size="$(stat -c '%s' "$tmp_archive")"
-commit_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+script_path="$(realpath -e -- "${BASH_SOURCE[0]}")"
+script_root="$(dirname "$(dirname "$script_path")")"
+commit_sha="${RELEASE_COMMIT_SHA:-}"
+metadata_sha=""
+git_sha=""
+if [[ -f "$script_root/.release-sha" ]]; then
+  if [[ "$(awk 'END { print NR }' "$script_root/.release-sha")" != "1" ]]; then
+    echo "release provenance file must contain exactly one line" >&2
+    exit 2
+  fi
+  metadata_sha="$(cat -- "$script_root/.release-sha")"
+  if [[ ! "$metadata_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "release provenance file does not contain a commit SHA" >&2
+    exit 2
+  fi
+fi
+if git -C "$script_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git_sha="$(git -C "$script_root" rev-parse HEAD 2>/dev/null || true)"
+  if [[ ! "$git_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Git checkout does not resolve to a commit SHA" >&2
+    exit 2
+  fi
+fi
+for provenance_sha in "$metadata_sha" "$git_sha"; do
+  if [[ -n "$provenance_sha" && -n "$commit_sha" && "$provenance_sha" != "$commit_sha" ]]; then
+    echo "release commit provenance sources disagree" >&2
+    exit 2
+  fi
+  if [[ -n "$provenance_sha" ]]; then commit_sha="$provenance_sha"; fi
+done
 if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
-  commit_sha="unknown"
+  echo "a verified release commit SHA is required for backup" >&2
+  exit 2
 fi
 migration_head_after="$(postgres_exec psql --tuples-only --no-align \
   --command 'SELECT version_num FROM alembic_version LIMIT 1' | tr -d '\r\n')"

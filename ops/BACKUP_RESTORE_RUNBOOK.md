@@ -14,6 +14,10 @@ incomplete sets and backups whose Alembic head changed during the dump.
 Database tools derive `PGPASSWORD`, `PGUSER`, and `PGDATABASE` from the running
 PostgreSQL container only. Passwords and deployment-specific database names are
 never copied into the host shell or placed on a command line.
+The source commit is mandatory: an immutable archive supplies `.release-sha`, a
+Git checkout supplies `HEAD`, or the operator supplies `RELEASE_COMMIT_SHA`.
+When more than one source exists they must match exactly; `unknown` provenance
+is rejected.
 
 Configure an offline age recipient and run from the immutable checkout:
 

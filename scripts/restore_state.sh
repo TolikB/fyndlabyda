@@ -179,7 +179,8 @@ for candidate in "$archive" "$pre_restore_backup"; do
      .encrypted == true and
      (.size_bytes | type == "number" and . > 0) and
      (.created_at_utc | type == "string" and test("^[0-9]{8}T[0-9]{6}Z$")) and
-     (.alembic_head | type == "string" and test("^[A-Za-z0-9_-]{1,64}$"))' \
+     (.alembic_head | type == "string" and test("^[A-Za-z0-9_-]{1,64}$")) and
+     (.git_commit | type == "string" and test("^[0-9a-f]{40}$"))' \
     "$candidate.json" >/dev/null; then
     echo "backup manifest validation failed: $candidate" >&2
     exit 1
