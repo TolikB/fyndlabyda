@@ -9,15 +9,20 @@ must be a dedicated mode-0700 directory containing the exact marker
 `funding-arbitrage-v1` in `.funding-backup-root`.
 Each run holds a non-blocking lock for this backup root. Publication is atomic:
 the encrypted archive, checksum, and manifest are moved into place before a
-`.complete` marker containing the archive hash is published last. Restores reject
-incomplete sets and backups whose Alembic head changed during the dump.
+`.complete` checksum set for both the encrypted archive and JSON manifest is
+published last. Restores reject incomplete or internally inconsistent sets and
+backups whose Alembic head changed during the dump.
 Database tools derive `PGPASSWORD`, `PGUSER`, and `PGDATABASE` from the running
 PostgreSQL container only. Passwords and deployment-specific database names are
 never copied into the host shell or placed on a command line.
 The source commit is mandatory: an immutable archive supplies `.release-sha`, a
-Git checkout supplies `HEAD`, or the operator supplies `RELEASE_COMMIT_SHA`.
-When more than one source exists they must match exactly; `unknown` provenance
-is rejected.
+Git checkout supplies `HEAD`, or the operator supplies `RELEASE_COMMIT_SHA`. The
+sealed CI candidate artifact includes `.release-sha`. The running app image must
+carry the same `org.opencontainers.image.revision` label. All available sources
+must match exactly, tracked Git changes are rejected, and provenance is checked
+both before and after `pg_dump`; `unknown` provenance is rejected. These hashes
+detect corruption and mismatch but do not replace off-host object lock or an
+independent signature for authenticity.
 
 Configure an offline age recipient and run from the immutable checkout:
 
@@ -25,7 +30,7 @@ Configure an offline age recipient and run from the immutable checkout:
 export AGE_RECIPIENT='age1...'
 export BACKUP_ROOT=/var/backups/funding-arbitrage-v1
 export COMPOSE_PROJECT_NAME=funding_arbitrage_v1
-sudo --preserve-env=AGE_RECIPIENT,BACKUP_ROOT,COMPOSE_PROJECT_NAME \
+sudo --preserve-env=AGE_RECIPIENT,BACKUP_ROOT,COMPOSE_PROJECT_NAME,RELEASE_COMMIT_SHA \
   bash scripts/backup_state.sh
 ```
 
@@ -44,9 +49,10 @@ root-owned restore fence before stopping the systemd unit. The unit has an
 `ExecCondition` that prevents an automatic restart while this marker exists.
 Because stopping the unit stops the whole Compose project, start only PostgreSQL
 again before invoking restore. The restore script disables the stopped app
-container restart policy and refuses broad paths, wrong project names, missing
-markers/sidecars, bad checksums, a running app, missing safety backup, or an
-inexact confirmation phrase.
+container restart policy, locks the exact maintenance marker for the full
+operation, and refuses broad paths, wrong project names, missing markers or
+sidecars, bad checksums, a concurrent restore, a running app, missing safety
+backup, or an inexact confirmation phrase.
 
 ```bash
 cd /opt/funding-arbitrage-v1
@@ -74,14 +80,27 @@ is advanced and critical tables are queried. The application remains stopped and
 fenced. `AGE_IDENTITY_FILE` is mandatory, resolved to a regular file, must be
 owned by the restore operator, must have a non-writable operator-owned parent,
 and must not expose any group/world permission bits. Run reconciliation, ledger
-invariants, deterministic replay, and report checks. Only then remove the exact
-fence and explicitly restart the unit:
+invariants, deterministic replay, and report checks. The restore deliberately
+sets the stopped app container policy to `no`; explicitly restore the declared
+Compose policy before removing the fence. Only then remove the exact fence and
+restart the unit:
 
 ```bash
+app_container_id="$(sudo docker compose --project-name funding_arbitrage_v1 \
+  --env-file .env.live --file docker-compose.yml ps --all --quiet app)"
+sudo docker update --restart=unless-stopped "$app_container_id"
+test "$(sudo docker inspect "$app_container_id" --format '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped
+
 sudo grep -Fxq "funding-arbitrage-v1-restore:${RESTORE_CHANGE_TICKET}" "$RESTORE_MAINTENANCE_MARKER"
 sudo rm -- "$RESTORE_MAINTENANCE_MARKER"
 sudo systemctl start funding-arbitrage-v1.service
 ```
+
+Legacy backups containing `git_commit: "unknown"` or the former one-line
+`.complete` marker are intentionally rejected by automated restore. Recreate a
+current-format encrypted backup from the original environment when possible; if
+that is impossible, use a separately reviewed offline recovery procedure. Never
+edit a manifest or sidecar to bypass the gate.
 
 ## Schedule and evidence
 

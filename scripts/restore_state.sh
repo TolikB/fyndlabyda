@@ -23,7 +23,7 @@ require_command() {
     exit 2
   }
 }
-for command_name in age awk cat date dirname docker jq realpath sha256sum stat; do
+for command_name in age awk cat date dirname docker flock jq realpath sha256sum stat; do
   require_command "$command_name"
 done
 
@@ -87,6 +87,10 @@ postgres_exec() {
        exit 2
      fi
      export PGPASSWORD="$POSTGRES_PASSWORD" PGUSER="$POSTGRES_USER" PGDATABASE="$POSTGRES_DB"
+     if [ "$1" = pg_restore ]; then
+       shift
+       exec pg_restore --dbname="$POSTGRES_DB" "$@"
+     fi
      exec "$@"' sh "$@"
 }
 
@@ -144,6 +148,11 @@ if (( (marker_mode_value & 077) != 0 )) || [[ "$marker_uid" != "$EUID" ]]; then
 fi
 expected_marker="funding-arbitrage-v1-restore:${change_ticket}"
 require_exact_line "$maintenance_marker" "$expected_marker" "restore maintenance marker"
+exec 8<"$maintenance_marker"
+if ! flock --nonblock 8; then
+  echo "another funding restore is already running" >&2
+  exit 2
+fi
 if [[ "$backup_root" == "/" || ! -f "$backup_root/.funding-backup-root" ]]; then
   echo "backup root identity marker is missing" >&2
   exit 2
@@ -168,7 +177,22 @@ for candidate in "$archive" "$pre_restore_backup"; do
     exit 1
   }
   actual_hash="$(sha256sum "$candidate" | awk '{print $1}')"
-  require_exact_line "$candidate.complete" "$actual_hash" "backup completion marker for $candidate"
+  actual_manifest_hash="$(sha256sum "$candidate.json" | awk '{print $1}')"
+  expected_completion="$(printf '%s  %s\n%s  %s' \
+    "$actual_hash" "$(basename "$candidate")" \
+    "$actual_manifest_hash" "$(basename "$candidate.json")")"
+  if [[ "$(awk 'END { print NR }' "$candidate.complete")" != "2" ]] ||
+     [[ "$(cat -- "$candidate.complete")" != "$expected_completion" ]]; then
+    echo "backup completion marker validation failed: $candidate" >&2
+    exit 1
+  fi
+  (
+    cd "$backup_root"
+    sha256sum --check --status "$(basename "$candidate.complete")"
+  ) || {
+    echo "backup set integrity validation failed: $candidate" >&2
+    exit 1
+  }
   if ! jq --exit-status \
     --arg archive "$(basename "$candidate")" \
     --arg hash "$actual_hash" \

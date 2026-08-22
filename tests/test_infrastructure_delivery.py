@@ -113,6 +113,13 @@ def test_backup_is_stream_encrypted_atomic_and_scoped() -> None:
     assert '"$script_root/.release-sha"' in backup
     assert "release commit provenance sources disagree" in backup
     assert 'commit_sha="unknown"' not in backup
+    assert backup.count("resolve_release_commit") == 3
+    assert "--untracked-files=no" in backup
+    assert "org.opencontainers.image.revision" in backup
+    assert "running application image revision does not match" in backup
+    assert "release provenance changed while backup was running" in backup
+    assert "manifest_hash" in backup
+    assert '"$(basename "$manifest")" > "$tmp_complete"' in backup
     assert "postgres_user=" not in backup
     assert "postgres_db=" not in backup
     assert "docker system prune" not in backup
@@ -141,6 +148,7 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert 'PGUSER="$POSTGRES_USER" PGDATABASE="$POSTGRES_DB"' in restore
     assert "PostgreSQL runtime credentials are missing" in restore
     assert "postgres_exec pg_restore" in restore
+    assert 'exec pg_restore --dbname="$POSTGRES_DB" "$@"' in restore
     assert "RESTORE_MAINTENANCE_MARKER" in restore
     assert "compose_root" in restore
     assert "fence beside the Compose file" in restore
@@ -148,6 +156,11 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert 'expected_marker="funding-arbitrage-v1-restore:${change_ticket}"' in restore
     assert "identity_parent" in restore
     assert '"$candidate.complete"' in restore
+    assert "flock --nonblock 8" in restore
+    assert "another funding restore is already running" in restore
+    assert "expected_completion" in restore
+    assert "actual_manifest_hash" in restore
+    assert 'sha256sum --check --status "$(basename "$candidate.complete")"' in restore
     assert 'docker update --restart=no "$app_container_id"' in restore
     assert "RestartPolicy.Name" in restore
     assert "running_app_ids" in restore
@@ -216,10 +229,14 @@ def test_infrastructure_and_restore_runbooks_preserve_safety_boundary() -> None:
     assert "The source commit is mandatory" in restore
     assert "`unknown` provenance is rejected" in restore
     assert "disposable isolated VM" in restore
+    assert "former one-line `.complete` marker" in restore
+    assert "separately reviewed offline recovery" in restore
     assert "application remains stopped and fenced" in restore
     assert restore.index("RESTORE_MAINTENANCE_MARKER") < restore.index("systemctl stop")
     assert "--file docker-compose.yml up --detach postgres" in restore
     assert 'sudo rm -- "$RESTORE_MAINTENANCE_MARKER"' in restore
+    assert 'docker update --restart=unless-stopped "$app_container_id"' in restore
+    assert restore.index("--restart=unless-stopped") < restore.index('sudo rm --')
     assert "systemctl start funding-arbitrage-v1.service" in restore
     assert "`AGE_IDENTITY_FILE` is mandatory" in restore
     assert "quarterly" in restore.lower()

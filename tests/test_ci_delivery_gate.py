@@ -43,6 +43,7 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     workflow = _workflow_text()
     assert "for script in \\" in workflow
     assert workflow.count('bash -n "$script"') == 1
+    assert '"$artifact_dir/.release-sha"' in workflow
     assert "pip_audit" in str(jobs["container-security"])
     assert "trivy-action" in str(jobs["container-security"])
     assert "sbom-action" in str(jobs["container-security"])

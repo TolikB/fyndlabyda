@@ -60,6 +60,69 @@ postgres_exec() {
      exec "$@"' sh "$@"
 }
 
+resolve_release_commit() {
+  local script_path script_root explicit_sha metadata_sha git_sha resolved_sha
+  local app_container_id runtime_sha tracked_changes
+  script_path="$(realpath -e -- "${BASH_SOURCE[0]}")"
+  script_root="$(dirname "$(dirname "$script_path")")"
+  explicit_sha="${RELEASE_COMMIT_SHA:-}"
+  metadata_sha=""
+  git_sha=""
+  if [[ -n "$explicit_sha" && ! "$explicit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "RELEASE_COMMIT_SHA is not a commit SHA" >&2
+    exit 2
+  fi
+  if [[ -f "$script_root/.release-sha" ]]; then
+    if [[ "$(awk 'END { print NR }' "$script_root/.release-sha")" != "1" ]]; then
+      echo "release provenance file must contain exactly one line" >&2
+      exit 2
+    fi
+    metadata_sha="$(cat -- "$script_root/.release-sha")"
+    if [[ ! "$metadata_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "release provenance file does not contain a commit SHA" >&2
+      exit 2
+    fi
+  fi
+  if git -C "$script_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git_sha="$(git -C "$script_root" rev-parse HEAD 2>/dev/null || true)"
+    tracked_changes="$(git -C "$script_root" status --porcelain --untracked-files=no)"
+    if [[ ! "$git_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "Git checkout does not resolve to a commit SHA" >&2
+      exit 2
+    fi
+    if [[ -n "$tracked_changes" ]]; then
+      echo "Git checkout has tracked changes and cannot identify an immutable release" >&2
+      exit 2
+    fi
+  fi
+  resolved_sha="$explicit_sha"
+  for provenance_sha in "$metadata_sha" "$git_sha"; do
+    if [[ -n "$provenance_sha" && -n "$resolved_sha" && "$provenance_sha" != "$resolved_sha" ]]; then
+      echo "release commit provenance sources disagree" >&2
+      exit 2
+    fi
+    if [[ -n "$provenance_sha" ]]; then resolved_sha="$provenance_sha"; fi
+  done
+  if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "a verified release commit SHA is required for backup" >&2
+    exit 2
+  fi
+  app_container_id="$(docker compose --project-name "$project" "${compose_env_args[@]}" \
+    --file "$compose_file" ps --all --quiet app)"
+  if [[ ! "$app_container_id" =~ ^[0-9a-f]{64}$ ]] ||
+     [[ "$(docker inspect "$app_container_id" --format '{{.State.Running}}')" != "true" ]]; then
+    echo "exactly one running application container is required for backup provenance" >&2
+    exit 2
+  fi
+  runtime_sha="$(docker inspect "$app_container_id" \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+  if [[ ! "$runtime_sha" =~ ^[0-9a-f]{40}$ || "$runtime_sha" != "$resolved_sha" ]]; then
+    echo "running application image revision does not match release provenance" >&2
+    exit 2
+  fi
+  printf '%s\n' "$resolved_sha"
+}
+
 backup_root="$(realpath -e -- "$backup_root")"
 if [[ "$backup_root" == "/" || ! -f "$backup_root/.funding-backup-root" ]]; then
   echo "backup root identity marker is missing" >&2
@@ -94,6 +157,7 @@ if ! grep -Fxq postgres <<<"$running_services"; then
   exit 2
 fi
 
+commit_sha_before="$(resolve_release_commit)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 base="funding-v1-postgres-${timestamp}"
 archive="$backup_root/${base}.dump.age"
@@ -130,40 +194,12 @@ postgres_exec pg_dump \
 test -s "$tmp_archive"
 archive_hash="$(sha256sum "$tmp_archive" | awk '{print $1}')"
 archive_size="$(stat -c '%s' "$tmp_archive")"
-script_path="$(realpath -e -- "${BASH_SOURCE[0]}")"
-script_root="$(dirname "$(dirname "$script_path")")"
-commit_sha="${RELEASE_COMMIT_SHA:-}"
-metadata_sha=""
-git_sha=""
-if [[ -f "$script_root/.release-sha" ]]; then
-  if [[ "$(awk 'END { print NR }' "$script_root/.release-sha")" != "1" ]]; then
-    echo "release provenance file must contain exactly one line" >&2
-    exit 2
-  fi
-  metadata_sha="$(cat -- "$script_root/.release-sha")"
-  if [[ ! "$metadata_sha" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "release provenance file does not contain a commit SHA" >&2
-    exit 2
-  fi
+commit_sha_after="$(resolve_release_commit)"
+if [[ "$commit_sha_after" != "$commit_sha_before" ]]; then
+  echo "release provenance changed while backup was running" >&2
+  exit 1
 fi
-if git -C "$script_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git_sha="$(git -C "$script_root" rev-parse HEAD 2>/dev/null || true)"
-  if [[ ! "$git_sha" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "Git checkout does not resolve to a commit SHA" >&2
-    exit 2
-  fi
-fi
-for provenance_sha in "$metadata_sha" "$git_sha"; do
-  if [[ -n "$provenance_sha" && -n "$commit_sha" && "$provenance_sha" != "$commit_sha" ]]; then
-    echo "release commit provenance sources disagree" >&2
-    exit 2
-  fi
-  if [[ -n "$provenance_sha" ]]; then commit_sha="$provenance_sha"; fi
-done
-if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "a verified release commit SHA is required for backup" >&2
-  exit 2
-fi
+commit_sha="$commit_sha_before"
 migration_head_after="$(postgres_exec psql --tuples-only --no-align \
   --command 'SELECT version_num FROM alembic_version LIMIT 1' | tr -d '\r\n')"
 if [[ ! "$migration_head_after" =~ ^[A-Za-z0-9_-]{1,64}$ ]] ||
@@ -174,10 +210,13 @@ fi
 migration_head="$migration_head_before"
 
 printf '%s  %s\n' "$archive_hash" "$(basename "$archive")" > "$tmp_checksum"
-printf '%s\n' "$archive_hash" > "$tmp_complete"
 printf '{\n  "archive": "%s",\n  "created_at_utc": "%s",\n  "sha256": "%s",\n  "size_bytes": %s,\n  "git_commit": "%s",\n  "alembic_head": "%s",\n  "compose_project": "%s",\n  "encrypted": true\n}\n' \
   "$(basename "$archive")" "$timestamp" "$archive_hash" "$archive_size" \
   "$commit_sha" "$migration_head" "$project" > "$tmp_manifest"
+manifest_hash="$(sha256sum "$tmp_manifest" | awk '{print $1}')"
+printf '%s  %s\n%s  %s\n' \
+  "$archive_hash" "$(basename "$archive")" \
+  "$manifest_hash" "$(basename "$manifest")" > "$tmp_complete"
 
 mv -- "$tmp_archive" "$archive"
 mv -- "$tmp_checksum" "$checksum"

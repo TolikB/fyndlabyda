@@ -235,6 +235,7 @@ jobs:
           test "$revision" = "$GITHUB_SHA"
           printf '%s\n' "$image_id" >"$artifact_dir/funding-candidate-image.id"
           printf '%s\n' "$revision" >"$artifact_dir/funding-candidate-image.revision"
+          printf '%s\n' "$revision" >"$artifact_dir/.release-sha"
           docker save "$CI_IMAGE" | gzip -1 >"$artifact_dir/funding-candidate-image.tar.gz"
           (
             cd "$artifact_dir"
