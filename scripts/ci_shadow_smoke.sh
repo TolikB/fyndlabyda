@@ -54,6 +54,11 @@ network_created=true
 
 docker run --detach \
   --name "$db_container" \
+  --user 70:70 \
+  --init \
+  --pids-limit 128 \
+  --cpus 0.50 \
+  --memory 384m \
   --network "$network" \
   --network-alias postgres \
   --env POSTGRES_USER=funding \
@@ -84,6 +89,11 @@ fi
 
 docker run --detach \
   --name "$app_container" \
+  --user 10001:10001 \
+  --init \
+  --pids-limit 256 \
+  --cpus 1.00 \
+  --memory 1024m \
   --network "$network" \
   --read-only \
   --tmpfs /tmp:size=64m,mode=1777 \

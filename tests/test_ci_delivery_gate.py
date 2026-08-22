@@ -77,6 +77,14 @@ def test_shadow_deployment_is_isolated_and_cannot_trade() -> None:
     assert "LIVE_AUTOTRADE=false" in script
     assert "--cap-drop ALL" in script
     assert "no-new-privileges:true" in script
+    assert "--user 70:70" in script
+    assert "--user 10001:10001" in script
+    assert script.count("--init") == 2
+    assert "--pids-limit 128" in script
+    assert "--pids-limit 256" in script
+    assert "--memory 384m" in script
+    assert "--memory 1024m" in script
+    assert script.count("--cpus") == 2
     assert "docker push" not in script
     assert "LIVE_ARMED=true" not in script
     assert not re.search(r"--publish|\s-p\s", script)
