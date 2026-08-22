@@ -204,6 +204,7 @@ services:
     tmpfs:
       - /tmp:size=32m,mode=1777
       - /var/log/clickhouse-server:size=64m,mode=0750,uid=101,gid=101
+      - /etc/clickhouse-server/users.d:size=4m,mode=0750,uid=101,gid=101
     profiles: ["analytics"]
     environment:
       CLICKHOUSE_DB: funding_analytics

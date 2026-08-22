@@ -141,6 +141,7 @@ def test_data_plane_is_internal_authenticated_and_tls_only() -> None:
     assert "uid=70,gid=70" in " ".join(services["postgres"]["tmpfs"])
     assert "uid=999,gid=1000" in " ".join(services["redis"]["tmpfs"])
     assert "uid=101,gid=101" in " ".join(services["clickhouse"]["tmpfs"])
+    assert "/etc/clickhouse-server/users.d" in " ".join(services["clickhouse"]["tmpfs"])
 
     postgres = services["postgres"]
     postgres_command = " ".join(postgres["command"])
