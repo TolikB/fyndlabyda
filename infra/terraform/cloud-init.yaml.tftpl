@@ -145,6 +145,7 @@ write_files:
       Type=oneshot
       RemainAfterExit=true
       WorkingDirectory=${app_dir}
+      ExecCondition=/usr/bin/test ! -e ${app_dir}/.restore-maintenance
       ExecStartPre=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env config --quiet
       ExecStart=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env up --detach --remove-orphans
       ExecStop=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env stop

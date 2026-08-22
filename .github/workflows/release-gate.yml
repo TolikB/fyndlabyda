@@ -199,14 +199,16 @@ jobs:
           terraform -chdir=infra/terraform validate -no-color
 
       - name: Validate Linux operational scripts
-        run: >-
-          bash -n
-          scripts/ci_shadow_smoke.sh
-          scripts/ci_load_candidate_image.sh
-          scripts/generate_ephemeral_test_pki.sh
-          scripts/backup_state.sh
-          scripts/restore_state.sh
-          scripts/host_preflight.sh
+        run: |
+          for script in \
+            scripts/ci_shadow_smoke.sh \
+            scripts/ci_load_candidate_image.sh \
+            scripts/generate_ephemeral_test_pki.sh \
+            scripts/backup_state.sh \
+            scripts/restore_state.sh \
+            scripts/host_preflight.sh; do
+            bash -n "$script"
+          done
 
   build-candidate:
     name: Build and seal immutable candidate image

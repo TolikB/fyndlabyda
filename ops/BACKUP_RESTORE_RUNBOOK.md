@@ -7,9 +7,13 @@ never written to disk. Every archive has a SHA-256 sidecar and JSON manifest wit
 commit, Alembic head, size, timestamp, and exact Compose project. The backup root
 must be a dedicated mode-0700 directory containing the exact marker
 `funding-arbitrage-v1` in `.funding-backup-root`.
-Database tools derive `PGPASSWORD` from `POSTGRES_PASSWORD` only inside the
-PostgreSQL container. The password value is never copied into the host shell or
-placed on a command line.
+Each run holds a non-blocking lock for this backup root. Publication is atomic:
+the encrypted archive, checksum, and manifest are moved into place before a
+`.complete` marker containing the archive hash is published last. Restores reject
+incomplete sets and backups whose Alembic head changed during the dump.
+Database tools derive `PGPASSWORD`, `PGUSER`, and `PGDATABASE` from the running
+PostgreSQL container only. Passwords and deployment-specific database names are
+never copied into the host shell or placed on a command line.
 
 Configure an offline age recipient and run from the immutable checkout:
 
@@ -31,32 +35,49 @@ Restore is destructive and must be performed first on a disposable isolated VM.
 Select the archive and verify its off-host provenance. Immediately before the
 restore, create a distinct current-state backup with `scripts/backup_state.sh`;
 by default the restore refuses a safety backup older than 15 minutes or whose
-Alembic head differs from the currently running database. Stop only the exact
-application service after that backup; keep PostgreSQL running. The restore
-script refuses broad paths, wrong project names, missing
+Alembic head differs from the currently running database. Create the exact
+root-owned restore fence before stopping the systemd unit. The unit has an
+`ExecCondition` that prevents an automatic restart while this marker exists.
+Because stopping the unit stops the whole Compose project, start only PostgreSQL
+again before invoking restore. The restore script disables the stopped app
+container restart policy and refuses broad paths, wrong project names, missing
 markers/sidecars, bad checksums, a running app, missing safety backup, or an
 inexact confirmation phrase.
 
 ```bash
+cd /opt/funding-arbitrage-v1
+export RESTORE_CHANGE_TICKET=DRILL-2026-001
+export RESTORE_MAINTENANCE_MARKER=/opt/funding-arbitrage-v1/.restore-maintenance
+sudo sh -c 'set -C; umask 077; printf "%s\n" "$1" > "$2"' sh \
+  "funding-arbitrage-v1-restore:${RESTORE_CHANGE_TICKET}" \
+  "$RESTORE_MAINTENANCE_MARKER"
 sudo systemctl stop funding-arbitrage-v1.service
+sudo docker compose --project-name funding_arbitrage_v1 --env-file .env.live \
+  --file docker-compose.yml up --detach postgres
 export BACKUP_ROOT=/var/backups/funding-arbitrage-v1
 export COMPOSE_PROJECT_NAME=funding_arbitrage_v1
 export PRE_RESTORE_BACKUP=/var/backups/funding-arbitrage-v1/funding-v1-postgres-NEW.dump.age
 export AGE_IDENTITY_FILE=/root/.config/age/funding-v1-backup-identity.txt
 export CONFIRM_RESTORE=RESTORE_FUNDING_V1_POSTGRES_AND_KEEP_APP_STOPPED
-export RESTORE_CHANGE_TICKET=DRILL-2026-001
 export MAX_PRE_RESTORE_BACKUP_AGE_SECONDS=900
-sudo --preserve-env=BACKUP_ROOT,COMPOSE_PROJECT_NAME,PRE_RESTORE_BACKUP,AGE_IDENTITY_FILE,CONFIRM_RESTORE,RESTORE_CHANGE_TICKET,MAX_PRE_RESTORE_BACKUP_AGE_SECONDS \
+sudo --preserve-env=BACKUP_ROOT,COMPOSE_PROJECT_NAME,PRE_RESTORE_BACKUP,AGE_IDENTITY_FILE,CONFIRM_RESTORE,RESTORE_CHANGE_TICKET,RESTORE_MAINTENANCE_MARKER,MAX_PRE_RESTORE_BACKUP_AGE_SECONDS \
   bash scripts/restore_state.sh \
   /var/backups/funding-arbitrage-v1/funding-v1-postgres-TARGET.dump.age
 ```
 
 `pg_restore` uses `--single-transaction --exit-on-error`; after restore, Alembic
-is advanced and critical tables are queried. The application intentionally stays
-stopped. `AGE_IDENTITY_FILE` is mandatory, resolved to a regular file, must be
-owned by the restore operator, and must not expose any group/world permission
-bits. Run reconciliation, ledger invariants, deterministic replay, and report
-checks before an explicit operator restart.
+is advanced and critical tables are queried. The application remains stopped and
+fenced. `AGE_IDENTITY_FILE` is mandatory, resolved to a regular file, must be
+owned by the restore operator, must have a non-writable operator-owned parent,
+and must not expose any group/world permission bits. Run reconciliation, ledger
+invariants, deterministic replay, and report checks. Only then remove the exact
+fence and explicitly restart the unit:
+
+```bash
+sudo grep -Fxq "funding-arbitrage-v1-restore:${RESTORE_CHANGE_TICKET}" "$RESTORE_MAINTENANCE_MARKER"
+sudo rm -- "$RESTORE_MAINTENANCE_MARKER"
+sudo systemctl start funding-arbitrage-v1.service
+```
 
 ## Schedule and evidence
 

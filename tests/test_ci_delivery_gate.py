@@ -40,6 +40,9 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "--decisions 5000" in str(jobs["load-slo"])
     assert "terraform -chdir=infra/terraform validate" in str(jobs["infrastructure-verify"])
     assert "scripts/backup_state.sh" in str(jobs["infrastructure-verify"])
+    workflow = _workflow_text()
+    assert "for script in \\" in workflow
+    assert workflow.count('bash -n "$script"') == 1
     assert "pip_audit" in str(jobs["container-security"])
     assert "trivy-action" in str(jobs["container-security"])
     assert "sbom-action" in str(jobs["container-security"])

@@ -29,6 +29,7 @@ def test_terraform_is_provider_neutral_and_fail_closed() -> None:
     assert "chrony" in cloud
     assert "no-new-privileges" in cloud
     assert "--project-name ${project_name}" in cloud
+    assert "ExecCondition=/usr/bin/test ! -e ${app_dir}/.restore-maintenance" in cloud
     assert "groups: [adm]" in cloud
     assert "groups: [adm, docker" not in cloud
     assert "/usr/bin/docker compose *" not in cloud
@@ -95,13 +96,21 @@ def test_backup_is_stream_encrypted_atomic_and_scoped() -> None:
     assert 'expected_project="funding_arbitrage_v1"' in backup
     assert ".funding-backup-root" in backup
     assert "pg_dump" in backup
-    assert 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec "$@"' in backup
+    assert 'PGUSER="$POSTGRES_USER" PGDATABASE="$POSTGRES_DB"' in backup
+    assert "PostgreSQL runtime credentials are missing" in backup
+    assert "require_exact_line" in backup
     assert "postgres_exec pg_dump" in backup
     assert '| age --recipient "$recipient"' in backup
     assert "sha256sum" in backup
     assert "alembic_head" in backup
     assert "mktemp --tmpdir=\"$backup_root\"" in backup
     assert "mv -- \"$tmp_archive\" \"$archive\"" in backup
+    assert "flock --nonblock 9" in backup
+    assert "migration_head_before" in backup
+    assert "migration_head_after" in backup
+    assert 'mv -- "$tmp_complete" "$complete"' in backup
+    assert "postgres_user=" not in backup
+    assert "postgres_db=" not in backup
     assert "docker system prune" not in backup
     assert "rm -rf" not in backup
 
@@ -124,10 +133,24 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert "AGE_IDENTITY_FILE must name one explicit private age identity file" in restore
     assert "without group/world access" in restore
     assert 'age --decrypt --identity "$identity_file"' in restore
-    assert 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec "$@"' in restore
+    assert 'PGUSER="$POSTGRES_USER" PGDATABASE="$POSTGRES_DB"' in restore
+    assert "PostgreSQL runtime credentials are missing" in restore
     assert "postgres_exec pg_restore" in restore
+    assert "RESTORE_MAINTENANCE_MARKER" in restore
+    assert "compose_root" in restore
+    assert "fence beside the Compose file" in restore
+    assert "require_exact_line" in restore
+    assert 'expected_marker="funding-arbitrage-v1-restore:${change_ticket}"' in restore
+    assert "identity_parent" in restore
+    assert '"$candidate.complete"' in restore
+    assert 'docker update --restart=no "$app_container_id"' in restore
+    assert "RestartPolicy.Name" in restore
+    assert "running_app_ids" in restore
+    assert "State.Running" in restore
+    assert "postgres_user=" not in restore
+    assert "postgres_db=" not in restore
     assert "--clean --if-exists --single-transaction --exit-on-error" in restore
-    assert "application intentionally remains stopped" in restore
+    assert "application remains stopped and fenced" in restore
     assert "docker system prune" not in restore
     assert "rm -rf" not in restore
 
@@ -186,6 +209,10 @@ def test_infrastructure_and_restore_runbooks_preserve_safety_boundary() -> None:
     assert "projects other than `funding_arbitrage_v1`" in infrastructure
     assert "plaintext is never written to disk" in restore
     assert "disposable isolated VM" in restore
-    assert "application intentionally stays stopped" in restore
+    assert "application remains stopped and fenced" in restore
+    assert restore.index("RESTORE_MAINTENANCE_MARKER") < restore.index("systemctl stop")
+    assert "--file docker-compose.yml up --detach postgres" in restore
+    assert 'sudo rm -- "$RESTORE_MAINTENANCE_MARKER"' in restore
+    assert "systemctl start funding-arbitrage-v1.service" in restore
     assert "`AGE_IDENTITY_FILE` is mandatory" in restore
     assert "quarterly" in restore.lower()
