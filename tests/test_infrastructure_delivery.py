@@ -141,6 +141,8 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "internal secret directory must be root-owned mode 0711" in preflight
     assert "private artifact owner is invalid" in preflight
     assert "check_private_owner secrets/internal/clickhouse-server.key 101 101" in preflight
+    assert "secrets/internal/clickhouse-client.crt" in preflight
+    assert "check_private_owner secrets/internal/clickhouse-client.key 101 101" in preflight
 
 
 def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
@@ -156,7 +158,14 @@ def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
     assert 'chown 10001:10001 "$destination/app-client.key"' in script
     assert 'chown 70:70 "$destination/postgres-server.key"' in script
     assert 'chown 999:1000 "$destination/redis-server.key"' in script
-    assert 'chown 101:101 "$destination/clickhouse-server.key"' in script
+    assert (
+        'issue_certificate clickhouse-client funding clientAuth "DNS:clickhouse-client"'
+        in script
+    )
+    assert (
+        'chown 101:101 "$destination/clickhouse-server.key" "$destination/clickhouse-client.key"'
+        in script
+    )
 
 
 def test_infrastructure_and_restore_runbooks_preserve_safety_boundary() -> None:

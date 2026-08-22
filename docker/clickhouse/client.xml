@@ -1,0 +1,12 @@
+<clickhouse>
+    <openSSL>
+        <client>
+            <certificateFile>/run/secrets/internal/clickhouse-client.crt</certificateFile>
+            <privateKeyFile>/run/secrets/internal/clickhouse-client.key</privateKeyFile>
+            <caConfig>/run/secrets/internal/ca.crt</caConfig>
+            <verificationMode>strict</verificationMode>
+            <loadDefaultCAFile>false</loadDefaultCAFile>
+            <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+        </client>
+    </openSSL>
+</clickhouse>

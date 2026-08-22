@@ -36,6 +36,9 @@ CLICKHOUSE_RESOURCES_PATH = (
     / "config.d"
     / "resources.xml"
 )
+CLICKHOUSE_CLIENT_PATH = (
+    Path(__file__).resolve().parents[1] / "docker" / "clickhouse" / "client.xml"
+)
 FORBIDDEN_HOST_PORTS = {5432, 9108, 9109}
 
 
@@ -179,11 +182,24 @@ def test_data_plane_is_internal_authenticated_and_tls_only() -> None:
         "./docker/clickhouse/config.d/resources.xml:"
         "/etc/clickhouse-server/config.d/resources.xml:ro"
     ) in clickhouse["volumes"]
+    assert (
+        "./docker/clickhouse/client.xml:/etc/clickhouse-client/config.xml:ro"
+        in clickhouse["volumes"]
+    )
+    clickhouse_healthcheck = " ".join(clickhouse["healthcheck"]["test"])
+    assert "--config-file /etc/clickhouse-client/config.xml" in clickhouse_healthcheck
     clickhouse_tls = CLICKHOUSE_TLS_PATH.read_text(encoding="utf-8")
     assert '<http_port remove="remove"/>' in clickhouse_tls
     assert "<https_port>8443</https_port>" in clickhouse_tls
     assert "<tcp_port_secure>9440</tcp_port_secure>" in clickhouse_tls
     assert clickhouse_tls.count("<verificationMode>strict</verificationMode>") == 2
+    client_config = ET.parse(CLICKHOUSE_CLIENT_PATH).getroot()
+    client_tls = client_config.find("openSSL/client")
+    assert client_tls is not None
+    assert client_tls.findtext("certificateFile") == "/run/secrets/internal/clickhouse-client.crt"
+    assert client_tls.findtext("privateKeyFile") == "/run/secrets/internal/clickhouse-client.key"
+    assert client_tls.findtext("caConfig") == "/run/secrets/internal/ca.crt"
+    assert client_tls.findtext("verificationMode") == "strict"
 
     resource_config = ET.parse(CLICKHOUSE_RESOURCES_PATH).getroot()
     assert resource_config.tag == "clickhouse"

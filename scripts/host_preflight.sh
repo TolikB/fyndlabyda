@@ -71,7 +71,16 @@ for secret_file in \
   secrets/exchange/credential-policy.json \
   secrets/internal/ca.crt \
   secrets/internal/app-client.crt \
-  secrets/internal/app-client.key; do
+  secrets/internal/app-client.key \
+  secrets/internal/postgres-server.crt \
+  secrets/internal/postgres-server.key \
+  secrets/internal/redis-server.crt \
+  secrets/internal/redis-server.key \
+  secrets/internal/clickhouse-server.crt \
+  secrets/internal/clickhouse-server.key \
+  secrets/internal/clickhouse-client.crt \
+  secrets/internal/clickhouse-client.key \
+  secrets/internal/redis-password; do
   test -s "$secret_file" || {
     echo "required secret artifact is missing: $secret_file" >&2
     exit 1
@@ -85,6 +94,7 @@ for private_file in \
   secrets/internal/postgres-server.key \
   secrets/internal/redis-server.key \
   secrets/internal/clickhouse-server.key \
+  secrets/internal/clickhouse-client.key \
   secrets/internal/redis-password; do
   mode="$(stat -c '%a' "$private_file")"
   if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]]; then
@@ -123,5 +133,6 @@ check_private_owner secrets/internal/postgres-server.key 70 70
 check_private_owner secrets/internal/redis-server.key 999 1000
 check_private_owner secrets/internal/redis-password 999 1000
 check_private_owner secrets/internal/clickhouse-server.key 101 101
+check_private_owner secrets/internal/clickhouse-client.key 101 101
 
 echo "Linux host preflight passed for $project"

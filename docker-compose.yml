@@ -215,6 +215,7 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./docker/clickhouse/init:/docker-entrypoint-initdb.d:ro
       - ./docker/clickhouse/config.d/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
+      - ./docker/clickhouse/client.xml:/etc/clickhouse-client/config.xml:ro
       - ./docker/clickhouse/config.d/resources.xml:/etc/clickhouse-server/config.d/resources.xml:ro
       - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
     expose:
@@ -235,7 +236,8 @@ services:
         - CMD-SHELL
         - >-
           SSL_CERT_FILE=/run/secrets/internal/ca.crt
-          clickhouse-client --secure --host clickhouse --port 9440
+          clickhouse-client --config-file /etc/clickhouse-client/config.xml
+          --secure --host clickhouse --port 9440
           --user "$${CLICKHOUSE_USER}" --password "$${CLICKHOUSE_PASSWORD}"
           --query "SELECT 1"
       interval: 10s

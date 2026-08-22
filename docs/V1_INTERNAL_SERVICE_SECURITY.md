@@ -36,6 +36,8 @@ Create `secrets/internal` outside Git and the Docker build context:
 - `redis-server.key`
 - `clickhouse-server.crt` with SAN `DNS:clickhouse`
 - `clickhouse-server.key`
+- `clickhouse-client.crt` with clientAuth EKU for the internal healthcheck
+- `clickhouse-client.key`
 - `redis-password` containing one random 32+ character printable value
   without a trailing newline.
 
@@ -46,7 +48,7 @@ runtime contract for the pinned images:
 - `app-client.key`: UID/GID `10001:10001`;
 - `postgres-server.key`: `70:70`;
 - `redis-server.key` and `redis-password`: `999:1000`;
-- `clickhouse-server.key`: `101:101`.
+- `clickhouse-server.key` and `clickhouse-client.key`: `101:101`.
 
 The containers run under those non-root identities. Directory traversal lets
 each process reach its own file while `0600` prevents it from reading another
