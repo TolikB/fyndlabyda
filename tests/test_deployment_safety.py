@@ -1,5 +1,6 @@
 import os
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import yaml
@@ -27,6 +28,13 @@ REDIS_ENTRYPOINT_PATH = (
 )
 CLICKHOUSE_TLS_PATH = (
     Path(__file__).resolve().parents[1] / "docker" / "clickhouse" / "config.d" / "tls.xml"
+)
+CLICKHOUSE_RESOURCES_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "docker"
+    / "clickhouse"
+    / "config.d"
+    / "resources.xml"
 )
 FORBIDDEN_HOST_PORTS = {5432, 9108, 9109}
 
@@ -161,14 +169,34 @@ def test_data_plane_is_internal_authenticated_and_tls_only() -> None:
     assert "--aclfile /tmp/users.acl" in redis_script
     assert "user default off" in redis_script
     assert "echo \"$password\"" not in redis_script
+    redis_healthcheck = " ".join(redis["healthcheck"]["test"])
+    assert "--sni redis --user funding -h redis ping" in redis_healthcheck
+    assert "--host redis" not in redis_healthcheck
 
     clickhouse = services["clickhouse"]
     assert clickhouse["expose"] == ["8443", "9440"]
+    assert (
+        "./docker/clickhouse/config.d/resources.xml:"
+        "/etc/clickhouse-server/config.d/resources.xml:ro"
+    ) in clickhouse["volumes"]
     clickhouse_tls = CLICKHOUSE_TLS_PATH.read_text(encoding="utf-8")
     assert '<http_port remove="remove"/>' in clickhouse_tls
     assert "<https_port>8443</https_port>" in clickhouse_tls
     assert "<tcp_port_secure>9440</tcp_port_secure>" in clickhouse_tls
     assert clickhouse_tls.count("<verificationMode>strict</verificationMode>") == 2
+
+    resource_config = ET.parse(CLICKHOUSE_RESOURCES_PATH).getroot()
+    assert resource_config.tag == "clickhouse"
+    assert resource_config.findtext("max_thread_pool_size") == "128"
+    assert resource_config.findtext("background_schedule_pool_size") == "16"
+    assert resource_config.findtext("max_server_memory_usage_to_ram_ratio") == "0.65"
+    pool_sizes = {
+        element.tag: int(element.text or "0")
+        for element in resource_config
+        if element.tag.endswith("pool_size") and element.tag != "max_thread_pool_size"
+    }
+    assert pool_sizes
+    assert max(pool_sizes.values()) <= 16
 
 
 def test_live_environment_requires_internal_tls_and_credential_policy() -> None:

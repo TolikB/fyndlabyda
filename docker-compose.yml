@@ -190,7 +190,7 @@ services:
         - >-
           REDISCLI_AUTH="$$(cat /run/secrets/internal/redis-password)"
           redis-cli --tls --cacert /run/secrets/internal/ca.crt
-          --sni redis --user funding --host redis ping | grep -q PONG
+          --sni redis --user funding -h redis ping | grep -q PONG
       interval: 5s
       timeout: 3s
       retries: 10
@@ -215,6 +215,7 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./docker/clickhouse/init:/docker-entrypoint-initdb.d:ro
       - ./docker/clickhouse/config.d/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
+      - ./docker/clickhouse/config.d/resources.xml:/etc/clickhouse-server/config.d/resources.xml:ro
       - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
     expose:
       - "8443"

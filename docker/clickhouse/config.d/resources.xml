@@ -1,0 +1,14 @@
+<clickhouse>
+    <max_thread_pool_size>128</max_thread_pool_size>
+    <background_buffer_flush_schedule_pool_size>4</background_buffer_flush_schedule_pool_size>
+    <background_pool_size>8</background_pool_size>
+    <background_move_pool_size>4</background_move_pool_size>
+    <background_fetches_pool_size>4</background_fetches_pool_size>
+    <background_common_pool_size>4</background_common_pool_size>
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>4</background_message_broker_schedule_pool_size>
+    <background_distributed_schedule_pool_size>4</background_distributed_schedule_pool_size>
+    <tables_loader_background_pool_size>4</tables_loader_background_pool_size>
+    <tables_loader_foreground_pool_size>4</tables_loader_foreground_pool_size>
+    <max_server_memory_usage_to_ram_ratio>0.65</max_server_memory_usage_to_ram_ratio>
+</clickhouse>
