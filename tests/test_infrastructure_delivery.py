@@ -95,6 +95,8 @@ def test_backup_is_stream_encrypted_atomic_and_scoped() -> None:
     assert 'expected_project="funding_arbitrage_v1"' in backup
     assert ".funding-backup-root" in backup
     assert "pg_dump" in backup
+    assert 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec "$@"' in backup
+    assert "postgres_exec pg_dump" in backup
     assert '| age --recipient "$recipient"' in backup
     assert "sha256sum" in backup
     assert "alembic_head" in backup
@@ -122,6 +124,8 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert "AGE_IDENTITY_FILE must name one explicit private age identity file" in restore
     assert "without group/world access" in restore
     assert 'age --decrypt --identity "$identity_file"' in restore
+    assert 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec "$@"' in restore
+    assert "postgres_exec pg_restore" in restore
     assert "--clean --if-exists --single-transaction --exit-on-error" in restore
     assert "application intentionally remains stopped" in restore
     assert "docker system prune" not in restore

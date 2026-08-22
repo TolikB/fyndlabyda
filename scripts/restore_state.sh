@@ -63,6 +63,12 @@ for overlay in secrets/exchange/runtime.env secrets/exchange/telegram.env; do
   fi
 done
 
+postgres_exec() {
+  docker compose --project-name "$project" "${compose_env_args[@]}" \
+    --file "$compose_file" exec -T postgres sh -c \
+    'export PGPASSWORD="$POSTGRES_PASSWORD"; exec "$@"' sh "$@"
+}
+
 backup_root="$(realpath -e -- "$backup_root")"
 archive="$(realpath -e -- "$archive")"
 pre_restore_backup="$(realpath -e -- "$pre_restore_backup")"
@@ -166,8 +172,7 @@ fi
 
 postgres_user="${POSTGRES_USER:-funding}"
 postgres_db="${POSTGRES_DB:-funding}"
-current_migration_head="$(docker compose --project-name "$project" "${compose_env_args[@]}" \
-  --file "$compose_file" exec -T postgres psql --username "$postgres_user" \
+current_migration_head="$(postgres_exec psql --username "$postgres_user" \
   --dbname "$postgres_db" --tuples-only --no-align \
   --command 'SELECT version_num FROM alembic_version LIMIT 1' | tr -d '\r\n')"
 pre_restore_migration_head="$(jq --raw-output '.alembic_head' "$pre_restore_backup.json")"
@@ -178,16 +183,13 @@ if [[ ! "$current_migration_head" =~ ^[A-Za-z0-9_-]{1,64}$ ]] ||
 fi
 
 age --decrypt --identity "$identity_file" "$archive" \
-  | docker compose --project-name "$project" "${compose_env_args[@]}" \
-      --file "$compose_file" exec -T postgres \
-      pg_restore --username "$postgres_user" --dbname "$postgres_db" \
-      --clean --if-exists --single-transaction --exit-on-error \
-      --no-owner --no-acl
+  | postgres_exec pg_restore --username "$postgres_user" --dbname "$postgres_db" \
+    --clean --if-exists --single-transaction --exit-on-error \
+    --no-owner --no-acl
 
 docker compose --project-name "$project" "${compose_env_args[@]}" \
   --file "$compose_file" run --rm --no-deps app alembic upgrade head
-docker compose --project-name "$project" "${compose_env_args[@]}" \
-  --file "$compose_file" exec -T postgres psql --username "$postgres_user" \
+postgres_exec psql --username "$postgres_user" \
   --dbname "$postgres_db" --set ON_ERROR_STOP=1 \
   --command 'SELECT version_num FROM alembic_version; SELECT COUNT(*) FROM canonical_events;'
 

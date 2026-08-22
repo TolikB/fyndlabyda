@@ -39,6 +39,12 @@ for overlay in secrets/exchange/runtime.env secrets/exchange/telegram.env; do
   fi
 done
 
+postgres_exec() {
+  docker compose --project-name "$project" "${compose_env_args[@]}" \
+    --file "$compose_file" exec -T postgres sh -c \
+    'export PGPASSWORD="$POSTGRES_PASSWORD"; exec "$@"' sh "$@"
+}
+
 backup_root="$(realpath -e -- "$backup_root")"
 if [[ "$backup_root" == "/" || ! -f "$backup_root/.funding-backup-root" ]]; then
   echo "backup root identity marker is missing" >&2
@@ -91,9 +97,7 @@ chmod 0600 "$tmp_archive" "$tmp_checksum" "$tmp_manifest"
 
 postgres_user="${POSTGRES_USER:-funding}"
 postgres_db="${POSTGRES_DB:-funding}"
-docker compose --project-name "$project" "${compose_env_args[@]}" \
-  --file "$compose_file" exec -T postgres \
-  pg_dump --username "$postgres_user" --dbname "$postgres_db" \
+postgres_exec pg_dump --username "$postgres_user" --dbname "$postgres_db" \
   --format=custom --compress=9 --no-owner --no-acl \
   | age --recipient "$recipient" --output "$tmp_archive"
 
@@ -104,8 +108,7 @@ commit_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
   commit_sha="unknown"
 fi
-migration_head="$(docker compose --project-name "$project" "${compose_env_args[@]}" \
-  --file "$compose_file" exec -T postgres psql --username "$postgres_user" \
+migration_head="$(postgres_exec psql --username "$postgres_user" \
   --dbname "$postgres_db" --tuples-only --no-align \
   --command 'SELECT version_num FROM alembic_version LIMIT 1' | tr -d '\r\n')"
 if [[ ! "$migration_head" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then

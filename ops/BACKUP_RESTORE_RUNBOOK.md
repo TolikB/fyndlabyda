@@ -7,6 +7,9 @@ never written to disk. Every archive has a SHA-256 sidecar and JSON manifest wit
 commit, Alembic head, size, timestamp, and exact Compose project. The backup root
 must be a dedicated mode-0700 directory containing the exact marker
 `funding-arbitrage-v1` in `.funding-backup-root`.
+Database tools derive `PGPASSWORD` from `POSTGRES_PASSWORD` only inside the
+PostgreSQL container. The password value is never copied into the host shell or
+placed on a command line.
 
 Configure an offline age recipient and run from the immutable checkout:
 
