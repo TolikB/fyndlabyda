@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS funding_analytics.raw_market_events
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (source, instrument_id, event_time, sequence_id, row_id)
-TTL event_time + INTERVAL 180 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 180 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS funding_analytics.normalized_trades
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS funding_analytics.normalized_trades
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (source, instrument_id, event_time, trade_id, row_id)
-TTL event_time + INTERVAL 730 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 730 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS funding_analytics.orderbook_deltas
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS funding_analytics.orderbook_deltas
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (source, instrument_id, event_time, last_sequence, row_id)
-TTL event_time + INTERVAL 180 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 180 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS funding_analytics.orderbook_snapshots
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS funding_analytics.orderbook_snapshots
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (source, instrument_id, event_time, sequence, row_id)
-TTL event_time + INTERVAL 365 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 365 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS funding_analytics.feature_snapshots
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS funding_analytics.feature_snapshots
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (feature_set_version, feature_name, instrument_id, event_time, row_id)
-TTL event_time + INTERVAL 730 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 730 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS funding_analytics.regime_snapshots
@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS funding_analytics.regime_snapshots
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (instrument_id, event_time, batch_id, row_id)
-TTL event_time + INTERVAL 730 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 730 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS funding_analytics.strategy_decisions
@@ -161,7 +161,7 @@ CREATE TABLE IF NOT EXISTS funding_analytics.strategy_decisions
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (strategy_id, instrument_id, event_time, row_id)
-TTL event_time + INTERVAL 730 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 730 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS funding_analytics.execution_telemetry
@@ -184,5 +184,5 @@ CREATE TABLE IF NOT EXISTS funding_analytics.execution_telemetry
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (service, metric, venue, strategy_id, event_time, row_id)
-TTL event_time + INTERVAL 90 DAY DELETE
+TTL toDateTime(event_time) + INTERVAL 90 DAY DELETE
 SETTINGS non_replicated_deduplication_window = 100000;

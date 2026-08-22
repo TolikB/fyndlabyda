@@ -280,6 +280,8 @@ def test_clickhouse_schema_has_explicit_retention_for_every_domain() -> None:
     assert sql.count("INTERVAL 90 DAY") == 1
     assert sql.count("ReplacingMergeTree") == 8
     assert sql.count("non_replicated_deduplication_window = 100000") == 8
+    assert sql.count("TTL toDateTime(event_time) + INTERVAL") == 8
+    assert "TTL event_time +" not in sql
 
     migration = Path(
         "docker/clickhouse/init/002_v1_typed_analytics_upgrade.sql"
