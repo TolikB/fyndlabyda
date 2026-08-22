@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -43,6 +44,17 @@ def _compose() -> dict[str, object]:
     payload = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return payload
+
+
+def test_shell_scripts_are_lf_only() -> None:
+    root = COMPOSE_PATH.parent
+    shell_scripts = sorted(root.rglob("*.sh"))
+    assert shell_scripts
+    assert "*.sh text eol=lf" in (root / ".gitattributes").read_text(encoding="utf-8")
+    if os.name != "posix":
+        return
+    for path in shell_scripts:
+        assert b"\r\n" not in path.read_bytes(), path.relative_to(root)
 
 
 def test_every_service_has_cpu_and_memory_limits() -> None:
