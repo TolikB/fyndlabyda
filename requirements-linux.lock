@@ -1832,6 +1832,7 @@ websockets==15.0.1 \
     #   funding-arbitrage (pyproject.toml)
     #   uvicorn
 uvloop==0.22.1 \
+    --hash=sha256:512fec6815e2dd45161054592441ef76c830eddaad55c8aa30952e6fe1ed07c0 \
     --hash=sha256:7b5b1ac819a3f946d3b2ee07f09149578ae76066d70b44df3fa990add49a82e4
     # via
     #   ccxt
