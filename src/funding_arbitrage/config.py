@@ -653,6 +653,7 @@ def get_settings() -> Settings:
 
     settings = Settings()
     config_path = Path("config/default.yaml")
+    yaml_defaults: dict[str, object] = {}
     if config_path.exists():
         # YAML supplies local defaults; explicit environment variables remain authoritative.
         with config_path.open(encoding="utf-8") as handle:
@@ -666,7 +667,7 @@ def get_settings() -> Settings:
             "execution_mode": "execution_mode",
         }.items():
             if field_name not in settings.model_fields_set and yaml_key in app:
-                setattr(settings, field_name, app[yaml_key])
+                yaml_defaults[field_name] = app[yaml_key]
         section_fields = {
             "bybit": {"base_url": "bybit_base_url", "websocket_url": "bybit_ws_url"},
             "gate": {
@@ -711,7 +712,7 @@ def get_settings() -> Settings:
             values = raw.get(section, {})
             for yaml_key, field_name in fields.items():
                 if field_name not in settings.model_fields_set and yaml_key in values:
-                    setattr(settings, field_name, values[yaml_key])
+                    yaml_defaults[field_name] = values[yaml_key]
         scanner = raw.get("scanner", {})
         scanner_fields = {
             "minimum_net_apr": "scanner_minimum_net_apr",
@@ -725,7 +726,7 @@ def get_settings() -> Settings:
         }
         for yaml_key, field_name in scanner_fields.items():
             if field_name not in settings.model_fields_set and yaml_key in scanner:
-                setattr(settings, field_name, scanner[yaml_key])
+                yaml_defaults[field_name] = scanner[yaml_key]
         paper = raw.get("paper_portfolio", {})
         for yaml_key, field_name in {
             "initial_balance_usd": "paper_initial_balance_usd",
@@ -762,7 +763,7 @@ def get_settings() -> Settings:
             "max_adverse_basis_percent": "paper_max_adverse_basis_percent",
         }.items():
             if field_name not in settings.model_fields_set and yaml_key in paper:
-                setattr(settings, field_name, paper[yaml_key])
+                yaml_defaults[field_name] = paper[yaml_key]
         telegram = raw.get("telegram", {})
         for yaml_key, field_name in {
             "enabled": "telegram_enabled",
@@ -772,7 +773,13 @@ def get_settings() -> Settings:
             "report_minute": "telegram_report_minute",
         }.items():
             if field_name not in settings.model_fields_set and yaml_key in telegram:
-                setattr(settings, field_name, telegram[yaml_key])
+                yaml_defaults[field_name] = telegram[yaml_key]
+        if yaml_defaults:
+            payload = settings.model_dump(by_alias=True)
+            for field_name, value in yaml_defaults.items():
+                alias = Settings.model_fields[field_name].alias or field_name
+                payload[alias] = value
+            settings = Settings.model_validate(payload)
         _validate_safe_values(settings)
     return settings
 
