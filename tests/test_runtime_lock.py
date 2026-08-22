@@ -35,10 +35,13 @@ def test_runtime_lock_exactly_pins_every_declared_dependency() -> None:
 def test_docker_runtime_uses_immutable_base_and_lock_file() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert (
-        "FROM python:3.12-slim@sha256:"
-        "229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
-    ) in dockerfile
+    expected_base = (
+        "FROM python:3.12-alpine@sha256:"
+        "d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31"
+    )
+    assert dockerfile.count(expected_base) == 2
+    assert "apk add --no-cache gcc musl-dev" in dockerfile
+    assert "apt-get" not in dockerfile
     assert (
         "pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock"
         in dockerfile
