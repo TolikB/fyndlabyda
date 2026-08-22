@@ -81,7 +81,11 @@ for private_file in \
   secrets/exchange/runtime.env \
   secrets/exchange/telegram.env \
   secrets/exchange/credential-policy.json \
-  secrets/internal/app-client.key; do
+  secrets/internal/app-client.key \
+  secrets/internal/postgres-server.key \
+  secrets/internal/redis-server.key \
+  secrets/internal/clickhouse-server.key \
+  secrets/internal/redis-password; do
   mode="$(stat -c '%a' "$private_file")"
   if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]]; then
     echo "private artifact permissions are invalid: $private_file ($mode)" >&2
@@ -93,5 +97,31 @@ for private_file in \
     exit 1
   fi
 done
+internal_dir_mode="$(stat -c '%a' secrets/internal)"
+internal_dir_uid="$(stat -c '%u' secrets/internal)"
+if [[ "$internal_dir_mode" != "711" || "$internal_dir_uid" != "0" ]]; then
+  echo "internal secret directory must be root-owned mode 0711" >&2
+  exit 1
+fi
+
+check_private_owner() {
+  local file="$1"
+  local expected_uid="$2"
+  local expected_gid="$3"
+  local actual_uid
+  local actual_gid
+  actual_uid="$(stat -c '%u' "$file")"
+  actual_gid="$(stat -c '%g' "$file")"
+  if [[ "$actual_uid" != "$expected_uid" || "$actual_gid" != "$expected_gid" ]]; then
+    echo "private artifact owner is invalid: $file ($actual_uid:$actual_gid)" >&2
+    exit 1
+  fi
+}
+
+check_private_owner secrets/internal/app-client.key 10001 10001
+check_private_owner secrets/internal/postgres-server.key 70 70
+check_private_owner secrets/internal/redis-server.key 999 1000
+check_private_owner secrets/internal/redis-password 999 1000
+check_private_owner secrets/internal/clickhouse-server.key 101 101
 
 echo "Linux host preflight passed for $project"

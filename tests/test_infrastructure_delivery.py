@@ -138,6 +138,9 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "mode_value=$((8#$mode))" in preflight
     assert "(mode_value & 077) != 0" in preflight
     assert "10#$mode > 600" not in preflight
+    assert "internal secret directory must be root-owned mode 0711" in preflight
+    assert "private artifact owner is invalid" in preflight
+    assert "check_private_owner secrets/internal/clickhouse-server.key 101 101" in preflight
 
 
 def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
@@ -147,6 +150,13 @@ def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
     assert "refusing to overwrite existing PKI path" in script
     assert "rm -rf" not in script
     assert "EPHEMERAL_PKI_FORCE" not in script
+    assert "printf '%s'" in script
+    assert 'rm -f -- "$destination/ca.key" "$destination/ca.srl"' in script
+    assert 'chmod 0711 "$destination"' in script
+    assert 'chown 10001:10001 "$destination/app-client.key"' in script
+    assert 'chown 70:70 "$destination/postgres-server.key"' in script
+    assert 'chown 999:1000 "$destination/redis-server.key"' in script
+    assert 'chown 101:101 "$destination/clickhouse-server.key"' in script
 
 
 def test_infrastructure_and_restore_runbooks_preserve_safety_boundary() -> None:

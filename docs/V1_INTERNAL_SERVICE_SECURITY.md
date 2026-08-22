@@ -39,10 +39,19 @@ Create `secrets/internal` outside Git and the Docker build context:
 - `redis-password` containing one random 32+ character printable value
   without a trailing newline.
 
-On Linux, keep the directory `0700`, private keys/password `0600`,
-and certificate files `0644`. Server private keys must be readable only by
-their corresponding container UID. Never commit this directory or copy it into
-an image.
+On Linux, keep the root-owned directory traverse-only at `0711`, every private
+key/password at `0600`, and certificates at `0644`. Ownership is part of the
+runtime contract for the pinned images:
+
+- `app-client.key`: UID/GID `10001:10001`;
+- `postgres-server.key`: `70:70`;
+- `redis-server.key` and `redis-password`: `999:1000`;
+- `clickhouse-server.key`: `101:101`.
+
+The containers run under those non-root identities. Directory traversal lets
+each process reach its own file while `0600` prevents it from reading another
+service's private material. Never leave `ca.key` in the mounted directory,
+commit this directory, or copy it into an image.
 
 ## Linux preflight gate
 

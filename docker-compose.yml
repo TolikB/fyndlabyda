@@ -111,6 +111,17 @@ services:
 
   postgres:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    user: "70:70"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /run/postgresql:size=8m,mode=0770,uid=70,gid=70
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-funding}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
@@ -154,14 +165,22 @@ services:
 
   redis:
     image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    user: "999:1000"
+    init: true
+    read_only: true
     command: ["sh", "/etc/redis/secure-entrypoint.sh"]
     volumes:
       - ./docker/redis/secure-entrypoint.sh:/etc/redis/secure-entrypoint.sh:ro
       - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
     tmpfs:
-      - /tmp:size=4m,mode=0700
+      - /tmp:size=4m,mode=0700,uid=999,gid=1000
     networks:
       - data_plane
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
     cpus: "0.10"
     mem_limit: 96m
     logging: *bounded-logging
@@ -179,6 +198,12 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
+    user: "101:101"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /var/log/clickhouse-server:size=64m,mode=0750,uid=101,gid=101
     profiles: ["analytics"]
     environment:
       CLICKHOUSE_DB: funding_analytics

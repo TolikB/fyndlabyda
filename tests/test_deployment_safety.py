@@ -124,6 +124,24 @@ def test_data_plane_is_internal_authenticated_and_tls_only() -> None:
         assert service["networks"] == ["data_plane"]
         assert not service.get("ports")
 
+    expected_users = {
+        "postgres": "70:70",
+        "redis": "999:1000",
+        "clickhouse": "101:101",
+    }
+    for name, expected_user in expected_users.items():
+        service = services[name]
+        assert service["user"] == expected_user
+        assert service["init"] is True
+        assert service["read_only"] is True
+        assert service["cap_drop"] == ["ALL"]
+        assert "no-new-privileges:true" in service["security_opt"]
+        assert service["pids_limit"] > 0
+
+    assert "uid=70,gid=70" in " ".join(services["postgres"]["tmpfs"])
+    assert "uid=999,gid=1000" in " ".join(services["redis"]["tmpfs"])
+    assert "uid=101,gid=101" in " ".join(services["clickhouse"]["tmpfs"])
+
     postgres = services["postgres"]
     postgres_command = " ".join(postgres["command"])
     assert "ssl=on" in postgres_command

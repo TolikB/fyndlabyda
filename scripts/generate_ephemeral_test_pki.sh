@@ -40,7 +40,17 @@ issue_certificate postgres-server postgres serverAuth "DNS:postgres"
 issue_certificate redis-server redis serverAuth "DNS:redis"
 issue_certificate clickhouse-server clickhouse serverAuth "DNS:clickhouse"
 
-openssl rand -hex 32 >"$destination/redis-password"
+printf '%s' "$(openssl rand -hex 32)" >"$destination/redis-password"
+rm -f -- "$destination/ca.key" "$destination/ca.srl"
+chmod 0711 "$destination"
+if (( EUID == 0 )); then
+  chown 10001:10001 "$destination/app-client.key"
+  chown 70:70 "$destination/postgres-server.key"
+  chown 999:1000 "$destination/redis-server.key" "$destination/redis-password"
+  chown 101:101 "$destination/clickhouse-server.key"
+else
+  echo "service-key ownership was not applied because the generator is not root" >&2
+fi
 chmod 0600 "$destination"/*.key "$destination/redis-password"
 chmod 0644 "$destination"/*.crt
 echo "ephemeral test PKI generated at $destination; never use it outside CI" >&2
