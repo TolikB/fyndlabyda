@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypedDict, cast
 
 import yaml
 from prometheus_client import generate_latest
@@ -15,27 +14,15 @@ ALERTMANAGER_PATH = ROOT / "docker" / "alertmanager" / "alertmanager.yml"
 GRAFANA_DATASOURCE_PATH = (
     ROOT / "docker" / "grafana" / "provisioning" / "datasources" / "prometheus.yml"
 )
-GRAFANA_DASHBOARD_PATH = ROOT / "docker" / "grafana" / "dashboards" / "funding-v1-operations.json"
+GRAFANA_DASHBOARD_PATH = (
+    ROOT / "docker" / "grafana" / "dashboards" / "funding-v1-operations.json"
+)
 COMPOSE_PATH = ROOT / "docker-compose.yml"
 RUNBOOK_PATH = ROOT / "ops" / "ALERT_RUNBOOK.md"
 
 
-class _AlertRule(TypedDict):
-    alert: str
-    labels: dict[str, str]
-    annotations: dict[str, str]
-
-
-class _AlertGroup(TypedDict):
-    rules: list[_AlertRule]
-
-
-class _RulesDocument(TypedDict):
-    groups: list[_AlertGroup]
-
-
-def _rules() -> list[_AlertRule]:
-    payload = cast(_RulesDocument, yaml.safe_load(RULES_PATH.read_text(encoding="utf-8")))
+def _rules() -> list[dict[str, object]]:
+    payload = yaml.safe_load(RULES_PATH.read_text(encoding="utf-8"))
     groups = payload["groups"]
     return [rule for group in groups for rule in group["rules"]]
 
@@ -60,7 +47,8 @@ def test_alert_rules_cover_every_required_operational_failure() -> None:
         annotations = rule["annotations"]
         assert labels["severity"] in {"warning", "critical"}
         assert all(
-            annotations.get(field) for field in ("summary", "impact", "action", "runbook_url")
+            annotations.get(field)
+            for field in ("summary", "impact", "action", "runbook_url")
         )
 
 
@@ -68,14 +56,19 @@ def test_prometheus_loads_rules_and_routes_to_alertmanager() -> None:
     prometheus = yaml.safe_load(PROMETHEUS_PATH.read_text(encoding="utf-8"))
 
     assert "/etc/prometheus/rules/prometheus-alerts.yml" in prometheus["rule_files"]
-    targets = prometheus["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"]
+    targets = prometheus["alerting"]["alertmanagers"][0]["static_configs"][0][
+        "targets"
+    ]
     assert targets == ["alertmanager:9093"]
 
 
 def test_alertmanager_uses_secret_files_and_sends_resolutions_to_telegram() -> None:
     alertmanager = yaml.safe_load(ALERTMANAGER_PATH.read_text(encoding="utf-8"))
 
-    assert alertmanager["global"]["telegram_bot_token_file"] == "/run/secrets/telegram-bot-token"
+    assert (
+        alertmanager["global"]["telegram_bot_token_file"]
+        == "/run/secrets/telegram-bot-token"
+    )
     receiver = alertmanager["receivers"][0]["telegram_configs"][0]
     assert receiver["chat_id_file"] == "/run/secrets/telegram-chat-id"
     assert receiver["send_resolved"] is True
@@ -96,11 +89,18 @@ def test_compose_alertmanager_is_bounded_loopback_only_and_secret_mounted() -> N
     assert service["ports"] == ["127.0.0.1:9093:9093"]
     assert service["cpus"] == "0.10"
     assert service["mem_limit"] == "96m"
-    assert any("/run/secrets/telegram-bot-token:ro" in volume for volume in service["volumes"])
-    assert any("/run/secrets/telegram-chat-id:ro" in volume for volume in service["volumes"])
+    assert any(
+        "/run/secrets/telegram-bot-token:ro" in volume
+        for volume in service["volumes"]
+    )
+    assert any(
+        "/run/secrets/telegram-chat-id:ro" in volume
+        for volume in service["volumes"]
+    )
     assert "alertmanager" in prometheus["depends_on"]
     assert any(
-        "prometheus-alerts.yml:/etc/prometheus/rules/prometheus-alerts.yml:ro" in volume
+        "prometheus-alerts.yml:/etc/prometheus/rules/prometheus-alerts.yml:ro"
+        in volume
         for volume in prometheus["volumes"]
     )
 
@@ -126,7 +126,9 @@ def test_grafana_is_provisioned_for_every_v1_operational_domain() -> None:
         "Latency P99",
     }.issubset(titles)
     expressions = " ".join(
-        target["expr"] for panel in dashboard["panels"] for target in panel["targets"]
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
     )
     for metric in (
         "funding_market_data_age_seconds",
@@ -178,8 +180,12 @@ def test_required_live_metrics_are_exported_and_wired_to_runtime_paths() -> None
     ):
         assert name in exported
 
-    executor = (ROOT / "src/funding_arbitrage/execution/live.py").read_text(encoding="utf-8")
-    runner = (ROOT / "src/funding_arbitrage/services/live_runner.py").read_text(encoding="utf-8")
+    executor = (ROOT / "src/funding_arbitrage/execution/live.py").read_text(
+        encoding="utf-8"
+    )
+    runner = (ROOT / "src/funding_arbitrage/services/live_runner.py").read_text(
+        encoding="utf-8"
+    )
     assert "live_orders_total.labels(exchange, result.status.value).inc()" in executor
     assert "live_order_submission_latency_seconds.labels(exchange).observe(" in executor
     assert "live_exposure_limit_utilization.set(" in runner
