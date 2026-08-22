@@ -188,6 +188,7 @@ def test_data_plane_is_internal_authenticated_and_tls_only() -> None:
     resource_config = ET.parse(CLICKHOUSE_RESOURCES_PATH).getroot()
     assert resource_config.tag == "clickhouse"
     assert resource_config.findtext("max_thread_pool_size") == "128"
+    assert resource_config.findtext("background_pool_size") == "16"
     assert resource_config.findtext("background_schedule_pool_size") == "16"
     assert resource_config.findtext("max_server_memory_usage_to_ram_ratio") == "0.65"
     pool_sizes = {
