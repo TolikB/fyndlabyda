@@ -249,6 +249,7 @@ jobs:
           path: ${{ runner.temp }}/funding-candidate
           if-no-files-found: error
           retention-days: 3
+          include-hidden-files: true
           compression-level: 0
 
   container-security:
