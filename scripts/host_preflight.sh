@@ -25,7 +25,7 @@ for overlay in secrets/exchange/runtime.env secrets/exchange/telegram.env; do
     compose_env_args+=(--env-file "$overlay")
   fi
 done
-for command_name in chronyc docker findmnt ss timedatectl; do
+for command_name in chronyc docker findmnt openssl sha256sum ss timedatectl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "required command unavailable: $command_name" >&2
     exit 2
@@ -134,5 +134,64 @@ check_private_owner secrets/internal/redis-server.key 999 1000
 check_private_owner secrets/internal/redis-password 999 1000
 check_private_owner secrets/internal/clickhouse-server.key 101 101
 check_private_owner secrets/internal/clickhouse-client.key 101 101
+
+readonly certificate_minimum_validity_seconds=86400
+for certificate_file in \
+  secrets/internal/ca.crt \
+  secrets/internal/app-client.crt \
+  secrets/internal/postgres-server.crt \
+  secrets/internal/redis-server.crt \
+  secrets/internal/clickhouse-server.crt \
+  secrets/internal/clickhouse-client.crt; do
+  if ! openssl x509 -checkend "$certificate_minimum_validity_seconds" \
+    -noout -in "$certificate_file"; then
+    echo "internal TLS certificate is expired or expires within 24 hours: $certificate_file" >&2
+    exit 1
+  fi
+done
+
+for certificate_file in \
+  secrets/internal/app-client.crt \
+  secrets/internal/postgres-server.crt \
+  secrets/internal/redis-server.crt \
+  secrets/internal/clickhouse-server.crt \
+  secrets/internal/clickhouse-client.crt; do
+  if ! openssl verify -CAfile secrets/internal/ca.crt "$certificate_file" >/dev/null; then
+    echo "internal TLS certificate chain is invalid: $certificate_file" >&2
+    exit 1
+  fi
+done
+
+check_certificate_key_pair() {
+  local certificate_file="$1"
+  local key_file="$2"
+  local certificate_public_key_hash
+  local private_key_public_key_hash
+
+  certificate_public_key_hash="$({
+    openssl x509 -pubkey -noout -in "$certificate_file" |
+      openssl pkey -pubin -outform DER
+  } | sha256sum | awk '{print $1}')"
+  private_key_public_key_hash="$(
+    openssl pkey -pubout -outform DER -in "$key_file" 2>/dev/null |
+      sha256sum | awk '{print $1}'
+  )"
+  if [[ -z "$certificate_public_key_hash" ||
+        "$certificate_public_key_hash" != "$private_key_public_key_hash" ]]; then
+    echo "internal TLS certificate does not match private key: $certificate_file" >&2
+    exit 1
+  fi
+}
+
+check_certificate_key_pair \
+  secrets/internal/app-client.crt secrets/internal/app-client.key
+check_certificate_key_pair \
+  secrets/internal/postgres-server.crt secrets/internal/postgres-server.key
+check_certificate_key_pair \
+  secrets/internal/redis-server.crt secrets/internal/redis-server.key
+check_certificate_key_pair \
+  secrets/internal/clickhouse-server.crt secrets/internal/clickhouse-server.key
+check_certificate_key_pair \
+  secrets/internal/clickhouse-client.crt secrets/internal/clickhouse-client.key
 
 echo "Linux host preflight passed for $project"

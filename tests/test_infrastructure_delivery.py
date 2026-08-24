@@ -191,6 +191,11 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "check_private_owner secrets/internal/clickhouse-server.key 101 101" in preflight
     assert "secrets/internal/clickhouse-client.crt" in preflight
     assert "check_private_owner secrets/internal/clickhouse-client.key 101 101" in preflight
+    assert "certificate_minimum_validity_seconds=86400" in preflight
+    assert 'openssl x509 -checkend "$certificate_minimum_validity_seconds"' in preflight
+    assert 'openssl verify -CAfile secrets/internal/ca.crt' in preflight
+    assert "check_certificate_key_pair" in preflight
+    assert preflight.count("check_certificate_key_pair \\") == 5
 
 
 def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
