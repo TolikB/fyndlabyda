@@ -203,6 +203,7 @@ jobs:
           for script in \
             scripts/ci_shadow_smoke.sh \
             scripts/ci_load_candidate_image.sh \
+            scripts/ci_restore_drill.sh \
             scripts/generate_ephemeral_test_pki.sh \
             scripts/verify_internal_tls.sh \
             scripts/backup_state.sh \
@@ -252,6 +253,44 @@ jobs:
           retention-days: 3
           include-hidden-files: true
           compression-level: 0
+
+  restore-drill:
+    name: Encrypted PostgreSQL restore and crash-state drill
+    needs:
+      - verify
+      - build-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download sealed candidate image
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: funding-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/funding-candidate
+
+      - name: Verify and load exact candidate image
+        run: >-
+          bash scripts/ci_load_candidate_image.sh
+          "${RUNNER_TEMP}/funding-candidate"
+          "$CI_IMAGE"
+          "$GITHUB_SHA"
+
+      - name: Install restore-drill tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age
+
+      - name: Run encrypted restore and fault-state drill
+        run: >-
+          bash scripts/ci_restore_drill.sh
+          "${RUNNER_TEMP}/funding-candidate"
+          "$CI_IMAGE"
+          "$GITHUB_SHA"
 
   container-security:
     name: Dependency, image, SBOM, and signature gates
@@ -342,6 +381,7 @@ jobs:
       - integration-replay
       - load-slo
       - infrastructure-verify
+      - restore-drill
       - build-candidate
       - container-security
     runs-on: ubuntu-24.04

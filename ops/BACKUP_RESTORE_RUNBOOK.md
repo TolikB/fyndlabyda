@@ -17,8 +17,11 @@ PostgreSQL container only. Passwords and deployment-specific database names are
 never copied into the host shell or placed on a command line.
 The source commit is mandatory: an immutable archive supplies `.release-sha`, a
 Git checkout supplies `HEAD`, or the operator supplies `RELEASE_COMMIT_SHA`. The
-sealed CI candidate artifact includes `.release-sha`. The running app image must
-carry the same `org.opencontainers.image.revision` label. All available sources
+sealed CI candidate artifact includes `.release-sha`. The app container image
+must carry the same `org.opencontainers.image.revision` label. Normal backups
+require it to be running; the separately confirmed recovery mode requires it to
+be stopped, restart-fenced, and protected by the exact restore marker. All
+available sources
 must match exactly, tracked Git changes are rejected, and provenance is checked
 both before and after `pg_dump`; `unknown` provenance is rejected. These hashes
 detect corruption and mismatch but do not replace off-host object lock or an
@@ -75,15 +78,55 @@ sudo --preserve-env=BACKUP_ROOT,COMPOSE_PROJECT_NAME,PRE_RESTORE_BACKUP,AGE_IDEN
   /var/backups/funding-arbitrage-v1/funding-v1-postgres-TARGET.dump.age
 ```
 
-`pg_restore` uses `--single-transaction --exit-on-error`; after restore, Alembic
-is advanced and critical tables are queried. The application remains stopped and
-fenced. `AGE_IDENTITY_FILE` is mandatory, resolved to a regular file, must be
-owned by the restore operator, must have a non-writable operator-owned parent,
-and must not expose any group/world permission bits. Run reconciliation, ledger
-invariants, deterministic replay, and report checks. The restore deliberately
-sets the stopped app container policy to `no`; explicitly restore the declared
-Compose policy before removing the fence. Only then remove the exact fence and
-restart the unit:
+The script decrypts both archives only into deterministic mode-0600 files in an
+operator-owned mode-0700 directory on `tmpfs`; stale files for the next run are
+removed and the exit trap removes plaintext after success or failure. Temporary
+archive copies inside PostgreSQL also use `/dev/shm`. Both custom archive
+catalogs are checked before mutation. The target is then fully restored and
+migrated inside a replacement database, with exact application-schema, Alembic
+head, and critical-table checks before and after the swap.
+
+The script disables new connections, waits for backend termination, and records
+each rename stage in a mode-0600, fsync'd `.restore-swap-state` marker. The
+one-line JSON marker is bound to a version, ticket hash, all three database
+names, and both encrypted archive hashes; a different ticket or backup set
+cannot recover or remove it. The original database remains the automatic
+rollback target until the new canonical
+database passes every post-swap check. This makes objects created after the
+target backup disappear without exposing an empty live schema. SQL identity or
+cleanup errors fail closed and preserve the marker.
+
+After an abnormal termination, keep the application stopped and the maintenance
+fence active, then rerun the same command with the same change ticket. Swap
+reconciliation runs before the safety-backup freshness gate, so it can restore a
+canonical database even when the pause exceeded the freshness window. Do not
+manually delete the swap marker or rename/drop `restore_*` or `rollback_*`
+databases. If the rerun reports a stale safety backup after reconciliation,
+create a new encrypted backup without starting the application, then set
+`PRE_RESTORE_BACKUP` to the emitted path and rerun the full restore:
+
+```bash
+export AGE_RECIPIENT='age1...'
+export BACKUP_ALLOW_STOPPED_APP=true
+export BACKUP_STOPPED_APP_CONFIRM=BACKUP_FUNDING_V1_POSTGRES_WHILE_APP_STOPPED_AND_FENCED
+sudo --preserve-env=AGE_RECIPIENT,BACKUP_ROOT,COMPOSE_PROJECT_NAME,RESTORE_CHANGE_TICKET,RESTORE_MAINTENANCE_MARKER,BACKUP_ALLOW_STOPPED_APP,BACKUP_STOPPED_APP_CONFIRM \
+  bash scripts/backup_state.sh
+```
+
+This exceptional mode verifies the stopped container's immutable image revision,
+`restart=no`, and the exact operator-owned mode-0600 fence before and after the
+dump. It holds the same non-blocking fence lock as restore through encrypted
+artifact publication, so backup plaintext and a database swap cannot overlap.
+Never start the app merely to satisfy backup provenance during recovery.
+
+`pg_restore` uses `--single-transaction --exit-on-error`.
+`AGE_IDENTITY_FILE` is mandatory, resolved to a regular file, must be owned by
+the restore operator, must have a non-writable operator-owned parent, and must
+not expose any group/world permission bits. The application remains stopped and
+fenced. Run reconciliation, ledger invariants, deterministic replay, and report
+checks. The restore deliberately sets the stopped app container policy to
+`no`; explicitly restore the declared Compose policy before removing the
+fence. Only then remove the exact fence and restart the unit:
 
 ```bash
 app_container_id="$(sudo docker compose --project-name funding_arbitrage_v1 \

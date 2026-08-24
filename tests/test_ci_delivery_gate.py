@@ -29,6 +29,7 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
         "load-slo",
         "infrastructure-verify",
         "container-security",
+        "restore-drill",
         "shadow-deploy",
         "publish-signed-image",
         "manual-live-gate",
@@ -40,6 +41,22 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "--decisions 5000" in str(jobs["load-slo"])
     assert "terraform -chdir=infra/terraform validate" in str(jobs["infrastructure-verify"])
     assert "scripts/backup_state.sh" in str(jobs["infrastructure-verify"])
+    assert "scripts/ci_restore_drill.sh" in str(jobs["restore-drill"])
+    assert "restore-drill" in jobs["shadow-deploy"]["needs"]
+    restore_drill = (ROOT / "scripts" / "ci_restore_drill.sh").read_text(encoding="utf-8")
+    assert "BACKUP_FUNDING_V1_POSTGRES_WHILE_APP_STOPPED_AND_FENCED" in (
+        (ROOT / "scripts" / "ci_restore_drill.sh").read_text(encoding="utf-8")
+    )
+    assert '${GITHUB_ACTIONS:-}' in restore_drill
+    assert '${CI:-}' in restore_drill
+    assert '${RUNNER_TEMP:-}' in restore_drill
+    assert 'label=com.docker.compose.project=$project' in restore_drill
+    assert "cleanup_authorized=false" in restore_drill
+    assert 'if [[ "$cleanup_authorized" == "true" ]]' in restore_drill
+    assert 'sudo find "$work_root" -depth -delete' in restore_drill
+    assert "restore drill refuses an existing Compose project" in restore_drill
+    assert "restore drill refuses to overwrite an existing repository artifact" in restore_drill
+    assert "rm -rf" not in restore_drill
     workflow = _workflow_text()
     assert "for script in \\" in workflow
     assert workflow.count('bash -n "$script"') == 1

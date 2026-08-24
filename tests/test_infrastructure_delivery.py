@@ -119,8 +119,19 @@ def test_backup_is_stream_encrypted_atomic_and_scoped() -> None:
     assert backup.count("resolve_release_commit") == 3
     assert "--untracked-files=no" in backup
     assert "org.opencontainers.image.revision" in backup
-    assert "running application image revision does not match" in backup
+    assert "application image revision does not match" in backup
     assert "release provenance changed while backup was running" in backup
+    assert 'allow_stopped_app="${BACKUP_ALLOW_STOPPED_APP:-false}"' in backup
+    assert "BACKUP_FUNDING_V1_POSTGRES_WHILE_APP_STOPPED_AND_FENCED" in backup
+    assert "stopped-app backup requires a stopped restart-fenced application container" in backup
+    assert "verify_stopped_app_backup_fence" in backup
+    assert 'verified_maintenance_marker=""' in backup
+    assert 'exec 8<"$verified_maintenance_marker"' in backup
+    assert "another funding restore or stopped-app backup is already running" in backup
+    assert backup.index('exec 8<"$verified_maintenance_marker"') < backup.index(
+        'commit_sha_before="$(resolve_release_commit)"'
+    )
+    assert 'RestartPolicy.Name' in backup
     assert "manifest_hash" in backup
     assert '"$(basename "$manifest")" > "$tmp_complete"' in backup
     assert "postgres_user=" not in backup
@@ -150,17 +161,23 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert 'age --decrypt --identity "$identity_file"' in restore
     assert 'PGUSER="$POSTGRES_USER" PGDATABASE="$POSTGRES_DB"' in restore
     assert "PostgreSQL runtime credentials are missing" in restore
-    assert "postgres_exec pg_restore" in restore
-    assert 'exec pg_restore --dbname="$POSTGRES_DB" "$@"' in restore
+    assert 'postgres_restore_archive "$restore_database"' in restore
+    assert "postgres_archive_validate" in restore
+    assert "pg_restore --list" in restore
+    assert "workspace=/dev/shm/funding-arbitrage-v1-restore" in restore
+    assert 'archive_path="$workspace/apply.dump"' in restore
+    assert 'archive_path="$workspace/list.dump"' in restore
+    assert "postgres_archive_workspace_cleanup" in restore
+    assert "insufficient PostgreSQL shared-memory capacity" in restore
     assert "RESTORE_MAINTENANCE_MARKER" in restore
     assert "compose_root" in restore
     assert "fence beside the Compose file" in restore
     assert "require_exact_line" in restore
-    assert 'expected_marker="funding-arbitrage-v1-restore:${change_ticket}"' in restore
+    assert 'expected_marker="funding-arbitrage-v1-restore:$change_ticket"' in restore
     assert "identity_parent" in restore
     assert '"$candidate.complete"' in restore
     assert "flock --nonblock 8" in restore
-    assert "another funding restore is already running" in restore
+    assert "another funding restore or stopped-app backup is already running" in restore
     assert "expected_completion" in restore
     assert "actual_manifest_hash" in restore
     assert 'sha256sum --check --status "$(basename "$candidate.complete")"' in restore
@@ -170,7 +187,51 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert "State.Running" in restore
     assert "postgres_user=" not in restore
     assert "postgres_db=" not in restore
-    assert "--clean --if-exists --single-transaction --exit-on-error" in restore
+    assert "unexpected_current_schemas" in restore
+    assert 'validate_restored_database "$restore_database"' in restore
+    assert 'validate_restored_database "$database_name"' in restore
+    assert "did not reach the expected Alembic migration head" in restore
+    assert "critical-table count is invalid" in restore
+    assert "createdb --maintenance-db=postgres --template=template0" in restore
+    assert "ALLOW_CONNECTIONS $extra_name" in restore
+    assert 'postgres_admin allow "$database_name" false' in restore
+    assert "pg_terminate_backend" in restore
+    assert "current_setting(\\$\\$funding.restore_database\\$\\$)" in restore
+    assert "pg_terminate_backend(pid, 5000)" in restore
+    assert "remaining_sessions" in restore
+    assert 'postgres_admin rename "$database_name" "$rollback_database"' in restore
+    assert "write_swap_stage original_renamed" in restore
+    assert "write_swap_stage replacement_renamed" in restore
+    assert "ticket_hash: $ticket_hash" in restore
+    assert "archive_sha256: $archive_sha256" in restore
+    assert "safety_sha256: $safety_sha256" in restore
+    assert "type == \"object\" and length == 8" in restore
+    assert "does not match this exact restore operation" in restore
+    assert "reconcile_interrupted_swap" in restore
+    assert "database_presence" in restore
+    assert "could not query PostgreSQL database identity" in restore
+    assert 'remove_swap_stage || return 1' in restore
+    assert restore.index("reconcile_interrupted_swap") < restore.index("pre_restore_iso=")
+    assert 'postgres_admin probe "$database_name"' in restore
+    assert "automatic database-swap recovery is incomplete" in restore
+    assert "RESTORE_TMPFS_DIR" in restore
+    assert "findmnt --noheadings --output FSTYPE" in restore
+    assert 'target_plain="$restore_tmpfs_dir/target.dump"' in restore
+    assert 'safety_plain="$restore_tmpfs_dir/safety.dump"' in restore
+    assert "insufficient host tmpfs capacity" in restore
+    assert restore.index('target_plain="$restore_tmpfs_dir/target.dump"') < restore.index(
+        "pre_restore_iso="
+    )
+    assert restore.index("flock --nonblock 8") < restore.index(
+        'target_plain="$restore_tmpfs_dir/target.dump"'
+    )
+    assert restore.index("postgres_archive_workspace_cleanup") < restore.index("pre_restore_iso=")
+    assert "POSTGRES_DB cannot be a PostgreSQL maintenance" in restore
+    assert restore.index('age --decrypt --identity "$identity_file" "$archive"') < restore.index(
+        'postgres_admin create "$restore_database"'
+    )
+    assert "--single-transaction --exit-on-error --no-owner --no-acl" in restore
+    assert "DROP SCHEMA" not in restore
     assert "application remains stopped and fenced" in restore
     assert "docker system prune" not in restore
     assert "rm -rf" not in restore

@@ -8,6 +8,11 @@ compose_file="${COMPOSE_FILE:-docker-compose.yml}"
 env_file="${COMPOSE_ENV_FILE:-.env.live}"
 project="${COMPOSE_PROJECT_NAME:-$expected_project}"
 recipient="${AGE_RECIPIENT:-}"
+allow_stopped_app="${BACKUP_ALLOW_STOPPED_APP:-false}"
+stopped_app_confirmation="${BACKUP_STOPPED_APP_CONFIRM:-}"
+change_ticket="${RESTORE_CHANGE_TICKET:-}"
+maintenance_marker="${RESTORE_MAINTENANCE_MARKER:-.restore-maintenance}"
+verified_maintenance_marker=""
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -22,13 +27,38 @@ done
 require_exact_line() {
   local path="$1"
   local expected="$2"
+  local label="${3:-backup root identity marker}"
   if [[ "$(awk 'END { print NR }' "$path")" != "1" ]] ||
      [[ "$(cat -- "$path")" != "$expected" ]]; then
-    echo "backup root identity marker is invalid" >&2
+    echo "$label is invalid" >&2
     exit 2
   fi
 }
 
+verify_stopped_app_backup_fence() {
+  local compose_root marker_resolved marker_mode marker_uid marker_mode_value expected_marker
+  compose_root="$(dirname "$(realpath -e -- "$compose_file")")"
+  marker_resolved="$(realpath -e -- "$maintenance_marker")"
+  if [[ "$marker_resolved" != "$compose_root/.restore-maintenance" ||
+        ! -f "$marker_resolved" || ! -r "$marker_resolved" ]]; then
+    echo "stopped-app backup requires the exact active restore fence" >&2
+    exit 2
+  fi
+  marker_mode="$(stat -c '%a' "$marker_resolved")"
+  marker_uid="$(stat -c '%u' "$marker_resolved")"
+  if [[ ! "$marker_mode" =~ ^[0-7]{3,4}$ ]]; then
+    echo "stopped-app backup restore-fence permissions are invalid" >&2
+    exit 2
+  fi
+  marker_mode_value=$((8#$marker_mode))
+  if (( (marker_mode_value & 077) != 0 )) || [[ "$marker_uid" != "$EUID" ]]; then
+    echo "stopped-app backup restore fence must be operator-owned without group/world access" >&2
+    exit 2
+  fi
+  expected_marker="funding-arbitrage-v1-restore:$change_ticket"
+  require_exact_line "$marker_resolved" "$expected_marker" "stopped-app backup restore fence"
+  verified_maintenance_marker="$marker_resolved"
+}
 if [[ "$project" != "$expected_project" ]]; then
   echo "refusing unexpected Compose project: $project" >&2
   exit 2
@@ -36,6 +66,20 @@ fi
 if [[ -z "$recipient" || "$recipient" == *$'\n'* ]]; then
   echo "AGE_RECIPIENT must contain one explicit age or SSH recipient" >&2
   exit 2
+fi
+if [[ "$allow_stopped_app" != "true" && "$allow_stopped_app" != "false" ]]; then
+  echo "BACKUP_ALLOW_STOPPED_APP must be true or false" >&2
+  exit 2
+fi
+if [[ "$allow_stopped_app" == "true" ]]; then
+  if [[ "$stopped_app_confirmation" != "BACKUP_FUNDING_V1_POSTGRES_WHILE_APP_STOPPED_AND_FENCED" ]]; then
+    echo "exact BACKUP_STOPPED_APP_CONFIRM phrase is required" >&2
+    exit 2
+  fi
+  if [[ ! "$change_ticket" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$ ]]; then
+    echo "RESTORE_CHANGE_TICKET must be a traceable identifier for stopped-app backup" >&2
+    exit 2
+  fi
 fi
 if [[ ! -f "$compose_file" || ! -f "$env_file" ]]; then
   echo "Compose file and live env file must exist" >&2
@@ -109,15 +153,25 @@ resolve_release_commit() {
   fi
   app_container_id="$(docker compose --project-name "$project" "${compose_env_args[@]}" \
     --file "$compose_file" ps --all --quiet app)"
-  if [[ ! "$app_container_id" =~ ^[0-9a-f]{64}$ ]] ||
-     [[ "$(docker inspect "$app_container_id" --format '{{.State.Running}}')" != "true" ]]; then
+  if [[ ! "$app_container_id" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "exactly one application container is required for backup provenance" >&2
+    exit 2
+  fi
+  if [[ "$allow_stopped_app" == "true" ]]; then
+    if [[ "$(docker inspect "$app_container_id" --format '{{.State.Running}}')" != "false" ||
+          "$(docker inspect "$app_container_id" --format '{{.HostConfig.RestartPolicy.Name}}')" != "no" ]]; then
+      echo "stopped-app backup requires a stopped restart-fenced application container" >&2
+      exit 2
+    fi
+    verify_stopped_app_backup_fence
+  elif [[ "$(docker inspect "$app_container_id" --format '{{.State.Running}}')" != "true" ]]; then
     echo "exactly one running application container is required for backup provenance" >&2
     exit 2
   fi
   runtime_sha="$(docker inspect "$app_container_id" \
     --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
   if [[ ! "$runtime_sha" =~ ^[0-9a-f]{40}$ || "$runtime_sha" != "$resolved_sha" ]]; then
-    echo "running application image revision does not match release provenance" >&2
+    echo "application image revision does not match release provenance" >&2
     exit 2
   fi
   printf '%s\n' "$resolved_sha"
@@ -155,6 +209,16 @@ running_services="$(docker compose --project-name "$project" "${compose_env_args
 if ! grep -Fxq postgres <<<"$running_services"; then
   echo "PostgreSQL is not running in the expected Compose project" >&2
   exit 2
+fi
+
+if [[ "$allow_stopped_app" == "true" ]]; then
+  verify_stopped_app_backup_fence
+  exec 8<"$verified_maintenance_marker"
+  if ! flock --nonblock 8; then
+    echo "another funding restore or stopped-app backup is already running" >&2
+    exit 2
+  fi
+  verify_stopped_app_backup_fence
 fi
 
 commit_sha_before="$(resolve_release_commit)"
