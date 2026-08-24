@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
+from weakref import finalize
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -114,26 +116,106 @@ class JsonlOMSJournal:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = Lock()
+        self._descriptor: int | None = None
+        self._finalizer: finalize | None = None
+        self._created_file = False
+        self._closed = False
 
     def append(self, entry: OMSJournalEntry) -> None:
-        encoded = entry.model_dump_json() + "\n"
-        with self.path.open("a", encoding="utf-8") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
+        encoded = (entry.model_dump_json() + "\n").encode("utf-8")
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("OMS journal is closed")
+            descriptor = self._ensure_open()
+            try:
+                remaining = memoryview(encoded)
+                while remaining:
+                    written = os.write(descriptor, remaining)
+                    if written <= 0:
+                        raise OSError("OMS journal write made no progress")
+                    remaining = remaining[written:]
+                _sync_data(descriptor)
+                if self._created_file:
+                    _sync_parent_directory(self.path.parent)
+                    self._created_file = False
+            except OSError:
+                self._close_unlocked()
+                raise
 
     def load(self) -> tuple[OMSJournalEntry, ...]:
         if not self.path.exists():
             return ()
-        entries = tuple(
-            OMSJournalEntry.model_validate_json(line)
-            for line in self.path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        )
+        with self._lock:
+            payload = _read_and_repair_torn_tail(self.path)
+            entries = tuple(
+                OMSJournalEntry.model_validate_json(line)
+                for line in payload.decode("utf-8").splitlines()
+                if line.strip()
+            )
         expected = tuple(range(1, len(entries) + 1))
         if tuple(entry.sequence for entry in entries) != expected:
             raise ValueError("OMS journal sequence is not contiguous")
         return entries
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_unlocked()
+
+    def _close_unlocked(self) -> None:
+        self._closed = True
+        if self._finalizer is not None and self._finalizer.alive:
+            self._finalizer()
+
+    def _ensure_open(self) -> int:
+        if self._descriptor is not None:
+            return self._descriptor
+        self._created_file = not self.path.exists()
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(self.path, flags, 0o600)
+        if os.name == "posix":
+            os.chmod(self.path, 0o600)
+        self._descriptor = descriptor
+        self._finalizer = finalize(self, os.close, descriptor)
+        return descriptor
+
+
+def _sync_data(descriptor: int) -> None:
+    data_sync = getattr(os, "fdatasync", None)
+    if data_sync is None:
+        os.fsync(descriptor)
+    else:
+        data_sync(descriptor)
+
+
+def _sync_parent_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _read_and_repair_torn_tail(path: Path) -> bytes:
+    payload = path.read_bytes()
+    if not payload or payload.endswith(b"\n"):
+        return payload
+    last_complete = payload.rfind(b"\n") + 1
+    flags = os.O_WRONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.ftruncate(descriptor, last_complete)
+        _sync_data(descriptor)
+    finally:
+        os.close(descriptor)
+    return payload[:last_complete]
 
 
 class DurableOMS:

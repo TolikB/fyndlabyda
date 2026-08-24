@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import funding_arbitrage.execution.oms as oms_module
 from funding_arbitrage.domain.decisions import ExecutionReport, RiskDecision
 from funding_arbitrage.domain.events import (
     InstrumentKey,
@@ -111,6 +112,113 @@ def test_persist_before_submit_and_restart_recovery(tmp_path: Path) -> None:
 
     recovered = DurableOMS(JsonlOMSJournal(path))
     assert recovered.orders[created.client_order_id] == prepared
+
+
+def test_jsonl_journal_syncs_each_entry_and_closes_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "durable.jsonl"
+    syncs: list[int] = []
+    original_sync = oms_module._sync_data
+
+    def record_sync(descriptor: int) -> None:
+        syncs.append(descriptor)
+        original_sync(descriptor)
+
+    monkeypatch.setattr(oms_module, "_sync_data", record_sync)
+    journal = JsonlOMSJournal(path)
+    syncs.clear()
+    oms = DurableOMS(journal)
+    order = _create(oms)
+    assert len(syncs) == 1
+    if oms_module.os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
+    assert json.loads(path.read_text(encoding="utf-8"))["event_type"] == "CREATED"
+
+    journal.close()
+    journal.close()
+    assert journal.closed is True
+    with pytest.raises(RuntimeError, match="journal is closed"):
+        oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+
+
+def test_jsonl_journal_context_cleanup_does_not_change_replay(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "replay.jsonl"
+    journal = JsonlOMSJournal(path)
+    order = _create(DurableOMS(journal))
+    journal.close()
+
+    recovered_journal = JsonlOMSJournal(path)
+    recovered = DurableOMS(recovered_journal)
+    assert recovered.orders[order.client_order_id] == order
+    recovered_journal.close()
+
+
+def test_jsonl_journal_io_failure_poison_requires_restart_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "io-failure.jsonl"
+    journal = JsonlOMSJournal(path)
+    oms = DurableOMS(journal)
+    order = _create(oms)
+
+    def fail_sync(_descriptor: int) -> None:
+        raise OSError("simulated durability failure")
+
+    monkeypatch.setattr(oms_module, "_sync_data", fail_sync)
+    with pytest.raises(OSError, match="simulated durability failure"):
+        oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+    assert journal.closed is True
+    assert oms.orders[order.client_order_id].status is OrderStatus.NEW
+    with pytest.raises(RuntimeError, match="journal is closed"):
+        oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+
+    monkeypatch.undo()
+    recovered_journal = JsonlOMSJournal(path)
+    recovered = DurableOMS(recovered_journal)
+    assert recovered.orders[order.client_order_id].status is OrderStatus.SUBMITTING
+    assert [entry.sequence for entry in recovered_journal.load()] == [1, 2]
+    recovered_journal.close()
+
+
+def test_jsonl_journal_repairs_only_torn_final_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "partial-write.jsonl"
+    journal = JsonlOMSJournal(path)
+    oms = DurableOMS(journal)
+    order = _create(oms)
+    original_write = oms_module.os.write
+    writes = 0
+
+    def partial_then_fail(descriptor: int, payload: bytes | memoryview) -> int:
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            prefix = payload[: max(1, len(payload) // 2)]
+            return original_write(descriptor, prefix)
+        raise OSError("simulated partial journal write")
+
+    monkeypatch.setattr(oms_module.os, "write", partial_then_fail)
+    with pytest.raises(OSError, match="simulated partial journal write"):
+        oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+    assert journal.closed is True
+    assert not path.read_bytes().endswith(b"\n")
+
+    monkeypatch.undo()
+    recovered_journal = JsonlOMSJournal(path)
+    recovered = DurableOMS(recovered_journal)
+    assert recovered.orders[order.client_order_id].status is OrderStatus.NEW
+    assert [entry.sequence for entry in recovered_journal.load()] == [1]
+    repaired = path.read_bytes()
+    assert repaired.endswith(b"\n")
+    assert len(repaired.splitlines()) == 1
+    recovered_journal.close()
 
 
 def test_partial_fill_full_fill_and_duplicate_report_are_idempotent(

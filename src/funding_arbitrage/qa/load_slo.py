@@ -301,7 +301,11 @@ def _oms_journal(*, durable: bool) -> Iterator[OMSJournal]:
         yield InMemoryOMSJournal()
         return
     with TemporaryDirectory(prefix="funding-load-slo-") as directory:
-        yield JsonlOMSJournal(Path(directory) / "oms.jsonl")
+        journal = JsonlOMSJournal(Path(directory) / "oms.jsonl")
+        try:
+            yield journal
+        finally:
+            journal.close()
 
 
 async def _run_event_load(
