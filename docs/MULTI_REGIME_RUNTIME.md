@@ -94,3 +94,7 @@ The probe never constructs exchange adapters and fails closed when host paper
 autotrade, live arming/autotrade, or any private exchange credential is present. It
 does not claim exchange-hosted directional protective orders, directional
 limited-live/live execution, or completed shadow/paper acceptance windows.
+
+The exact PostgreSQL acceptance result and its source/image hashes are retained in
+`evidence/runtime/`. That evidence closes the runtime lifecycle requirement only;
+the elapsed Shadow, Paper, and Limited-Live gates remain separate and incomplete.

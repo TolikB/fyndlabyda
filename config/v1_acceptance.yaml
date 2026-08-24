@@ -700,7 +700,7 @@ requirements:
   - id: RUNTIME-001
     category: execution
     title: Canonical multi-regime runtime reaches durable risk-approved PAPER fills, positions, protective exits, and PnL while live remains gated
-    status: partial
+    status: implemented
     evidence:
       - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/services/multi_regime_runtime.py
@@ -722,6 +722,8 @@ requirements:
       - tests/test_multi_regime_paper_probe.py
       - tests/test_telegram.py
       - docs/MULTI_REGIME_RUNTIME.md
+      - evidence/runtime/multi-regime-paper-962a450.json
+      - evidence/runtime/README.md
   - id: GATE-001
     category: delivery
     title: Shadow acceptance window completes without accounting, risk, or reconciliation violations

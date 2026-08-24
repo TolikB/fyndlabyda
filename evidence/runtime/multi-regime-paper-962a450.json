@@ -1,0 +1,47 @@
+{
+  "accounting_reconciliation": {
+    "durable_fill_fees": true,
+    "entry_exit_quantity": true,
+    "final_portfolio_pnl": true,
+    "gross_pnl": true,
+    "net_pnl": true,
+    "oms_fill_quantity": true
+  },
+  "approved_risk_decisions": 1,
+  "counts": {
+    "canonical_events": 485,
+    "checkpoints": 1,
+    "decision_batches": 13,
+    "fills": 2,
+    "orders": 2,
+    "portfolio_snapshots": 4,
+    "positions": 1,
+    "risk_decisions": 1
+  },
+  "database": "postgresql",
+  "database_isolation": "temporary_database",
+  "equity_invariant": true,
+  "exchange_adapters": 0,
+  "live_orders": false,
+  "market_data": "synthetic_canonical_events",
+  "mode": "PAPER",
+  "position": {
+    "entry_fills": 1,
+    "exit_fills": 1,
+    "exit_reason": "TARGET",
+    "fees": "0.1785853669953191602555823418",
+    "net_pnl": "15.10066854527477306190110129",
+    "realized_gross_pnl": "15.27925391227009222215668363",
+    "signed_quantity": "0",
+    "status": "CLOSED"
+  },
+  "private_credentials": false,
+  "restart": {
+    "checkpoint_event_id": "mrp-vm-962a450-485",
+    "post_checkpoint_replayed_events": 0,
+    "restored_events": 484
+  },
+  "simulation_version": "v1-probe-vm-962a450",
+  "status": "passed",
+  "temporary_database_removed": true
+}
