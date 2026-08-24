@@ -1,3 +1,6 @@
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -191,11 +194,83 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "check_private_owner secrets/internal/clickhouse-server.key 101 101" in preflight
     assert "secrets/internal/clickhouse-client.crt" in preflight
     assert "check_private_owner secrets/internal/clickhouse-client.key 101 101" in preflight
-    assert "certificate_minimum_validity_seconds=86400" in preflight
-    assert 'openssl x509 -checkend "$certificate_minimum_validity_seconds"' in preflight
-    assert 'openssl verify -CAfile secrets/internal/ca.crt' in preflight
-    assert "check_certificate_key_pair" in preflight
-    assert preflight.count("check_certificate_key_pair \\") == 5
+    assert "bash scripts/verify_internal_tls.sh secrets/internal 86400" in preflight
+
+
+def test_internal_tls_verifier_rejects_invalid_runtime_material(
+    tmp_path: Path,
+) -> None:
+    if (
+        os.name != "posix"
+        or shutil.which("bash") is None
+        or shutil.which("openssl") is None
+    ):
+        return
+
+    generator = ROOT / "scripts" / "generate_ephemeral_test_pki.sh"
+    verifier = ROOT / "scripts" / "verify_internal_tls.sh"
+    valid = tmp_path / "valid"
+    second = tmp_path / "second"
+    environment = {**os.environ, "ALLOW_EPHEMERAL_TEST_PKI": "YES"}
+    subprocess.run(["bash", str(generator), str(valid)], check=True, env=environment)
+    subprocess.run(["bash", str(generator), str(second)], check=True, env=environment)
+
+    def verify(
+        path: Path,
+        minimum_validity: str = "86400",
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(verifier), str(path), minimum_validity],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    assert verify(valid).returncode == 0
+    assert verify(valid, "999999999").returncode != 0
+
+    wrong_ca = tmp_path / "wrong-ca"
+    shutil.copytree(valid, wrong_ca)
+    shutil.copy2(second / "ca.crt", wrong_ca / "ca.crt")
+    assert verify(wrong_ca).returncode != 0
+
+    mismatched = tmp_path / "mismatched"
+    shutil.copytree(valid, mismatched)
+    shutil.copy2(valid / "postgres-server.key", mismatched / "app-client.key")
+    assert verify(mismatched).returncode != 0
+
+    encrypted = tmp_path / "encrypted"
+    shutil.copytree(valid, encrypted)
+    subprocess.run(
+        [
+            "openssl",
+            "pkey",
+            "-in",
+            str(valid / "app-client.key"),
+            "-aes-256-cbc",
+            "-passout",
+            "pass:test-only",
+            "-out",
+            str(encrypted / "app-client.key"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    assert verify(encrypted).returncode != 0
+
+    wrong_identity = tmp_path / "wrong-identity"
+    shutil.copytree(valid, wrong_identity)
+    shutil.copy2(valid / "postgres-server.crt", wrong_identity / "app-client.crt")
+    shutil.copy2(valid / "postgres-server.key", wrong_identity / "app-client.key")
+    assert verify(wrong_identity).returncode != 0
+
+    malformed = tmp_path / "malformed"
+    shutil.copytree(valid, malformed)
+    (malformed / "app-client.crt").write_text(
+        "not a certificate\n",
+        encoding="utf-8",
+    )
+    assert verify(malformed).returncode != 0
 
 
 def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:

@@ -204,6 +204,7 @@ jobs:
             scripts/ci_shadow_smoke.sh \
             scripts/ci_load_candidate_image.sh \
             scripts/generate_ephemeral_test_pki.sh \
+            scripts/verify_internal_tls.sh \
             scripts/backup_state.sh \
             scripts/restore_state.sh \
             scripts/host_preflight.sh; do
