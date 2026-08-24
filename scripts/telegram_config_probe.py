@@ -50,11 +50,12 @@ async def probe_telegram(
     *,
     http_client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
-    configured = bool(settings.telegram_bot_token and settings.telegram_chat_id)
+    token = settings.telegram_bot_token.get_secret_value()
+    configured = bool(token and settings.telegram_chat_id)
     output: dict[str, Any] = {
         "observed_at": datetime.now(UTC).isoformat(),
         "enabled": settings.telegram_enabled,
-        "token_configured": bool(settings.telegram_bot_token),
+        "token_configured": bool(token),
         "chat_id_configured": bool(settings.telegram_chat_id),
         "report_timezone": settings.telegram_timezone,
         "report_hour": settings.telegram_report_hour,
@@ -70,10 +71,10 @@ async def probe_telegram(
         timeout=10,
     )
     try:
-        bot = await _telegram_call(client, settings.telegram_bot_token, "getMe")
+        bot = await _telegram_call(client, token, "getMe")
         chat = await _telegram_call(
             client,
-            settings.telegram_bot_token,
+            token,
             "getChat",
             params={"chat_id": settings.telegram_chat_id},
         )

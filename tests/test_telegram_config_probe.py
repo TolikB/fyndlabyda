@@ -23,6 +23,8 @@ async def test_probe_validates_bot_and_chat_without_sending_message() -> None:
     methods: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert "/botsecret-test-token/" in request.url.path
+        assert "**********" not in request.url.path
         methods.append(request.url.path.rsplit("/", 1)[-1])
         if request.url.path.endswith("/getMe"):
             return httpx.Response(
