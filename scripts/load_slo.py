@@ -22,10 +22,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--in-memory-oms",
         action="store_true",
-        help="Unit-test profile only; release evidence uses fsync-backed OMS journaling",
+        help="Unit-test profile only; release evidence uses SQLite WAL/FULL journaling",
     )
     parser.add_argument("--event-p99-ms", type=float, default=10.0)
     parser.add_argument("--decision-p99-ms", type=float, default=20.0)
+    parser.add_argument("--oms-submit-p99-ms", type=float, default=10.0)
+    parser.add_argument("--oms-fill-apply-p99-ms", type=float, default=10.0)
     parser.add_argument("--oms-p99-ms", type=float, default=10.0)
     parser.add_argument("--end-to-end-p99-ms", type=float, default=30.0)
     parser.add_argument("--output", type=Path)
@@ -44,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
             durable_oms=not args.in_memory_oms,
             event_ingest_p99_ms=args.event_p99_ms,
             decision_prepare_p99_ms=args.decision_p99_ms,
+            oms_submit_prepare_p99_ms=args.oms_submit_p99_ms,
+            oms_fill_apply_p99_ms=args.oms_fill_apply_p99_ms,
             oms_fill_p99_ms=args.oms_p99_ms,
             decision_to_filled_p99_ms=args.end_to_end_p99_ms,
         )

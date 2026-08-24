@@ -20,6 +20,8 @@ async def test_representative_load_meets_reliability_and_latency_contracts() -> 
         durable_oms=False,
         event_ingest_p99_ms=100,
         decision_prepare_p99_ms=100,
+        oms_submit_prepare_p99_ms=100,
+        oms_fill_apply_p99_ms=100,
         oms_fill_p99_ms=100,
         decision_to_filled_p99_ms=200,
     )
@@ -39,6 +41,8 @@ async def test_representative_load_meets_reliability_and_latency_contracts() -> 
     assert first.reliability.unexpected_failures == 0
     assert first.reliability.invariant_failures == 0
     assert first.latency["decision_prepare"].count == 180
+    assert first.latency["oms_submit_prepare"].count == 152
+    assert first.latency["oms_fill_apply"].count == 152
     assert first.latency["oms_fill"].count == 152
     assert first.workload["durable_oms"] == 0
     assert first.workload == second.workload
@@ -56,6 +60,8 @@ async def test_latency_budget_failure_is_fail_closed() -> None:
             durable_oms=False,
             event_ingest_p99_ms=0.000001,
             decision_prepare_p99_ms=0.000001,
+            oms_submit_prepare_p99_ms=0.000001,
+            oms_fill_apply_p99_ms=0.000001,
             oms_fill_p99_ms=0.000001,
             decision_to_filled_p99_ms=0.000001,
         )
@@ -77,6 +83,8 @@ async def test_final_event_is_never_left_in_gap_recovery() -> None:
             durable_oms=False,
             event_ingest_p99_ms=100,
             decision_prepare_p99_ms=100,
+            oms_submit_prepare_p99_ms=100,
+            oms_fill_apply_p99_ms=100,
             oms_fill_p99_ms=100,
             decision_to_filled_p99_ms=200,
         )
@@ -102,7 +110,7 @@ def test_nearest_rank_percentile_is_deterministic() -> None:
     assert _percentile_ms(ordered, 99) == 4
 
 
-async def test_fsync_backed_oms_journal_is_part_of_release_profile() -> None:
+async def test_sqlite_wal_full_oms_journal_is_part_of_release_profile() -> None:
     report = await run_load_slo(
         LoadSLOConfig(
             event_count=100,
@@ -113,6 +121,8 @@ async def test_fsync_backed_oms_journal_is_part_of_release_profile() -> None:
             durable_oms=True,
             event_ingest_p99_ms=1000,
             decision_prepare_p99_ms=1000,
+            oms_submit_prepare_p99_ms=1000,
+            oms_fill_apply_p99_ms=1000,
             oms_fill_p99_ms=1000,
             decision_to_filled_p99_ms=2000,
         )

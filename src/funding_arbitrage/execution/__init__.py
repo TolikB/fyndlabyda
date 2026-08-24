@@ -38,6 +38,7 @@ from funding_arbitrage.execution.oms import (
     OMSEventType,
     OMSJournalEntry,
     OMSOrderSnapshot,
+    SqliteOMSJournal,
 )
 from funding_arbitrage.execution.protective import (
     JsonlProtectiveJournal,
@@ -85,6 +86,7 @@ __all__ = [
     "DurableOMS",
     "InMemoryOMSJournal",
     "JsonlOMSJournal",
+    "SqliteOMSJournal",
     "OMSEventType",
     "OMSJournalEntry",
     "OMSOrderSnapshot",

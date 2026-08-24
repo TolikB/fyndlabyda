@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
+import stat
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -182,6 +184,275 @@ class JsonlOMSJournal:
         self._descriptor = descriptor
         self._finalizer = finalize(self, os.close, descriptor)
         return descriptor
+
+
+class SqliteOMSJournal:
+    """Transactional OMS journal backed by SQLite WAL with FULL durability."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = Lock()
+        self._connection: sqlite3.Connection | None = None
+        self._finalizer: finalize | None = None
+        self._closed = False
+        self._initialize()
+
+    def append(self, entry: OMSJournalEntry) -> None:
+        encoded = entry.model_dump_json()
+        with self._lock:
+            connection = self._open_connection()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM oms_journal"
+                ).fetchone()
+                expected = int(row[0]) if row is not None else 1
+                if entry.sequence != expected:
+                    raise ValueError("OMS journal sequence is not contiguous")
+                connection.execute(
+                    "INSERT INTO oms_journal(sequence, payload) VALUES (?, ?)",
+                    (entry.sequence, encoded),
+                )
+                connection.execute("COMMIT")
+                _secure_sqlite_files(self.path)
+            except Exception as error:
+                try:
+                    connection.rollback()
+                except sqlite3.Error as rollback_error:
+                    error.add_note(
+                        "OMS SQLite rollback failed: " + type(rollback_error).__name__
+                    )
+                self._poison_unlocked(error)
+                raise
+
+    def load(self) -> tuple[OMSJournalEntry, ...]:
+        with self._lock:
+            connection = self._open_connection()
+            try:
+                rows = connection.execute(
+                    "SELECT sequence, payload FROM oms_journal ORDER BY sequence"
+                ).fetchall()
+                entries: list[OMSJournalEntry] = []
+                for stored_sequence, payload in rows:
+                    entry = OMSJournalEntry.model_validate_json(payload)
+                    if entry.sequence != stored_sequence:
+                        raise ValueError(
+                            "OMS journal stored sequence does not match payload"
+                        )
+                    entries.append(entry)
+                expected = tuple(range(1, len(entries) + 1))
+                if tuple(entry.sequence for entry in entries) != expected:
+                    raise ValueError("OMS journal sequence is not contiguous")
+                return tuple(entries)
+            except Exception as error:
+                self._poison_unlocked(error)
+                raise
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_unlocked()
+
+    def _initialize(self) -> None:
+        _validate_sqlite_parent(self.path.parent)
+        _secure_sqlite_files(self.path)
+        expected_identity = _prepare_sqlite_path(self.path)
+        _secure_sqlite_files(self.path)
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(
+                self.path,
+                timeout=30,
+                isolation_level=None,
+                check_same_thread=False,
+            )
+            _verify_sqlite_identity(connection, self.path, expected_identity)
+            connection.execute("PRAGMA busy_timeout=30000")
+            mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()
+            if mode is None or str(mode[0]).lower() != "wal":
+                raise RuntimeError("OMS SQLite journal requires WAL mode")
+            connection.execute("PRAGMA synchronous=FULL")
+            synchronous = connection.execute("PRAGMA synchronous").fetchone()
+            if synchronous is None or int(synchronous[0]) != 2:
+                raise RuntimeError("OMS SQLite journal requires FULL synchronous mode")
+            connection.execute("PRAGMA trusted_schema=OFF")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS oms_journal (
+                    sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "SELECT sequence, payload FROM oms_journal LIMIT 0"
+            ).fetchall()
+            _secure_sqlite_files(self.path)
+        except Exception as error:
+            if connection is not None:
+                try:
+                    connection.close()
+                except sqlite3.Error as close_error:
+                    error.add_note(
+                        "OMS SQLite initialization close failed: "
+                        + type(close_error).__name__
+                    )
+            raise
+        self._connection = connection
+        self._finalizer = finalize(self, _close_sqlite_connection, connection)
+
+    def _open_connection(self) -> sqlite3.Connection:
+        if self._closed or self._connection is None:
+            raise RuntimeError("OMS journal is closed")
+        return self._connection
+
+    def _close_unlocked(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._connection = None
+        finalizer = self._finalizer
+        self._finalizer = None
+        if finalizer is not None and finalizer.alive:
+            finalizer()
+
+
+    def _poison_unlocked(self, error: Exception) -> None:
+        try:
+            self._close_unlocked()
+        except Exception as close_error:
+            error.add_note(
+                "OMS SQLite poison close failed: " + type(close_error).__name__
+            )
+
+
+def _validate_sqlite_parent(path: Path) -> None:
+    if os.name != "posix":
+        return
+    details = path.lstat()
+    if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
+        raise RuntimeError("OMS SQLite journal parent must be a real directory")
+    if details.st_mode & 0o022:
+        raise RuntimeError("OMS SQLite journal parent must not be group/world writable")
+
+
+def _prepare_sqlite_path(path: Path) -> tuple[int, int]:
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as create_error:
+        if not path.exists() and not path.is_symlink():
+            raise
+        try:
+            identity = _sqlite_path_identity(path)
+        except ValueError as validation_error:
+            raise validation_error from create_error
+        return identity
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise ValueError("OMS SQLite journal path must be a regular non-symlink file")
+        _set_private_file_mode(descriptor)
+        identity = (details.st_dev, details.st_ino)
+        _sync_data(descriptor)
+    finally:
+        os.close(descriptor)
+    _sync_parent_directory(path.parent)
+    return identity
+
+
+def _set_private_file_mode(descriptor: int) -> None:
+    if os.name != "posix":
+        return
+    file_chmod = getattr(os, "fchmod", None)
+    if file_chmod is None:
+        raise RuntimeError("OMS SQLite journal requires descriptor chmod support")
+    file_chmod(descriptor, 0o600)
+
+
+def _sqlite_path_identity(path: Path) -> tuple[int, int]:
+    if path.is_symlink():
+        raise ValueError("OMS SQLite journal path must be a regular non-symlink file")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(
+            "OMS SQLite journal path must be a regular non-symlink file"
+        ) from error
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise ValueError("OMS SQLite journal path must be a regular non-symlink file")
+        _set_private_file_mode(descriptor)
+        return details.st_dev, details.st_ino
+    finally:
+        os.close(descriptor)
+
+
+def _verify_sqlite_identity(
+    connection: sqlite3.Connection,
+    path: Path,
+    expected_identity: tuple[int, int],
+) -> None:
+    if _sqlite_path_identity(path) != expected_identity:
+        raise RuntimeError("OMS SQLite journal identity changed while opening")
+    row = connection.execute("PRAGMA database_list").fetchone()
+    if row is None or not row[2]:
+        raise RuntimeError("OMS SQLite journal did not expose its main database path")
+    opened_path = Path(str(row[2])).resolve(strict=True)
+    if opened_path != path.resolve(strict=True):
+        raise RuntimeError("OMS SQLite journal opened an unexpected database path")
+
+
+def _secure_sqlite_files(path: Path) -> None:
+    if os.name != "posix":
+        return
+    for candidate in (
+        path,
+        path.with_name(path.name + "-wal"),
+        path.with_name(path.name + "-shm"),
+    ):
+        if not candidate.exists() and not candidate.is_symlink():
+            continue
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        try:
+            descriptor = os.open(candidate, flags)
+        except OSError as error:
+            raise RuntimeError("OMS SQLite runtime file could not be opened safely") from error
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode):
+                raise RuntimeError("OMS SQLite runtime file is not a regular file")
+            _set_private_file_mode(descriptor)
+            if os.fstat(descriptor).st_mode & 0o077:
+                raise RuntimeError("OMS SQLite runtime file permissions are not private")
+        finally:
+            os.close(descriptor)
+
+
+def _close_sqlite_connection(connection: sqlite3.Connection) -> None:
+    connection.close()
 
 
 def _sync_data(descriptor: int) -> None:

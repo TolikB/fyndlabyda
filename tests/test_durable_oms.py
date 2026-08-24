@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -25,6 +29,7 @@ from funding_arbitrage.execution.oms import (
     OMSEventType,
     OMSJournalEntry,
     OMSOrderSnapshot,
+    SqliteOMSJournal,
 )
 
 NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
@@ -155,6 +160,256 @@ def test_jsonl_journal_context_cleanup_does_not_change_replay(
     recovered = DurableOMS(recovered_journal)
     assert recovered.orders[order.client_order_id] == order
     recovered_journal.close()
+
+
+def test_sqlite_journal_persists_each_transition_and_recovers(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "oms.sqlite3"
+    journal = SqliteOMSJournal(path)
+    oms = DurableOMS(journal)
+    order = _create(oms)
+    prepared = oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+
+    assert [entry.event_type for entry in journal.load()] == [
+        OMSEventType.CREATED,
+        OMSEventType.SUBMIT_PREPARED,
+    ]
+    if oms_module.os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
+    journal.close()
+
+    recovered_journal = SqliteOMSJournal(path)
+    recovered = DurableOMS(recovered_journal)
+    assert recovered.orders[order.client_order_id] == prepared
+    recovered_journal.close()
+
+
+def test_sqlite_journal_rejects_sequence_mismatch_and_closes(
+    tmp_path: Path,
+) -> None:
+    journal = SqliteOMSJournal(tmp_path / "sequence.sqlite3")
+    order = _create(DurableOMS(InMemoryOMSJournal()))
+    entry = OMSJournalEntry(
+        sequence=2,
+        event_id="event-2",
+        event_type=OMSEventType.CREATED,
+        timestamp=NOW,
+        snapshot=order,
+    )
+
+    with pytest.raises(ValueError, match="sequence is not contiguous"):
+        journal.append(entry)
+    assert journal.closed is True
+    with pytest.raises(RuntimeError, match="journal is closed"):
+        journal.load()
+
+
+def test_sqlite_journal_rejects_payload_sequence_corruption(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "corrupt.sqlite3"
+    journal = SqliteOMSJournal(path)
+    _create(DurableOMS(journal))
+    journal.close()
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE oms_journal SET sequence = 2 WHERE sequence = 1")
+
+    corrupt = SqliteOMSJournal(path)
+    try:
+        with pytest.raises(ValueError, match="stored sequence"):
+            corrupt.load()
+        assert corrupt.closed is True
+    finally:
+        corrupt.close()
+
+
+def test_sqlite_journal_recovers_committed_wal_after_abrupt_process_exit(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "crash.sqlite3"
+    source = InMemoryOMSJournal()
+    expected_order = _create(DurableOMS(source))
+    payload_path = tmp_path / "entry.json"
+    payload_path.write_text(source.entries[0].model_dump_json(), encoding="utf-8")
+    code = "\n".join(
+        (
+            "import os, sys",
+            "from pathlib import Path",
+            "from funding_arbitrage.execution.oms import OMSJournalEntry, SqliteOMSJournal",
+            "journal = SqliteOMSJournal(Path(sys.argv[1]))",
+            "entry = OMSJournalEntry.model_validate_json(Path(sys.argv[2]).read_text())",
+            "journal.append(entry)",
+            "os._exit(0)",
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(path), str(payload_path)],
+        cwd=Path(__file__).parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert path.with_name(path.name + "-wal").exists()
+    recovered_journal = SqliteOMSJournal(path)
+    recovered = DurableOMS(recovered_journal)
+    assert recovered.orders[expected_order.client_order_id] == expected_order
+    recovered_journal.close()
+
+
+def test_sqlite_journal_serializes_competing_writers(tmp_path: Path) -> None:
+    path = tmp_path / "concurrent.sqlite3"
+    first = SqliteOMSJournal(path)
+    second = SqliteOMSJournal(path)
+    source = InMemoryOMSJournal()
+    _create(DurableOMS(source))
+    entry = source.entries[0]
+
+    def append(journal: SqliteOMSJournal) -> Exception | None:
+        try:
+            journal.append(entry)
+        except Exception as error:
+            return error
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(append, (first, second)))
+
+    assert sum(outcome is None for outcome in outcomes) == 1
+    failures = [outcome for outcome in outcomes if outcome is not None]
+    assert len(failures) == 1
+    assert isinstance(failures[0], ValueError)
+    assert "sequence is not contiguous" in str(failures[0])
+    assert sum(journal.closed for journal in (first, second)) == 1
+    for journal in (first, second):
+        journal.close()
+    recovered = SqliteOMSJournal(path)
+    assert recovered.load() == (entry,)
+    recovered.close()
+
+
+def test_sqlite_journal_ambiguous_commit_is_poisoned_and_recovered(
+    tmp_path: Path,
+) -> None:
+    class AmbiguousCommitConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self.connection = connection
+
+        @property
+        def in_transaction(self) -> bool:
+            return self.connection.in_transaction
+
+        def execute(
+            self, statement: str, parameters: tuple[object, ...] = ()
+        ) -> sqlite3.Cursor:
+            cursor = self.connection.execute(statement, parameters)
+            if statement == "COMMIT":
+                raise sqlite3.OperationalError("simulated ambiguous commit")
+            return cursor
+
+        def rollback(self) -> None:
+            self.connection.rollback()
+
+    path = tmp_path / "ambiguous.sqlite3"
+    journal = SqliteOMSJournal(path)
+    source = InMemoryOMSJournal()
+    _create(DurableOMS(source))
+    entry = source.entries[0]
+    assert journal._connection is not None
+    journal._connection = AmbiguousCommitConnection(journal._connection)  # type: ignore[assignment]
+
+    with pytest.raises(sqlite3.OperationalError, match="ambiguous commit"):
+        journal.append(entry)
+    assert journal.closed is True
+
+    recovered = SqliteOMSJournal(path)
+    assert recovered.load() == (entry,)
+    recovered.close()
+
+
+def test_sqlite_journal_preserves_integrity_error_when_close_fails(
+    tmp_path: Path,
+) -> None:
+    class FailingFinalizer:
+        alive = True
+
+        def __call__(self) -> None:
+            self.alive = False
+            raise sqlite3.OperationalError("simulated close failure")
+
+    path = tmp_path / "close-failure.sqlite3"
+    journal = SqliteOMSJournal(path)
+    connection = journal._connection
+    assert connection is not None
+    connection.execute(
+        "INSERT INTO oms_journal(sequence, payload) VALUES (?, ?)",
+        (1, "{"),
+    )
+    original_finalizer = journal._finalizer
+    assert original_finalizer is not None
+    original_finalizer.detach()
+    journal._finalizer = FailingFinalizer()  # type: ignore[assignment]
+
+    with pytest.raises(ValidationError) as error:
+        journal.load()
+
+    assert journal.closed is True
+    assert journal._connection is None
+    assert any(
+        "poison close failed: OperationalError" in note
+        for note in getattr(error.value, "__notes__", ())
+    )
+    journal.close()
+    connection.close()
+
+
+@pytest.mark.skipif(oms_module.os.name != "posix", reason="POSIX no-follow contract")
+def test_sqlite_journal_rejects_preexisting_sidecar_symlink(tmp_path: Path) -> None:
+    path = tmp_path / "sidecar.sqlite3"
+    target = tmp_path / "sidecar-target"
+    target.write_text("must remain untouched", encoding="utf-8")
+    path.with_name(path.name + "-wal").symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="opened safely"):
+        SqliteOMSJournal(path)
+
+    assert not path.exists()
+    assert target.read_text(encoding="utf-8") == "must remain untouched"
+
+
+@pytest.mark.skipif(oms_module.os.name != "posix", reason="POSIX mode contract")
+def test_sqlite_journal_rejects_writable_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "writable"
+    parent.mkdir(mode=0o777)
+    parent.chmod(0o777)
+
+    with pytest.raises(RuntimeError, match="must not be group/world writable"):
+        SqliteOMSJournal(parent / "oms.sqlite3")
+
+
+@pytest.mark.skipif(oms_module.os.name != "posix", reason="POSIX FIFO contract")
+def test_sqlite_journal_rejects_sidecar_fifo_without_blocking(tmp_path: Path) -> None:
+    path = tmp_path / "fifo.sqlite3"
+    sidecar = path.with_name(path.name + "-wal")
+    make_fifo = getattr(oms_module.os, "mkfifo", None)
+    assert make_fifo is not None
+    make_fifo(sidecar, 0o600)
+
+    with pytest.raises(RuntimeError, match="not a regular file"):
+        SqliteOMSJournal(path)
+
+    assert not path.exists()
+
+
+def test_sqlite_journal_rejects_non_regular_path(tmp_path: Path) -> None:
+    path = tmp_path / "journal-dir"
+    path.mkdir()
+
+    with pytest.raises(ValueError, match="regular non-symlink"):
+        SqliteOMSJournal(path)
 
 
 def test_jsonl_journal_io_failure_poison_requires_restart_replay(

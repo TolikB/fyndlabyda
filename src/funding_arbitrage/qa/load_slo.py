@@ -47,8 +47,8 @@ from funding_arbitrage.domain.events import (
 from funding_arbitrage.execution.oms import (
     DurableOMS,
     InMemoryOMSJournal,
-    JsonlOMSJournal,
     OMSJournal,
+    SqliteOMSJournal,
 )
 from funding_arbitrage.market_data.quality import DataQualityMonitor, StreamIdentity
 from funding_arbitrage.services.decision_pipeline import (
@@ -85,6 +85,8 @@ class LoadSLOConfig(BaseModel):
     durable_oms: bool = True
     event_ingest_p99_ms: float = Field(default=10.0, gt=0, le=10_000)
     decision_prepare_p99_ms: float = Field(default=20.0, gt=0, le=10_000)
+    oms_submit_prepare_p99_ms: float = Field(default=10.0, gt=0, le=10_000)
+    oms_fill_apply_p99_ms: float = Field(default=10.0, gt=0, le=10_000)
     oms_fill_p99_ms: float = Field(default=10.0, gt=0, le=10_000)
     decision_to_filled_p99_ms: float = Field(default=30.0, gt=0, le=10_000)
 
@@ -126,7 +128,7 @@ class ReliabilityResult(BaseModel):
 class LoadSLOReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: int = 1
+    schema_version: int = 2
     workload: dict[str, int]
     latency: dict[str, LatencyDistribution]
     reliability: ReliabilityResult
@@ -202,7 +204,9 @@ async def run_load_slo(config: LoadSLOConfig) -> LoadSLOReport:
 
     event_latencies: list[int] = []
     decision_latencies: list[int] = []
-    oms_latencies: list[int] = []
+    oms_submit_latencies: list[int] = []
+    oms_fill_apply_latencies: list[int] = []
+    oms_fill_latencies: list[int] = []
     end_to_end_latencies: list[int] = []
 
     writer = _CountingWriter()
@@ -229,7 +233,9 @@ async def run_load_slo(config: LoadSLOConfig) -> LoadSLOReport:
             pipeline,
             oms,
             decision_latencies,
-            oms_latencies,
+            oms_submit_latencies,
+            oms_fill_apply_latencies,
+            oms_fill_latencies,
             end_to_end_latencies,
         )
         journal_entry_count = len(journal.load())
@@ -239,7 +245,13 @@ async def run_load_slo(config: LoadSLOConfig) -> LoadSLOReport:
     latency = {
         "event_ingest": _distribution(event_latencies, config.event_ingest_p99_ms),
         "decision_prepare": _distribution(decision_latencies, config.decision_prepare_p99_ms),
-        "oms_fill": _distribution(oms_latencies, config.oms_fill_p99_ms),
+        "oms_submit_prepare": _distribution(
+            oms_submit_latencies, config.oms_submit_prepare_p99_ms
+        ),
+        "oms_fill_apply": _distribution(
+            oms_fill_apply_latencies, config.oms_fill_apply_p99_ms
+        ),
+        "oms_fill": _distribution(oms_fill_latencies, config.oms_fill_p99_ms),
         "decision_to_filled": _distribution(end_to_end_latencies, config.decision_to_filled_p99_ms),
     }
     expected_expired = sum(
@@ -301,7 +313,7 @@ def _oms_journal(*, durable: bool) -> Iterator[OMSJournal]:
         yield InMemoryOMSJournal()
         return
     with TemporaryDirectory(prefix="funding-load-slo-") as directory:
-        journal = JsonlOMSJournal(Path(directory) / "oms.jsonl")
+        journal = SqliteOMSJournal(Path(directory) / "oms.sqlite3")
         try:
             yield journal
         finally:
@@ -359,7 +371,9 @@ def _run_decision_load(
     pipeline: DecisionPipeline,
     oms: DurableOMS,
     decision_latencies: list[int],
-    oms_latencies: list[int],
+    oms_submit_latencies: list[int],
+    oms_fill_apply_latencies: list[int],
+    oms_fill_latencies: list[int],
     end_to_end_latencies: list[int],
 ) -> _DecisionCounters:
     counters = _DecisionCounters()
@@ -400,9 +414,11 @@ def _run_decision_load(
             counters.invariant_failures += 1
             continue
         order = result.orders[0]
-        oms_started = perf_counter_ns()
         try:
+            oms_started = perf_counter_ns()
+            submit_started = perf_counter_ns()
             submitted = oms.prepare_submit(order.client_order_id, now)
+            oms_submit_latencies.append(perf_counter_ns() - submit_started)
             report = ExecutionReport(
                 client_order_id=submitted.client_order_id,
                 exchange_order_id=f"load-{index}",
@@ -416,13 +432,15 @@ def _run_decision_load(
                 exchange_timestamp=now + timedelta(milliseconds=1),
                 receive_timestamp=now + timedelta(milliseconds=2),
             )
+            fill_started = perf_counter_ns()
             filled = oms.apply_report(report)
+            oms_fill_apply_latencies.append(perf_counter_ns() - fill_started)
             duplicate = oms.apply_report(report)
+            oms_fill_latencies.append(perf_counter_ns() - oms_started)
+            end_to_end_latencies.append(perf_counter_ns() - end_to_end_started)
         except Exception:
             counters.unexpected += 1
             continue
-        oms_latencies.append(perf_counter_ns() - oms_started)
-        end_to_end_latencies.append(perf_counter_ns() - end_to_end_started)
         if filled.status is not OrderStatus.FILLED or duplicate != filled:
             counters.invariant_failures += 1
         else:
