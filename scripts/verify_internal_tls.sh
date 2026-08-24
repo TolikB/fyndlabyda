@@ -3,14 +3,19 @@ set -euo pipefail
 
 tls_dir="${1:-secrets/internal}"
 minimum_validity_seconds="${2:-86400}"
+postgres_username="${3:-funding}"
 
-if (( $# > 2 )); then
-  echo "usage: verify_internal_tls.sh [tls-directory] [minimum-validity-seconds]" >&2
+if (( $# > 3 )); then
+  echo "usage: verify_internal_tls.sh [tls-directory] [minimum-validity-seconds] [postgres-username]" >&2
   exit 2
 fi
 if [[ ! "$minimum_validity_seconds" =~ ^[0-9]+$ ]] ||
    (( minimum_validity_seconds < 1 )); then
   echo "minimum TLS validity must be a positive number of seconds" >&2
+  exit 2
+fi
+if [[ ! "$postgres_username" =~ ^[a-z_][a-z0-9_.-]{0,62}$ ]]; then
+  echo "PostgreSQL username is unsafe or cannot map to a certificate CN" >&2
   exit 2
 fi
 for command_name in awk grep openssl sha256sum; do
@@ -53,13 +58,35 @@ check_validity() {
   fi
 }
 
-check_identity() {
+check_purpose() {
   local certificate_file="$1"
   local purpose="$2"
-  local hostname="$3"
-  if ! openssl verify -purpose "$purpose" -verify_hostname "$hostname" \
+  if ! openssl verify -purpose "$purpose" \
     -CAfile "$ca_file" "$certificate_file" >/dev/null; then
-    echo "internal TLS certificate chain, purpose, or identity is invalid: $certificate_file" >&2
+    echo "internal TLS certificate chain or purpose is invalid: $certificate_file" >&2
+    exit 1
+  fi
+}
+
+check_server_identity() {
+  local certificate_file="$1"
+  local hostname="$2"
+  if ! openssl verify -purpose sslserver -verify_hostname "$hostname" \
+    -CAfile "$ca_file" "$certificate_file" >/dev/null; then
+    echo "internal TLS server certificate identity is invalid: $certificate_file" >&2
+    exit 1
+  fi
+}
+
+check_postgres_client_cn() {
+  local certificate_file="$1"
+  local expected_cn="$2"
+  local subject
+  subject="$(
+    openssl x509 -noout -subject -nameopt RFC2253 -in "$certificate_file"
+  )"
+  if [[ "$subject" != "subject=CN=$expected_cn" ]]; then
+    echo "PostgreSQL client certificate CN does not match POSTGRES_USER" >&2
     exit 1
   fi
 }
@@ -105,10 +132,11 @@ for name in "${certificate_names[@]}"; do
   check_key_pair "$tls_dir/$name.crt" "$tls_dir/$name.key"
 done
 
-check_identity "$tls_dir/app-client.crt" sslclient funding
-check_identity "$tls_dir/postgres-server.crt" sslserver postgres
-check_identity "$tls_dir/redis-server.crt" sslserver redis
-check_identity "$tls_dir/clickhouse-server.crt" sslserver clickhouse
-check_identity "$tls_dir/clickhouse-client.crt" sslclient clickhouse-client
+check_purpose "$tls_dir/app-client.crt" sslclient
+check_postgres_client_cn "$tls_dir/app-client.crt" "$postgres_username"
+check_server_identity "$tls_dir/postgres-server.crt" postgres
+check_server_identity "$tls_dir/redis-server.crt" redis
+check_server_identity "$tls_dir/clickhouse-server.crt" clickhouse
+check_purpose "$tls_dir/clickhouse-client.crt" sslclient
 
 echo "internal TLS certificate, identity, and key verification passed"

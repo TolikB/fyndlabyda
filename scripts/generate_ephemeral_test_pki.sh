@@ -42,7 +42,10 @@ issue_certificate redis-server redis serverAuth "DNS:redis"
 issue_certificate clickhouse-server clickhouse serverAuth "DNS:clickhouse"
 
 printf '%s' "$(openssl rand -hex 32)" >"$destination/redis-password"
-rm -f -- "$destination/ca.key" "$destination/ca.srl"
+rm -f -- "$destination/ca.srl"
+if [[ "${KEEP_EPHEMERAL_TEST_CA_KEY:-NO}" != "YES" ]]; then
+  rm -f -- "$destination/ca.key"
+fi
 chmod 0711 "$destination"
 if (( EUID == 0 )); then
   chown 10001:10001 "$destination/app-client.key"

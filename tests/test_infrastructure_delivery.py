@@ -191,10 +191,18 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "10#$mode > 600" not in preflight
     assert "internal secret directory must be root-owned mode 0711" in preflight
     assert "private artifact owner is invalid" in preflight
+    assert "for command_name in chronyc docker findmnt jq ss timedatectl" in preflight
+    assert "POSTGRES_USER" in preflight
     assert "check_private_owner secrets/internal/clickhouse-server.key 101 101" in preflight
     assert "secrets/internal/clickhouse-client.crt" in preflight
+    verifier = _read("scripts/verify_internal_tls.sh")
+    assert "openssl pkey -check -noout -passin pass:" in verifier
+    assert "check_postgres_client_cn" in verifier
     assert "check_private_owner secrets/internal/clickhouse-client.key 101 101" in preflight
-    assert "bash scripts/verify_internal_tls.sh secrets/internal 86400" in preflight
+    assert (
+        'bash scripts/verify_internal_tls.sh secrets/internal 86400 "$postgres_user"'
+        in preflight
+    )
 
 
 def test_internal_tls_verifier_rejects_invalid_runtime_material(
@@ -211,23 +219,106 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
     verifier = ROOT / "scripts" / "verify_internal_tls.sh"
     valid = tmp_path / "valid"
     second = tmp_path / "second"
-    environment = {**os.environ, "ALLOW_EPHEMERAL_TEST_PKI": "YES"}
-    subprocess.run(["bash", str(generator), str(valid)], check=True, env=environment)
-    subprocess.run(["bash", str(generator), str(second)], check=True, env=environment)
+    environment = {
+        **os.environ,
+        "ALLOW_EPHEMERAL_TEST_PKI": "YES",
+        "KEEP_EPHEMERAL_TEST_CA_KEY": "YES",
+    }
+    subprocess.run(
+        ["bash", str(generator), str(valid)],
+        check=True,
+        env=environment,
+        timeout=30,
+    )
+    second_environment = {**os.environ, "ALLOW_EPHEMERAL_TEST_PKI": "YES"}
+    subprocess.run(
+        ["bash", str(generator), str(second)],
+        check=True,
+        env=second_environment,
+        timeout=30,
+    )
 
     def verify(
         path: Path,
         minimum_validity: str = "86400",
+        postgres_username: str = "funding",
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["bash", str(verifier), str(path), minimum_validity],
+            [
+                "bash",
+                str(verifier),
+                str(path),
+                minimum_validity,
+                postgres_username,
+            ],
             check=False,
             capture_output=True,
             text=True,
+            timeout=10,
         )
+
+    def issue_fixture(
+        name: str,
+        common_name: str,
+        usage: str,
+        san: str,
+    ) -> tuple[Path, Path]:
+        key = valid / f"{name}.key"
+        request = valid / f"{name}.csr"
+        certificate = valid / f"{name}.crt"
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-newkey",
+                "rsa:2048",
+                "-sha256",
+                "-nodes",
+                "-subj",
+                f"/CN={common_name}",
+                "-addext",
+                f"subjectAltName={san}",
+                "-addext",
+                f"extendedKeyUsage={usage}",
+                "-keyout",
+                str(key),
+                "-out",
+                str(request),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=20,
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "x509",
+                "-req",
+                "-sha256",
+                "-days",
+                "2",
+                "-in",
+                str(request),
+                "-CA",
+                str(valid / "ca.crt"),
+                "-CAkey",
+                str(valid / "ca.key"),
+                "-CAcreateserial",
+                "-copy_extensions",
+                "copy",
+                "-out",
+                str(certificate),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=20,
+        )
+        request.unlink()
+        return certificate, key
 
     assert verify(valid).returncode == 0
     assert verify(valid, "999999999").returncode != 0
+    assert verify(valid, postgres_username="unsafe user").returncode == 2
 
     wrong_ca = tmp_path / "wrong-ca"
     shutil.copytree(valid, wrong_ca)
@@ -255,14 +346,46 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
         ],
         check=True,
         capture_output=True,
+        timeout=10,
     )
     assert verify(encrypted).returncode != 0
 
-    wrong_identity = tmp_path / "wrong-identity"
-    shutil.copytree(valid, wrong_identity)
-    shutil.copy2(valid / "postgres-server.crt", wrong_identity / "app-client.crt")
-    shutil.copy2(valid / "postgres-server.key", wrong_identity / "app-client.key")
-    assert verify(wrong_identity).returncode != 0
+    wrong_host_cert, wrong_host_key = issue_fixture(
+        "redis-wrong-host",
+        "redis",
+        "serverAuth",
+        "DNS:not-redis",
+    )
+    wrong_hostname = tmp_path / "wrong-hostname"
+    shutil.copytree(valid, wrong_hostname)
+    shutil.copy2(wrong_host_cert, wrong_hostname / "redis-server.crt")
+    shutil.copy2(wrong_host_key, wrong_hostname / "redis-server.key")
+    assert verify(wrong_hostname).returncode != 0
+
+    wrong_purpose_cert, wrong_purpose_key = issue_fixture(
+        "redis-wrong-purpose",
+        "redis",
+        "clientAuth",
+        "DNS:redis",
+    )
+    wrong_purpose = tmp_path / "wrong-purpose"
+    shutil.copytree(valid, wrong_purpose)
+    shutil.copy2(wrong_purpose_cert, wrong_purpose / "redis-server.crt")
+    shutil.copy2(wrong_purpose_key, wrong_purpose / "redis-server.key")
+    assert verify(wrong_purpose).returncode != 0
+
+    wrong_cn_cert, wrong_cn_key = issue_fixture(
+        "app-wrong-cn",
+        "other_user",
+        "clientAuth",
+        "DNS:funding",
+    )
+    wrong_cn = tmp_path / "wrong-cn"
+    shutil.copytree(valid, wrong_cn)
+    shutil.copy2(wrong_cn_cert, wrong_cn / "app-client.crt")
+    shutil.copy2(wrong_cn_key, wrong_cn / "app-client.key")
+    assert verify(wrong_cn).returncode != 0
+    assert verify(wrong_cn, postgres_username="other_user").returncode == 0
 
     malformed = tmp_path / "malformed"
     shutil.copytree(valid, malformed)
@@ -272,7 +395,6 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
     )
     assert verify(malformed).returncode != 0
 
-
 def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
     script = _read("scripts/generate_ephemeral_test_pki.sh")
 
@@ -281,7 +403,9 @@ def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
     assert "rm -rf" not in script
     assert "EPHEMERAL_PKI_FORCE" not in script
     assert "printf '%s'" in script
-    assert 'rm -f -- "$destination/ca.key" "$destination/ca.srl"' in script
+    assert 'rm -f -- "$destination/ca.srl"' in script
+    assert "KEEP_EPHEMERAL_TEST_CA_KEY" in script
+    assert 'rm -f -- "$destination/ca.key"' in script
     assert 'chmod 0711 "$destination"' in script
     assert 'chown 10001:10001 "$destination/app-client.key"' in script
     assert 'chown 70:70 "$destination/postgres-server.key"' in script

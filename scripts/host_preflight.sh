@@ -25,7 +25,7 @@ for overlay in secrets/exchange/runtime.env secrets/exchange/telegram.env; do
     compose_env_args+=(--env-file "$overlay")
   fi
 done
-for command_name in chronyc docker findmnt ss timedatectl; do
+for command_name in chronyc docker findmnt jq ss timedatectl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "required command unavailable: $command_name" >&2
     exit 2
@@ -40,6 +40,12 @@ docker info >/dev/null
 docker compose version >/dev/null
 docker compose --project-name "$project" "${compose_env_args[@]}" \
   --file "$compose_file" config --quiet
+postgres_user="$(
+  docker compose --project-name "$project" "${compose_env_args[@]}" \
+    --file "$compose_file" config --format json |
+    jq -er '.services.postgres.environment.POSTGRES_USER |
+      select(type == "string" and length > 0)'
+)"
 
 memory_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
 root_free_kib="$(df --output=avail / | tail -n 1 | tr -d ' ')"
@@ -135,6 +141,6 @@ check_private_owner secrets/internal/redis-password 999 1000
 check_private_owner secrets/internal/clickhouse-server.key 101 101
 check_private_owner secrets/internal/clickhouse-client.key 101 101
 
-bash scripts/verify_internal_tls.sh secrets/internal 86400
+bash scripts/verify_internal_tls.sh secrets/internal 86400 "$postgres_user"
 
 echo "Linux host preflight passed for $project"
