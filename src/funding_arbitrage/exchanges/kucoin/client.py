@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -37,6 +38,8 @@ from funding_arbitrage.market_data.canonical_snapshot import canonical_snapshot_
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
 from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
+
+logger = logging.getLogger(__name__)
 
 
 def _utc(value: object, field: str = "timestamp") -> datetime:
@@ -244,13 +247,46 @@ class KucoinPublicAdapter(ExchangeAdapter):
         spot_time = spot.get("time", now_ms) if isinstance(spot, dict) else now_ms
         if not isinstance(spot_rows, list):
             raise InvalidResponseError("KuCoin spot tickers are missing")
-        result = [
-            self._parse_future_ticker(row)
-            for row in _rows(futures, "futures tickers")
-            if str(row.get("symbol") or "") in self._instrument_types
-        ]
-        result.extend(self._parse_spot_ticker(row, spot_time) for row in spot_rows)
+        result: list[Ticker] = []
+        for row in _rows(futures, "futures tickers"):
+            if str(row.get("symbol") or "") not in self._instrument_types:
+                continue
+            ticker = self._parse_ticker_or_none(
+                row,
+                self._instrument_types[str(row["symbol"])],
+                now_ms,
+            )
+            if ticker is not None:
+                result.append(ticker)
+        for row in spot_rows:
+            ticker = self._parse_ticker_or_none(row, InstrumentType.SPOT, spot_time)
+            if ticker is not None:
+                result.append(ticker)
         return result
+
+    def _parse_ticker_or_none(
+        self,
+        row: dict[str, Any],
+        instrument_type: InstrumentType,
+        spot_timestamp: object,
+    ) -> Ticker | None:
+        """Drop one invalid/non-trading row without losing the whole venue."""
+
+        try:
+            if instrument_type is InstrumentType.SPOT:
+                return self._parse_spot_ticker(row, spot_timestamp)
+            return self._parse_future_ticker(row)
+        except (InvalidResponseError, KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "kucoin_ticker_skipped",
+                extra={
+                    "exchange": self.name,
+                    "symbol": str(row.get("symbol", "")),
+                    "instrument_type": instrument_type.value,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return None
 
     def _parse_future_ticker(self, row: dict[str, Any]) -> Ticker:
         return Ticker(

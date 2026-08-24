@@ -120,6 +120,72 @@ async def test_kucoin_instruments_distinguish_perpetual_dated_future_and_spot() 
     assert funding[0].next_funding_time == datetime(2025, 1, 1, 4, tzinfo=UTC)
 
 
+@pytest.mark.asyncio
+async def test_kucoin_tickers_skip_null_rows_without_dropping_venue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/contracts/active":
+            return httpx.Response(
+                200,
+                json={"code": "200000", "data": [_kucoin_perpetual()]},
+            )
+        if request.url.path == "/api/v1/allTickers":
+            return httpx.Response(
+                200,
+                json={
+                    "code": "200000",
+                    "data": [
+                        {
+                            "symbol": "XBTUSDTM",
+                            "price": "100000",
+                            "bestBidPrice": "99999",
+                            "bestAskPrice": "100001",
+                            "turnoverOf24h": "12",
+                            "ts": 1_735_689_600_000,
+                        },
+                        {"symbol": "XBTUSDTM", "price": None},
+                    ],
+                },
+            )
+        assert request.url.path == "/api/v1/market/allTickers"
+        return httpx.Response(
+            200,
+            json={
+                "code": "200000",
+                "data": {
+                    "time": 1_735_689_600_000,
+                    "ticker": [
+                        {
+                            "symbol": "BTC-USDT",
+                            "last": "100000",
+                            "buy": "99999",
+                            "sell": "100001",
+                            "volValue": "12",
+                        },
+                        {"symbol": "PREOPEN-USDT", "last": None},
+                    ],
+                },
+            },
+        )
+
+    caplog.set_level("WARNING")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = KucoinPublicAdapter(
+        spot_base_url="https://spot.invalid",
+        futures_base_url="https://futures.invalid",
+        http_client=client,
+    )
+    tickers = await adapter.get_tickers()
+    await client.aclose()
+
+    assert {(ticker.symbol, ticker.instrument_type) for ticker in tickers} == {
+        ("XBTUSDTM", InstrumentType.PERPETUAL),
+        ("BTC-USDT", InstrumentType.SPOT),
+    }
+    assert caplog.messages.count("kucoin_ticker_skipped") == 2
+
+
 def test_kucoin_websocket_parsers_keep_typed_units() -> None:
     adapter = KucoinPublicAdapter()
     adapter._contract_sizes["XBTUSDTM"] = Decimal("0.001")
