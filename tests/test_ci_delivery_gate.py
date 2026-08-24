@@ -116,3 +116,19 @@ def test_publish_and_manual_gate_are_tightly_scoped() -> None:
     assert "manual_live_gate.py" in str(manual)
     assert "secrets." not in workflow
     assert not re.search(r"\b(?:ssh|scp|rsync)\b", workflow, re.IGNORECASE)
+
+
+def test_paper_test_template_satisfies_required_compose_variables() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    environment = dict(
+        line.split("=", 1)
+        for line in (ROOT / ".env.paper-test.example")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    required = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", compose))
+
+    assert required
+    assert required <= environment.keys()
+    assert all(environment[name] for name in required)
