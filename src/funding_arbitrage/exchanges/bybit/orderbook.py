@@ -19,6 +19,7 @@ from funding_arbitrage.domain.events import (
     EventKind,
     EventMetadata,
     InstrumentKey,
+    instrument_scoped_sequence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import (
@@ -113,7 +114,9 @@ class BybitOrderBookNormalizer:
             event_payload = delta_payload
             kind = EventKind.BOOK_DELTA
             result = self.local_book.apply_delta(delta_payload)
-        sequence_id = f"u:{update_id}:seq:{cross_sequence}"
+        sequence_id = instrument_scoped_sequence_id(
+            self.instrument, f"u:{update_id}:seq:{cross_sequence}"
+        )
         source = f"BYBIT.PUBLIC.ORDERBOOK.{self.source_depth}"
         event_id = _event_id(
             source=source,

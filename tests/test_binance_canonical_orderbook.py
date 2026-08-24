@@ -92,7 +92,7 @@ def test_binance_rest_bootstrap_and_spot_style_diff_reconstruct_deeper_book() ->
     assert bootstrap.event.kind is EventKind.BOOK_SNAPSHOT
     assert bootstrap.event.metadata.source.endswith("REST_BOOTSTRAP")
     assert update.event.kind is EventKind.BOOK_DELTA
-    assert update.event.metadata.sequence_id == "U:101:u:102"
+    assert update.event.metadata.sequence_id.endswith(":U:101:u:102")
     assert isinstance(update.event.payload, BookDelta)
     assert update.result.status is BookApplyStatus.APPLIED
     book = normalizer.legacy_book(update, LegacyInstrumentType.PERPETUAL)
@@ -147,7 +147,7 @@ def test_binance_futures_first_bridge_then_previous_update_id_gap() -> None:
     )
 
     assert first.result.status is BookApplyStatus.APPLIED
-    assert first.event.metadata.sequence_id == "U:99:u:101:pu:98"
+    assert first.event.metadata.sequence_id.endswith(":U:99:u:101:pu:98")
     assert second.result.status is BookApplyStatus.APPLIED
     assert gap.result.status is BookApplyStatus.GAP
     assert gap.event.metadata.quality is DataQuality.GAP

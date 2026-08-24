@@ -112,5 +112,33 @@ async def test_snapshot_venues_publish_canonical_event_before_return(
     assert len(events) == 1
     event = events[0]
     assert event.metadata.source == source
-    assert event.metadata.sequence_id == "snapshot:100"
+    assert event.metadata.sequence_id.endswith(":snapshot:100")
     assert event.payload.instrument.exchange_symbol == canonical_symbol
+
+
+def test_common_snapshot_identity_includes_instrument() -> None:
+    btc_instrument = InstrumentKey(
+        venue="KUCOIN",
+        exchange_symbol="BTC-USDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        instrument_type=InstrumentType.SPOT,
+    )
+    eth_instrument = btc_instrument.model_copy(
+        update={"exchange_symbol": "ETH-USDT", "base_asset": "ETH"}
+    )
+    btc_event = canonical_snapshot_event(
+        _book("kucoin", "BTC-USDT", LegacyInstrumentType.SPOT),
+        btc_instrument,
+        source="KUCOIN.PUBLIC.SPOT.LEVEL2DEPTH50",
+        receive_timestamp=NOW,
+    )
+    eth_event = canonical_snapshot_event(
+        _book("kucoin", "ETH-USDT", LegacyInstrumentType.SPOT),
+        eth_instrument,
+        source="KUCOIN.PUBLIC.SPOT.LEVEL2DEPTH50",
+        receive_timestamp=NOW,
+    )
+
+    assert btc_event.metadata.event_id != eth_event.metadata.event_id
+    assert btc_event.metadata.sequence_id != eth_event.metadata.sequence_id

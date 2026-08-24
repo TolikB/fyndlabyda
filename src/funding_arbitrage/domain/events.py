@@ -10,6 +10,9 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+_SEQUENCE_ID_MAX_LENGTH = 128
+_INSTRUMENT_DISCRIMINATOR_HEX_LENGTH = 32
+
 
 class TradingMode(StrEnum):
     BACKTEST = "BACKTEST"
@@ -159,6 +162,31 @@ class InstrumentKey(BaseModel):
         elif self.expiry is not None:
             suffix = f"{suffix}:{self.expiry.isoformat()}"
         return f"{self.venue}:{self.base_asset}-{self.quote_asset}:{suffix}"
+
+
+def instrument_scoped_sequence_id(
+    instrument: InstrumentKey, native_sequence_id: str
+) -> str:
+    """Scope a venue-native sequence to one instrument within the DB length bound."""
+
+    native = native_sequence_id.strip()
+    if not native:
+        raise ValueError("native sequence ID cannot be blank")
+    identity = json.dumps(
+        instrument.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    ).encode()
+    discriminator = hashlib.sha256(identity).hexdigest()[
+        :_INSTRUMENT_DISCRIMINATOR_HEX_LENGTH
+    ]
+    prefix = f"i:{discriminator}:"
+    sequence_id = prefix + native
+    if len(sequence_id) <= _SEQUENCE_ID_MAX_LENGTH:
+        return sequence_id
+    native_hash = hashlib.sha256(native.encode()).hexdigest()
+    bounded = f"{prefix}n:{native_hash}"
+    if len(bounded) > _SEQUENCE_ID_MAX_LENGTH:
+        raise AssertionError("instrument-scoped sequence ID exceeds storage bound")
+    return bounded
 
 
 class ExchangeTimedModel(BaseModel):
@@ -405,7 +433,7 @@ class EventMetadata(BaseModel):
     exchange_timestamp: datetime
     receive_timestamp: datetime
     monotonic_ns: int = Field(ge=0)
-    sequence_id: str = Field(min_length=1)
+    sequence_id: str = Field(min_length=1, max_length=_SEQUENCE_ID_MAX_LENGTH)
     native_sequence: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
     source: str = Field(min_length=1)
     correlation_id: str = Field(min_length=1)

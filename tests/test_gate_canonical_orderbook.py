@@ -38,7 +38,7 @@ def test_gate_spot_snapshot_becomes_canonical_before_legacy_book() -> None:
     )
 
     assert update.event.kind is EventKind.BOOK_SNAPSHOT
-    assert update.event.metadata.sequence_id == "snapshot:9"
+    assert update.event.metadata.sequence_id.endswith(":snapshot:9")
     assert update.event.metadata.source == "GATE.PUBLIC.SPOT.ORDER_BOOK"
     assert update.book is not None
     assert update.book.bids[0].price == Decimal("100")

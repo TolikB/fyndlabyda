@@ -16,6 +16,7 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     InstrumentKey,
     deterministic_event_id,
+    instrument_scoped_sequence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
@@ -67,7 +68,7 @@ class GateOrderBookNormalizer:
         result = self.local_book.apply_snapshot(snapshot)
         source_channel = "SPOT.ORDER_BOOK" if spot else "FUTURES.ORDER_BOOK"
         source = f"GATE.PUBLIC.{source_channel}"
-        sequence_id = f"snapshot:{sequence}"
+        sequence_id = instrument_scoped_sequence_id(self.instrument, f"snapshot:{sequence}")
         received_at = receive_timestamp or datetime.now(UTC)
         received_at = (
             received_at if received_at.tzinfo else received_at.replace(tzinfo=UTC)

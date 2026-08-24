@@ -20,6 +20,7 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     InstrumentKey,
     deterministic_event_id,
+    instrument_scoped_sequence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
@@ -177,6 +178,7 @@ class BinanceOrderBookNormalizer:
         receive_timestamp: datetime | None,
         receive_monotonic_ns: int | None,
     ) -> BinanceBookUpdate:
+        sequence_id = instrument_scoped_sequence_id(self.instrument, sequence_id)
         received_at = receive_timestamp or datetime.now(UTC)
         received_at = _utc(received_at)
         metadata = EventMetadata(

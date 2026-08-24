@@ -85,7 +85,7 @@ def test_okx_snapshot_delta_heartbeat_and_sequence_reset() -> None:
     assert snapshot.event.kind is EventKind.BOOK_SNAPSHOT
     assert delta is not None
     assert delta.event.kind is EventKind.BOOK_DELTA
-    assert delta.event.metadata.sequence_id == "prev:100:seq:105"
+    assert delta.event.metadata.sequence_id.endswith(":prev:100:seq:105")
     assert isinstance(delta.event.payload, BookDelta)
     assert delta.event.payload.updates[0].quantity == 0
     assert delta.book is not None

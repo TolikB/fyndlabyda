@@ -74,7 +74,7 @@ def test_bybit_snapshot_and_delta_become_canonical_events_and_book() -> None:
     assert delta.event.kind is EventKind.BOOK_DELTA
     assert delta.result.status is BookApplyStatus.APPLIED
     assert delta.event.metadata.exchange_timestamp == datetime(2026, 8, 16, 12, tzinfo=UTC)
-    assert delta.event.metadata.sequence_id == "u:11:seq:1001"
+    assert delta.event.metadata.sequence_id.endswith(":u:11:seq:1001")
     assert delta.book is not None
     assert delta.book.bids[0].price == 100.5
     assert delta.book.asks[0].quantity == 6

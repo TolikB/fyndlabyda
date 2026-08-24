@@ -16,6 +16,7 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     InstrumentKey,
     deterministic_event_id,
+    instrument_scoped_sequence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
@@ -64,7 +65,7 @@ class HyperliquidOrderBookNormalizer:
         )
         result = self.local_book.apply_snapshot(snapshot)
         source = "HYPERLIQUID.PUBLIC.L2BOOK"
-        sequence_id = f"time:{timestamp_ms}"
+        sequence_id = instrument_scoped_sequence_id(self.instrument, f"time:{timestamp_ms}")
         received_at = receive_timestamp or datetime.now(UTC)
         received_at = (
             received_at if received_at.tzinfo else received_at.replace(tzinfo=UTC)

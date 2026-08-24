@@ -43,11 +43,28 @@ def test_hyperliquid_l2_snapshot_is_canonical_and_sorted() -> None:
     update = normalizer.apply(_payload(), receive_timestamp=NOW, receive_monotonic_ns=100)
 
     assert update.event.kind is EventKind.BOOK_SNAPSHOT
-    assert update.event.metadata.sequence_id == "time:1786881600000"
+    assert update.event.metadata.sequence_id.endswith(":time:1786881600000")
     assert update.event.metadata.source == "HYPERLIQUID.PUBLIC.L2BOOK"
     assert update.book is not None
     assert update.book.bids[0].price == Decimal("100")
     assert update.book.asks[0].price == Decimal("101")
+
+
+def test_same_timestamp_on_different_instruments_has_distinct_event_identity() -> None:
+    eth_instrument = INSTRUMENT.model_copy(
+        update={"exchange_symbol": "ETH", "base_asset": "ETH"}
+    )
+    eth_payload = {**_payload(), "coin": "ETH"}
+
+    btc_event = HyperliquidOrderBookNormalizer(INSTRUMENT, depth=20).apply(
+        _payload()
+    ).event
+    eth_event = HyperliquidOrderBookNormalizer(eth_instrument, depth=20).apply(
+        eth_payload
+    ).event
+
+    assert btc_event.metadata.event_id != eth_event.metadata.event_id
+    assert btc_event.metadata.sequence_id != eth_event.metadata.sequence_id
 
 
 async def test_hyperliquid_adapter_publishes_before_legacy_book() -> None:

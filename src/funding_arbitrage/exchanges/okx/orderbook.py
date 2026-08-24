@@ -20,6 +20,7 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     InstrumentKey,
     deterministic_event_id,
+    instrument_scoped_sequence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import (
@@ -107,7 +108,9 @@ class OkxOrderBookNormalizer:
             event_payload = delta_payload
             kind = EventKind.BOOK_DELTA
             result = self.local_book.apply_delta(delta_payload)
-        sequence_id = f"prev:{previous_sequence}:seq:{sequence}"
+        sequence_id = instrument_scoped_sequence_id(
+            self.instrument, f"prev:{previous_sequence}:seq:{sequence}"
+        )
         source = "OKX.PUBLIC.ORDERBOOK.BOOKS"
         metadata = EventMetadata(
             event_id=deterministic_event_id(

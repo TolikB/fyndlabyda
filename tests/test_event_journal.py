@@ -27,6 +27,7 @@ from funding_arbitrage.domain.events import (
     TradeTick,
     deterministic_event_id,
 )
+from funding_arbitrage.exchanges.hyperliquid.orderbook import HyperliquidOrderBookNormalizer
 
 NOW = datetime(2026, 8, 15, 12, tzinfo=UTC)
 INSTRUMENT = InstrumentKey(
@@ -171,6 +172,61 @@ async def test_journal_filters_by_source_correlation_and_half_open_time_range() 
     await engine.dispose()
 
     assert [event.metadata.sequence_id for event in replay] == ["1"]
+
+
+def _hyperliquid_book_event(symbol: str) -> EventEnvelope[BookSnapshot]:
+    instrument = InstrumentKey(
+        venue="HYPERLIQUID",
+        exchange_symbol=symbol,
+        base_asset=symbol,
+        quote_asset="USDC",
+        instrument_type=InstrumentType.PERPETUAL,
+        settlement_asset="USDC",
+    )
+    return HyperliquidOrderBookNormalizer(instrument, depth=20).apply(
+        {
+            "coin": symbol,
+            "time": int(NOW.timestamp() * 1000),
+            "levels": [
+                [{"px": "100", "sz": "1"}],
+                [{"px": "101", "sz": "1"}],
+            ],
+        },
+        receive_timestamp=NOW,
+    ).event
+
+
+async def test_same_time_different_instruments_append_replay_and_deduplicate() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    btc = _hyperliquid_book_event("BTC")
+    eth = _hyperliquid_book_event("ETH")
+
+    async with factory() as session:
+        assert await append_events(session, [btc, eth]) == 2
+        assert await append_events(session, [btc, eth]) == 0
+        replay = await load_events(
+            session,
+            kinds=(EventKind.BOOK_SNAPSHOT,),
+            source="HYPERLIQUID.PUBLIC.L2BOOK",
+        )
+        count = await session.scalar(
+            select(func.count()).select_from(CanonicalEventRecord)
+        )
+
+    await engine.dispose()
+
+    assert count == 2
+    assert {event.payload.instrument.exchange_symbol for event in replay} == {
+        "BTC",
+        "ETH",
+    }
+    assert {event.metadata.event_id for event in replay} == {
+        btc.metadata.event_id,
+        eth.metadata.event_id,
+    }
 
 
 async def test_batch_append_deduplicates_inside_batch_and_against_journal() -> None:

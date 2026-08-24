@@ -87,7 +87,7 @@ def test_mexc_rest_bootstrap_and_one_sided_absolute_delta_reconstruct_book() -> 
     assert bootstrap.event.kind is EventKind.BOOK_SNAPSHOT
     assert bootstrap.event.metadata.source.endswith("REST_BOOTSTRAP")
     assert update.event.kind is EventKind.BOOK_DELTA
-    assert update.event.metadata.sequence_id == "version:101"
+    assert update.event.metadata.sequence_id.endswith(":version:101")
     assert isinstance(update.event.payload, BookDelta)
     assert update.result.status is BookApplyStatus.APPLIED
     book = state.legacy_book(update, LegacyInstrumentType.PERPETUAL)

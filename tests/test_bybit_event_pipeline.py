@@ -46,7 +46,8 @@ async def test_bybit_frame_is_durable_before_book_update_is_returned() -> None:
     assert update.book is not None
     assert record is not None
     assert record.event_id == update.event.metadata.event_id
-    assert record.sequence_id == "u:10:seq:1000"
+    assert record.sequence_id == update.event.metadata.sequence_id
+    assert record.sequence_id.endswith(":u:10:seq:1000")
     assert record.exchange_timestamp == datetime(2026, 8, 16, 12)
 
 

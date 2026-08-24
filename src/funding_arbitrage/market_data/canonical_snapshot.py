@@ -14,6 +14,7 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     InstrumentKey,
     deterministic_event_id,
+    instrument_scoped_sequence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import OrderBook
@@ -46,7 +47,7 @@ def canonical_snapshot_event(
     )
     local_book = LocalOrderBook(instrument, max_depth=max(1, len(book.bids), len(book.asks)))
     result = local_book.apply_snapshot(payload)
-    sequence_id = f"snapshot:{book.sequence}"
+    sequence_id = instrument_scoped_sequence_id(instrument, f"snapshot:{book.sequence}")
     received_at = _utc(receive_timestamp or datetime.now(UTC))
     metadata = EventMetadata(
         event_id=deterministic_event_id(

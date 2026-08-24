@@ -32,6 +32,7 @@ from funding_arbitrage.domain.events import (
     Side,
     TradeTick,
     deterministic_event_id,
+    instrument_scoped_sequence_id,
 )
 
 NOW = datetime(2026, 8, 15, 12, tzinfo=UTC)
@@ -84,6 +85,39 @@ def test_event_id_and_serialization_are_deterministic() -> None:
     assert first == second
     assert first.metadata.event_id == _metadata(tick).event_id
     assert first.payload.instrument.canonical_id == "BYBIT:BTC-USDT:PERPETUAL"
+
+
+def test_instrument_sequence_scope_is_distinct_bounded_and_validated() -> None:
+    long_native = "update:" + "9" * 400
+    first_instrument = INSTRUMENT.model_copy(
+        update={"exchange_symbol": "X" * 300}
+    )
+    second_instrument = first_instrument.model_copy(
+        update={"exchange_symbol": "Y" * 300}
+    )
+
+    first = instrument_scoped_sequence_id(first_instrument, long_native)
+    second = instrument_scoped_sequence_id(second_instrument, long_native)
+
+    assert first == instrument_scoped_sequence_id(first_instrument, long_native)
+    assert first != second
+    assert len(first) <= 128
+    assert ":n:" in first
+    with pytest.raises(ValueError, match="cannot be blank"):
+        instrument_scoped_sequence_id(INSTRUMENT, " ")
+
+    invalid_metadata = _metadata(
+        TradeTick(
+            instrument=INSTRUMENT,
+            trade_id="length-check",
+            price=Decimal("1"),
+            quantity=Decimal("1"),
+            exchange_timestamp=NOW,
+        )
+    ).model_dump()
+    invalid_metadata["sequence_id"] = "x" * 129
+    with pytest.raises(ValidationError):
+        EventMetadata.model_validate(invalid_metadata)
 
 
 def test_event_id_tracks_logical_identity_not_payload_revision() -> None:
