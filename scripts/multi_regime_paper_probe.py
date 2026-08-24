@@ -20,8 +20,8 @@ from funding_arbitrage.qa.multi_regime_paper import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Write synthetic canonical PAPER data to a temporary PostgreSQL schema, "
-            "verify restart/protective-close/PnL, and remove the schema."
+            "Write synthetic canonical PAPER data to a temporary PostgreSQL database, "
+            "verify restart/protective-close/PnL, and remove the database."
         )
     )
     parser.add_argument("--confirm", required=True, choices=(PROBE_CONFIRMATION,))
@@ -48,12 +48,18 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
 
 def main() -> int:
     args = parse_args()
+    run_id = args.run_id or new_probe_run_id()
     try:
+        args.run_id = run_id
         result = asyncio.run(_run(args))
     except Exception as error:
         print(
             json.dumps(
-                {"status": "failed", "error_type": type(error).__name__},
+                {
+                    "status": "failed",
+                    "run_id": run_id,
+                    "error_type": type(error).__name__,
+                },
                 sort_keys=True,
             ),
             file=sys.stderr,

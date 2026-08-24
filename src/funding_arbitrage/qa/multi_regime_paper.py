@@ -3,8 +3,8 @@
 The harness deliberately has no exchange adapters.  It writes synthetic events to a
 caller-provided database, drives the production event/risk/plan/paper-projection
 path, restarts from the durable checkpoint, and verifies the protective close and
-net PnL.  The PostgreSQL entry point uses a unique temporary schema so application
-rows are never read or changed.
+net PnL.  The PostgreSQL entry point uses a unique temporary database created from
+``template0`` so application rows are never read or changed.
 """
 
 from __future__ import annotations
@@ -12,13 +12,14 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.schema import CreateSchema, DropSchema
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from funding_arbitrage.backtest.fills import FillModelPolicy
 from funding_arbitrage.config import Settings
@@ -59,6 +60,7 @@ from funding_arbitrage.domain.events import (
 from funding_arbitrage.execution.directional_paper import (
     DirectionalExitReason,
     DirectionalPaperBroker,
+    DirectionalPaperPosition,
     DirectionalPaperStatus,
 )
 from funding_arbitrage.features.orderflow import OrderFlowFeatureSnapshot
@@ -251,12 +253,13 @@ async def run_multi_regime_paper_lifecycle(
     ):
         raise RuntimeError("probe target did not create a reduce-only protective exit")
 
+    restored_state = RuntimeState(probe_settings, {}, emit_metrics=False)
     restored_broker = _broker(simulation_version)
     restored_runtime = DurableMultiRegimeRuntime(
         _engine(run_id),
         session_factory,
         paper_broker=restored_broker,
-        runtime_state=state,
+        runtime_state=restored_state,
     )
     restored_events = await restored_runtime.restore_features(start=PROBE_START)
     if restored_runtime.paper_replayed_events != 0:
@@ -290,58 +293,146 @@ async def run_isolated_postgres_probe(
     *,
     run_id: str,
 ) -> dict[str, Any]:
-    """Run the lifecycle in a temporary PostgreSQL schema and remove it exactly."""
+    """Run the lifecycle in a temporary PostgreSQL database and remove it exactly."""
 
     _validate_run_id(run_id)
     assert_probe_safety(settings)
     from funding_arbitrage.database.session import create_database
 
-    engine, _ = create_database(settings)
-    if engine.dialect.name != "postgresql":
-        await engine.dispose()
+    admin_engine, _ = create_database(settings)
+    if admin_engine.dialect.name != "postgresql":
+        await admin_engine.dispose()
         raise RuntimeError("runtime acceptance probe requires PostgreSQL")
-    schema = f"mrp_probe_{run_id.replace('-', '_')}"
+    database = f"mrp_probe_{run_id.replace('-', '_')}"
+    probe_engine: AsyncEngine | None = None
     created = False
     result: dict[str, Any] | None = None
-    removed = False
+    body_error: BaseException | None = None
+    cleanup_error: BaseException | None = None
     try:
-        async with engine.begin() as connection:
-            await connection.execute(CreateSchema(schema))
+        await _create_probe_database(admin_engine, database)
         created = True
-        probe_engine = engine.execution_options(
-            schema_translate_map={None: schema}
+        probe_settings = settings.model_copy(
+            update={"database_url": _database_url(settings.database_url, database)}
         )
+        probe_engine, factory = create_database(probe_settings)
+        await _verify_empty_probe_database(probe_engine, database)
         async with probe_engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
-        factory = async_sessionmaker(probe_engine, expire_on_commit=False)
         result = await run_multi_regime_paper_lifecycle(
-            settings,
+            probe_settings,
             factory,
             run_id=run_id,
         )
+    except BaseException as error:
+        body_error = error
     finally:
-        if created:
-            async with engine.begin() as connection:
-                await connection.execute(DropSchema(schema, cascade=True))
-                remains = await connection.scalar(
-                    text(
-                        "SELECT count(*) FROM information_schema.schemata "
-                        "WHERE schema_name = :schema"
-                    ),
-                    {"schema": schema},
-                )
-            removed = int(remains or 0) == 0
-        await engine.dispose()
+        try:
+            await _cleanup_probe_database(
+                admin_engine,
+                probe_engine,
+                database=database,
+                database_created=created,
+                run_id=run_id,
+            )
+        except BaseException as error:
+            cleanup_error = error
+    if cleanup_error is not None:
+        if body_error is not None:
+            raise BaseExceptionGroup(
+                f"probe execution and cleanup failed for run_id={run_id}",
+                (body_error, cleanup_error),
+            )
+        raise cleanup_error.with_traceback(cleanup_error.__traceback__)
+    if body_error is not None:
+        raise body_error.with_traceback(body_error.__traceback__)
     if result is None:
         raise RuntimeError("isolated PostgreSQL probe produced no result")
-    if not removed:
-        raise RuntimeError("isolated PostgreSQL probe schema was not removed")
     return {
         **result,
         "database": "postgresql",
-        "database_isolation": "temporary_schema",
-        "temporary_schema_removed": True,
+        "database_isolation": "temporary_database",
+        "temporary_database_removed": True,
     }
+
+
+async def _create_probe_database(engine: AsyncEngine, database: str) -> None:
+    quoted = engine.dialect.identifier_preparer.quote(database)
+    async with engine.connect() as raw_connection:
+        connection = await raw_connection.execution_options(
+            isolation_level="AUTOCOMMIT"
+        )
+        await connection.execute(text(f"CREATE DATABASE {quoted} TEMPLATE template0"))
+
+
+async def _drop_probe_database(engine: AsyncEngine, database: str) -> None:
+    quoted = engine.dialect.identifier_preparer.quote(database)
+    async with engine.connect() as raw_connection:
+        connection = await raw_connection.execution_options(
+            isolation_level="AUTOCOMMIT"
+        )
+        await connection.execute(text(f"DROP DATABASE {quoted} WITH (FORCE)"))
+        remains = await connection.scalar(
+            text("SELECT count(*) FROM pg_database WHERE datname = :database"),
+            {"database": database},
+        )
+    if int(remains or 0) != 0:
+        raise RuntimeError("temporary probe database still exists after drop")
+
+
+async def _cleanup_probe_database(
+    admin_engine: AsyncEngine,
+    probe_engine: AsyncEngine | None,
+    *,
+    database: str,
+    database_created: bool,
+    run_id: str,
+    drop_database: Callable[[AsyncEngine, str], Awaitable[None]] = _drop_probe_database,
+) -> None:
+    errors: list[BaseException] = []
+    if probe_engine is not None:
+        try:
+            await probe_engine.dispose()
+        except BaseException as error:
+            errors.append(error)
+    if database_created:
+        try:
+            await drop_database(admin_engine, database)
+        except BaseException as error:
+            errors.append(error)
+    try:
+        await admin_engine.dispose()
+    except BaseException as error:
+        errors.append(error)
+    if errors:
+        error_types = ",".join(type(error).__name__ for error in errors)
+        raise RuntimeError(
+            f"probe cleanup failed for run_id={run_id}; errors={error_types}"
+        ) from errors[0]
+
+
+async def _verify_empty_probe_database(
+    engine: AsyncEngine,
+    expected_database: str,
+) -> None:
+    async with engine.connect() as connection:
+        actual_database = await connection.scalar(text("SELECT current_database()"))
+        table_count = await connection.scalar(
+            text(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+            )
+        )
+    if actual_database != expected_database:
+        raise RuntimeError("probe connection is not using its temporary database")
+    if int(table_count or 0) != 0:
+        raise RuntimeError("temporary probe database is not empty")
+
+
+def _database_url(database_url: str, database: str) -> str:
+    return make_url(database_url).set(database=database).render_as_string(
+        hide_password=False
+    )
 
 
 def _engine(run_id: str) -> MultiRegimeEngine:
@@ -609,6 +700,16 @@ async def _verified_result(
                 select(PortfolioSnapshotRecord).order_by(PortfolioSnapshotRecord.id)
             )
         ).all()
+        durable_fills = (
+            await session.scalars(
+                select(ExecutionFillRecord).order_by(ExecutionFillRecord.id)
+            )
+        ).all()
+        durable_orders = (
+            await session.scalars(
+                select(OMSOrderStateRecord).order_by(OMSOrderStateRecord.id)
+            )
+        ).all()
         approved = int(
             await session.scalar(
                 select(func.count())
@@ -645,6 +746,12 @@ async def _verified_result(
         raise RuntimeError("probe durable checkpoint does not cover the close event")
     if restored_events != expected_events - 1:
         raise RuntimeError("probe restart did not restore the exact canonical prefix")
+    _verify_execution_accounting(
+        position,
+        durable_orders=durable_orders,
+        durable_fills=durable_fills,
+        final_snapshot=snapshots[-1],
+    )
     invariant_failures = [
         {
             "equity": str(snapshot.equity),
@@ -691,7 +798,105 @@ async def _verified_result(
             "net_pnl": str(position.net_pnl),
         },
         "equity_invariant": True,
+        "accounting_reconciliation": {
+            "entry_exit_quantity": True,
+            "oms_fill_quantity": True,
+            "durable_fill_fees": True,
+            "gross_pnl": True,
+            "net_pnl": True,
+            "final_portfolio_pnl": True,
+        },
     }
+
+
+def _verify_execution_accounting(
+    position: DirectionalPaperPosition,
+    *,
+    durable_orders: Sequence[OMSOrderStateRecord],
+    durable_fills: Sequence[ExecutionFillRecord],
+    final_snapshot: PortfolioSnapshotRecord,
+) -> None:
+    tolerance = Decimal("0.000000001")
+    fills_by_order: dict[str, list[ExecutionFillRecord]] = {}
+    for fill in durable_fills:
+        fills_by_order.setdefault(fill.client_order_id, []).append(fill)
+    orders_by_id = {order.client_order_id: order for order in durable_orders}
+    entry_id = position.entry_order.client_order_id
+    exit_ids = tuple(order.client_order_id for order in position.exit_orders)
+    entry_fills = fills_by_order.get(entry_id, [])
+    exit_fills = [
+        fill for order_id in exit_ids for fill in fills_by_order.get(order_id, [])
+    ]
+    entry_quantity = sum(
+        (Decimal(str(fill.quantity)) for fill in entry_fills), Decimal("0")
+    )
+    exit_quantity = sum(
+        (Decimal(str(fill.quantity)) for fill in exit_fills), Decimal("0")
+    )
+    durable_fee = sum(
+        (Decimal(str(fill.fee_amount)) for fill in durable_fills), Decimal("0")
+    )
+    entry_notional = sum(
+        (
+            Decimal(str(fill.price)) * Decimal(str(fill.quantity))
+            for fill in entry_fills
+        ),
+        Decimal("0"),
+    )
+    exit_notional = sum(
+        (
+            Decimal(str(fill.price)) * Decimal(str(fill.quantity))
+            for fill in exit_fills
+        ),
+        Decimal("0"),
+    )
+    recomputed_gross = (
+        exit_notional - entry_notional
+        if position.side is Side.BUY
+        else entry_notional - exit_notional
+    )
+    order_quantities_match = all(
+        order_id in orders_by_id
+        and abs(
+            Decimal(str(orders_by_id[order_id].filled_quantity))
+            - sum(
+                (
+                    Decimal(str(fill.quantity))
+                    for fill in fills_by_order.get(order_id, [])
+                ),
+                Decimal("0"),
+            )
+        )
+        <= tolerance
+        for order_id in (entry_id, *exit_ids)
+    )
+    checks = (
+        abs(entry_quantity - Decimal(str(position.quantity))) <= tolerance,
+        abs(exit_quantity - Decimal(str(position.exited_quantity))) <= tolerance,
+        abs(entry_quantity - exit_quantity) <= tolerance,
+        order_quantities_match,
+        abs(durable_fee - Decimal(str(position.total_fee))) <= tolerance,
+        abs(recomputed_gross - Decimal(str(position.realized_gross_pnl)))
+        <= tolerance,
+        abs(
+            Decimal(str(position.net_pnl))
+            - (recomputed_gross - durable_fee)
+        )
+        <= tolerance,
+        abs(
+            Decimal(str(final_snapshot.total_pnl))
+            - Decimal(str(position.net_pnl))
+        )
+        <= Decimal("0.01"),
+        abs(
+            Decimal(str(final_snapshot.fees))
+            - Decimal(str(position.total_fee))
+        )
+        <= Decimal("0.01"),
+        Decimal(str(final_snapshot.locked_capital)) == 0,
+    )
+    if not all(checks):
+        raise RuntimeError("probe execution accounting reconciliation failed")
 
 
 def _validate_run_id(run_id: str) -> None:

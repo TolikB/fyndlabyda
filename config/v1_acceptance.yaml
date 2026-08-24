@@ -700,7 +700,7 @@ requirements:
   - id: RUNTIME-001
     category: execution
     title: Canonical multi-regime runtime reaches durable risk-approved PAPER fills, positions, protective exits, and PnL while live remains gated
-    status: implemented
+    status: partial
     evidence:
       - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/services/multi_regime_runtime.py

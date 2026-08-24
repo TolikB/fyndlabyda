@@ -78,9 +78,11 @@ This slice now proves canonical-event-to-risk-plan-to-durable PAPER position and
 lifecycle. `scripts/multi_regime_paper_probe.py` extends that proof to the deployment
 PostgreSQL engine without touching application rows: it requires an unarmed
 `paper_test/mock/PAPER` host with no private exchange credentials, creates a unique
-temporary schema, drives a synthetic risk-approved entry through a target-triggered
-protective exit, restarts from the durable checkpoint, verifies fills/positions/PnL
-and the equity invariant, then drops and verifies removal of that exact schema.
+temporary PostgreSQL database from `template0`, directs every probe dependency to
+that database, drives a synthetic risk-approved entry through a target-triggered
+protective exit, restarts from the durable checkpoint, reconciles quantity, OMS,
+fills, fees, gross/net PnL and the equity invariant, then disconnects, drops, and
+verifies removal of that exact database.
 
 Run it only in the isolated validation Compose project:
 
