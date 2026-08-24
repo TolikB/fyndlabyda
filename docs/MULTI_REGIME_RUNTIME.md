@@ -75,5 +75,20 @@ Telegram DAY RESULT and TOTAL sections; directional fills, fees, opens, and clos
 are included, while embedded spread/impact is called out explicitly.
 
 This slice now proves canonical-event-to-risk-plan-to-durable PAPER position and PnL
-lifecycle. It does not claim exchange-hosted directional protective orders,
-directional limited-live/live execution, or completed shadow/paper acceptance windows.
+lifecycle. `scripts/multi_regime_paper_probe.py` extends that proof to the deployment
+PostgreSQL engine without touching application rows: it requires an unarmed
+`paper_test/mock/PAPER` host with no private exchange credentials, creates a unique
+temporary schema, drives a synthetic risk-approved entry through a target-triggered
+protective exit, restarts from the durable checkpoint, verifies fills/positions/PnL
+and the equity invariant, then drops and verifies removal of that exact schema.
+
+Run it only in the isolated validation Compose project:
+
+    python scripts/multi_regime_paper_probe.py \
+      --confirm I_UNDERSTAND_THIS_WRITES_SYNTHETIC_PAPER_DATA \
+      --output artifacts/multi-regime-paper-probe.json
+
+The probe never constructs exchange adapters and fails closed when host paper
+autotrade, live arming/autotrade, or any private exchange credential is present. It
+does not claim exchange-hosted directional protective orders, directional
+limited-live/live execution, or completed shadow/paper acceptance windows.
