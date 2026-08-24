@@ -170,6 +170,7 @@ def test_sqlite_journal_persists_each_transition_and_recovers(
     oms = DurableOMS(journal)
     order = _create(oms)
     prepared = oms.prepare_submit(order.client_order_id, NOW + timedelta(seconds=1))
+    report = _report(order.client_order_id, OrderStatus.ACKNOWLEDGED, "0", offset=2)
 
     assert [entry.event_type for entry in journal.load()] == [
         OMSEventType.CREATED,
@@ -177,11 +178,15 @@ def test_sqlite_journal_persists_each_transition_and_recovers(
     ]
     if oms_module.os.name == "posix":
         assert path.stat().st_mode & 0o777 == 0o600
+    acknowledged = oms.apply_report(report)
     journal.close()
 
     recovered_journal = SqliteOMSJournal(path)
     recovered = DurableOMS(recovered_journal)
-    assert recovered.orders[order.client_order_id] == prepared
+    assert prepared.status is OrderStatus.SUBMITTING
+    assert recovered.orders[order.client_order_id] == acknowledged
+    assert recovered.apply_report(report) == acknowledged
+    assert len(recovered_journal.load()) == 3
     recovered_journal.close()
 
 
@@ -222,6 +227,143 @@ def test_sqlite_journal_rejects_payload_sequence_corruption(
         assert corrupt.closed is True
     finally:
         corrupt.close()
+
+
+def test_sqlite_journal_rejects_sequence_gap_on_load(tmp_path: Path) -> None:
+    path = tmp_path / "gap.sqlite3"
+    initialized = SqliteOMSJournal(path)
+    initialized.close()
+    source = InMemoryOMSJournal()
+    _create(DurableOMS(source))
+    first = source.entries[0]
+    third = first.model_copy(update={"sequence": 3, "event_id": "event-3"})
+    with sqlite3.connect(path) as connection:
+        connection.executemany(
+            "INSERT INTO oms_journal(sequence, payload) VALUES (?, ?)",
+            (
+                (first.sequence, first.model_dump_json()),
+                (third.sequence, third.model_dump_json()),
+            ),
+        )
+
+    gap = SqliteOMSJournal(path)
+    with pytest.raises(ValueError, match="sequence is not contiguous"):
+        gap.load()
+    assert gap.closed is True
+
+
+@pytest.mark.parametrize(
+    ("pragma", "row", "message"),
+    (
+        ("PRAGMA journal_mode=WAL", ("delete",), "requires WAL mode"),
+        ("PRAGMA synchronous", (1,), "requires FULL synchronous mode"),
+    ),
+)
+def test_sqlite_journal_rejects_invalid_durability_pragma(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pragma: str,
+    row: tuple[object, ...],
+    message: str,
+) -> None:
+    class PragmaCursor:
+        def fetchone(self) -> tuple[object, ...]:
+            return row
+
+    class InvalidPragmaConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self.connection = connection
+
+        def execute(
+            self, statement: str, parameters: tuple[object, ...] = ()
+        ) -> object:
+            if statement == pragma:
+                return PragmaCursor()
+            return self.connection.execute(statement, parameters)
+
+        def close(self) -> None:
+            self.connection.close()
+
+    original_connect = oms_module.sqlite3.connect
+
+    def invalid_pragma_connect(
+        *args: object,
+        **kwargs: object,
+    ) -> InvalidPragmaConnection:
+        return InvalidPragmaConnection(original_connect(*args, **kwargs))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(oms_module.sqlite3, "connect", invalid_pragma_connect)
+
+    with pytest.raises(RuntimeError, match=message):
+        SqliteOMSJournal(tmp_path / "invalid-pragma.sqlite3")
+
+
+def test_sqlite_journal_identity_open_guards(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DatabaseListCursor:
+        def __init__(self, row: tuple[object, ...] | None) -> None:
+            self.row = row
+
+        def fetchone(self) -> tuple[object, ...] | None:
+            return self.row
+
+    class DatabaseListConnection:
+        def __init__(self, row: tuple[object, ...] | None) -> None:
+            self.row = row
+
+        def execute(self, _statement: str) -> DatabaseListCursor:
+            return DatabaseListCursor(self.row)
+
+    path = tmp_path / "expected.sqlite3"
+    other = tmp_path / "other.sqlite3"
+    path.touch()
+    other.touch()
+    expected_identity = (1, 2)
+
+    def changed_identity(_path: Path) -> tuple[int, int]:
+        return (3, 4)
+
+    monkeypatch.setattr(oms_module, "_sqlite_path_identity", changed_identity)
+    with pytest.raises(RuntimeError, match="identity changed"):
+        oms_module._verify_sqlite_identity(  # type: ignore[arg-type]
+            DatabaseListConnection((0, "main", str(path))),
+            path,
+            expected_identity,
+        )
+
+    def matching_identity(_path: Path) -> tuple[int, int]:
+        return expected_identity
+
+    monkeypatch.setattr(oms_module, "_sqlite_path_identity", matching_identity)
+    with pytest.raises(RuntimeError, match="did not expose"):
+        oms_module._verify_sqlite_identity(  # type: ignore[arg-type]
+            DatabaseListConnection(None), path, expected_identity
+        )
+    with pytest.raises(RuntimeError, match="unexpected database path"):
+        oms_module._verify_sqlite_identity(  # type: ignore[arg-type]
+            DatabaseListConnection((0, "main", str(other))),
+            path,
+            expected_identity,
+        )
+
+
+def test_sqlite_journal_preserves_new_path_open_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "open-error.sqlite3"
+    original_open = oms_module.os.open
+
+    def fail_journal_open(candidate: str | Path, flags: int, mode: int = 0o777) -> int:
+        if Path(candidate) == path:
+            raise OSError("simulated journal open failure")
+        return original_open(candidate, flags, mode)
+
+    monkeypatch.setattr(oms_module.os, "open", fail_journal_open)
+    with pytest.raises(OSError, match="simulated journal open failure"):
+        SqliteOMSJournal(path)
 
 
 def test_sqlite_journal_recovers_committed_wal_after_abrupt_process_exit(
@@ -328,6 +470,79 @@ def test_sqlite_journal_ambiguous_commit_is_poisoned_and_recovered(
     recovered = SqliteOMSJournal(path)
     assert recovered.load() == (entry,)
     recovered.close()
+
+
+def test_sqlite_journal_preserves_primary_error_when_rollback_fails(
+    tmp_path: Path,
+) -> None:
+    class RollbackFailureConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self.connection = connection
+
+        def execute(
+            self, statement: str, parameters: tuple[object, ...] = ()
+        ) -> sqlite3.Cursor:
+            return self.connection.execute(statement, parameters)
+
+        def rollback(self) -> None:
+            raise sqlite3.OperationalError("simulated rollback failure")
+
+    path = tmp_path / "rollback-failure.sqlite3"
+    journal = SqliteOMSJournal(path)
+    source = InMemoryOMSJournal()
+    order = _create(DurableOMS(source))
+    invalid_entry = OMSJournalEntry(
+        sequence=2,
+        event_id="rollback-failure",
+        event_type=OMSEventType.CREATED,
+        timestamp=NOW,
+        snapshot=order,
+    )
+    assert journal._connection is not None
+    journal._connection = RollbackFailureConnection(  # type: ignore[assignment]
+        journal._connection
+    )
+
+    with pytest.raises(ValueError, match="sequence is not contiguous") as error:
+        journal.append(invalid_entry)
+
+    assert journal.closed is True
+    assert any(
+        "rollback failed: OperationalError" in note
+        for note in getattr(error.value, "__notes__", ())
+    )
+
+
+def test_sqlite_journal_preserves_initialization_error_when_close_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InitializationFailureConnection:
+        def execute(
+            self, _statement: str, _parameters: tuple[object, ...] = ()
+        ) -> sqlite3.Cursor:
+            raise sqlite3.OperationalError("simulated initialization failure")
+
+        def close(self) -> None:
+            raise sqlite3.OperationalError("simulated initialization close failure")
+
+    def failing_connect(
+        *_args: object,
+        **_kwargs: object,
+    ) -> InitializationFailureConnection:
+        return InitializationFailureConnection()
+
+    monkeypatch.setattr(oms_module.sqlite3, "connect", failing_connect)
+
+    with pytest.raises(
+        sqlite3.OperationalError, match="simulated initialization failure"
+    ) as error:
+        SqliteOMSJournal(tmp_path / "initialization-failure.sqlite3")
+
+    assert any(
+        "initialization close failed: OperationalError" in note
+        for note in getattr(error.value, "__notes__", ())
+    )
 
 
 def test_sqlite_journal_preserves_integrity_error_when_close_fails(
