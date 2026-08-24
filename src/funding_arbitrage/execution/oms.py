@@ -439,10 +439,18 @@ def _secure_sqlite_files(path: Path) -> None:
         try:
             descriptor = os.open(candidate, flags)
         except OSError as error:
+            if candidate == path:
+                raise ValueError(
+                    "OMS SQLite journal path must be a regular non-symlink file"
+                ) from error
             raise RuntimeError("OMS SQLite runtime file could not be opened safely") from error
         try:
             details = os.fstat(descriptor)
             if not stat.S_ISREG(details.st_mode):
+                if candidate == path:
+                    raise ValueError(
+                        "OMS SQLite journal path must be a regular non-symlink file"
+                    )
                 raise RuntimeError("OMS SQLite runtime file is not a regular file")
             _set_private_file_mode(descriptor)
             if os.fstat(descriptor).st_mode & 0o077:
