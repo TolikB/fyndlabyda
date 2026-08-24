@@ -11,11 +11,51 @@ from funding_arbitrage.exchanges.base.models import (
 )
 
 
-def test_default_simulator_namespaces_match_current_canary() -> None:
+def test_default_paper_safety_and_namespaces_are_cost_gated() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.paper_simulation_version == "v33-multi-regime-candidate"
-    assert settings.paper_baseline_simulation_version == "v33-multi-regime-baseline"
+    assert settings.paper_initial_balance_usd == Decimal("15000")
+    assert settings.paper_size_grid_values == (
+        Decimal("50"),
+        Decimal("100"),
+        Decimal("250"),
+        Decimal("500"),
+        Decimal("1000"),
+        Decimal("2500"),
+        Decimal("5000"),
+    )
+    assert settings.paper_max_funding_capital_usd == Decimal("100")
+    assert settings.paper_minimum_funding_rate == Decimal("0.0002")
+    assert settings.paper_position_size_usd == Decimal("50")
+    assert settings.paper_max_open_positions == 8
+    assert settings.paper_simulation_version == "v34-cost-gated-candidate"
+    assert settings.paper_baseline_simulation_version == "v34-cost-gated-baseline"
+
+
+def test_paper_size_grid_is_sorted_deduplicated_and_fail_closed() -> None:
+    settings = Settings(_env_file=None, paper_size_grid_usd="250,50,100,50")
+    assert settings.paper_size_grid_values == (
+        Decimal("50"),
+        Decimal("100"),
+        Decimal("250"),
+    )
+
+    for invalid in ("", "50,,100", "50,invalid", "0,50", "-1,50"):
+        with pytest.raises(ValueError, match="PAPER_SIZE_GRID_USD"):
+            Settings(_env_file=None, paper_size_grid_usd=invalid)
+
+    with pytest.raises(ValueError, match="cannot exceed PAPER_INITIAL_BALANCE_USD"):
+        Settings(
+            _env_file=None,
+            paper_initial_balance_usd=Decimal("100"),
+            paper_max_funding_capital_usd=Decimal("101"),
+        )
+    with pytest.raises(ValueError, match="must include a two-leg size"):
+        Settings(
+            _env_file=None,
+            paper_size_grid_usd="60,100",
+            paper_max_funding_capital_usd=Decimal("100"),
+        )
 
 
 def test_funding_reconciliation_limits_are_bounded() -> None:

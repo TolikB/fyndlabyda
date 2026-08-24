@@ -8,7 +8,35 @@ from decimal import Decimal
 from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.market_data.collector import MarketSnapshot
 
-from .models import Opportunity, SizeQuote
+from .models import Opportunity, SizeQuote, StrategyName
+
+_FUNDING_STRATEGIES = frozenset(
+    {
+        StrategyName.SPOT_PERP.value,
+        StrategyName.CROSS_EXCHANGE_FUNDING.value,
+        StrategyName.PERP_PERP.value,
+    }
+)
+
+
+def is_funding_strategy(strategy: str | StrategyName | None) -> bool:
+    return strategy is not None and str(strategy) in _FUNDING_STRATEGIES
+
+
+def next_settlement_rate(
+    opportunity: Opportunity,
+    snapshot: MarketSnapshot,
+    now: datetime,
+) -> Decimal | None:
+    """Return signed funding return for the nearest actually due settlement."""
+
+    projection = next_settlement_projection(
+        opportunity,
+        snapshot,
+        now,
+        Decimal("1"),
+    )
+    return projection[1] if projection is not None else None
 
 
 def target_settlements(

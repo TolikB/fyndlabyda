@@ -106,5 +106,9 @@ async def test_daily_report_lists_every_venue_that_has_positions(database: objec
     venue_section = "\n".join(DailyReportService._venue_lines(reports))
     for venue in venues:
         assert venue.upper() in venue_section
-    assert venue_section.count("FC +$0.14") == len(venues) * 2
-    assert len(venue_section) < 2000
+    assert venue_section.count(
+        "funding +$0.25 · витрати $0.11 · відкрито 1"
+    ) == len(venues)
+    assert "p=positions" not in venue_section
+    assert "FC " not in venue_section
+    assert len(venue_section) < 1000

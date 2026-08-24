@@ -88,6 +88,7 @@ class _PortfolioReport:
     fills: int
     opened: int
     closed: int
+    open_positions: int
     eligible_signals: int
     confirmed_signals: int
     snapshots: int
@@ -116,21 +117,18 @@ def _no_fill_note(
     if fills != 0 or equity_delta != 0:
         return None
     if snapshot_count == 0 or cycle_failures > 0:
-        return (
-            "No paper fills were recorded, but runtime evidence needs attention; "
-            "unchanged equity does not prove that the market had no edge."
-        )
+        return "Без угод: дані або торговий цикл мають помилки — потрібна перевірка."
     if confirmed_signals > 0:
         return (
-            f"{confirmed_signals} confirmed signal(s) were observed, but no paper "
-            "fill was produced; inspect risk and execution gates."
+            f"Без угод: підтверджено сигналів {confirmed_signals}, "
+            "але їх заблокував ризик або виконання."
         )
     if eligible_signals > 0:
         return (
-            f"{eligible_signals} eligible signal(s) were observed, but none reached "
-            "confirmed state; no position was opened."
+            f"Без угод: сигналів після фільтрів {eligible_signals}, "
+            "але жоден не підтвердився."
         )
-    return "No eligible paper signals were observed; equity was unchanged."
+    return "Без угод: сигналів, що пройшли фільтри, не було."
 
 
 def _runner_state(
@@ -244,7 +242,7 @@ class DailyReportService:
                     ),
                 )
             )
-        lines = [f"📊 Paper Arbitrage — {report_date.isoformat()}"]
+        lines = [f"📊 PAPER · {report_date.isoformat()}"]
         for index, report in enumerate(reports):
             if index:
                 lines.append("")
@@ -253,18 +251,10 @@ class DailyReportService:
             lines.extend(
                 [
                     "",
-                    (
-                        "Candidate and baseline are separate virtual portfolios; "
-                        "do not add their PnL together."
-                    ),
+                    "Портфелі незалежні — їхній PnL не потрібно підсумовувати.",
                 ]
             )
-        lines.extend(
-            [
-                "Legacy/pre-fix simulator data is excluded.",
-                "Mode: PAPER ONLY — no live orders",
-            ]
-        )
+        lines.extend(["", "PAPER · реальних ордерів немає"])
         return "\n".join(lines)
 
     async def _load_portfolio_report(
@@ -381,6 +371,12 @@ class DailyReportService:
                 PaperPositionRecord.simulation_version == simulation_version,
             )
         )
+        open_positions = await session.scalar(
+            select(func.count(PaperPositionRecord.id)).where(
+                PaperPositionRecord.simulation_version == simulation_version,
+                PaperPositionRecord.state.in_(("OPENING", "OPEN", "CLOSING")),
+            )
+        )
         if includes_directional:
             directional_fees = await session.scalar(
                 select(func.coalesce(func.sum(ExecutionFillRecord.fee_amount), 0))
@@ -415,10 +411,20 @@ class DailyReportService:
                     PositionStateRecord.closed_at < end,
                 )
             )
+            directional_open_positions = await session.scalar(
+                select(func.count(PositionStateRecord.id)).where(
+                    PositionStateRecord.position_id.like("mrp_%"),
+                    PositionStateRecord.simulation_version == simulation_version,
+                    PositionStateRecord.status.in_(("OPENING", "OPEN", "CLOSING")),
+                )
+            )
             fees = Decimal(str(fees or 0)) + Decimal(str(directional_fees or 0))
             fills = int(fills or 0) + int(directional_fills or 0)
             opened = int(opened or 0) + int(directional_opened or 0)
             closed = int(closed or 0) + int(directional_closed or 0)
+            open_positions = int(open_positions or 0) + int(
+                directional_open_positions or 0
+            )
         if signal_counts is None:
             opportunities = await session.scalar(
                 select(func.count(OpportunityRecord.id)).where(
@@ -490,6 +496,7 @@ class DailyReportService:
             fills=int(fills or 0),
             opened=int(opened or 0),
             closed=int(closed or 0),
+            open_positions=int(open_positions or 0),
             eligible_signals=eligible_count,
             confirmed_signals=confirmed_count,
             snapshots=int(snapshots or 0),
@@ -665,26 +672,25 @@ class DailyReportService:
 
     @staticmethod
     def _venue_lines(reports: tuple[_VenueReport, ...]) -> list[str]:
-        if not reports:
+        active = tuple(
+            report
+            for report in reports
+            if report.day_positions
+            or report.open_positions
+            or report.day_fills
+            or report.day_funding != 0
+            or report.day_costs != 0
+        )
+        if not active:
             return []
-        lines = [
-            "",
-            "EXCHANGES WITH POSITIONS",
-            "p=positions day/open/total; f=fills day/total; F=funding; C=fees+slippage",
-        ]
-        for report in reports:
+        lines = ["", "БІРЖІ СЬОГОДНІ"]
+        for report in active:
             lines.append(
-                f"{report.exchange.upper()} p {report.day_positions}/"
-                f"{report.open_positions}/{report.total_positions}; "
-                f"f {report.day_fills}/{report.total_fills}; "
-                f"D F {_signed_usd(report.day_funding)} "
-                f"C -${report.day_costs:.2f} "
-                f"FC {_signed_usd(report.day_funding_after_costs)}; "
-                f"T F {_signed_usd(report.total_funding)} "
-                f"C -${report.total_costs:.2f} "
-                f"FC {_signed_usd(report.total_funding_after_costs)}"
+                f"{report.exchange.upper()}: "
+                f"funding {_signed_usd(report.day_funding)} · "
+                f"витрати ${report.day_costs:.2f} · "
+                f"відкрито {report.open_positions}"
             )
-        lines.append("FC is venue funding minus fees/slippage, not full position Net PnL.")
         return lines
 
     def _portfolio_lines(self, report: _PortfolioReport) -> list[str]:
@@ -709,53 +715,42 @@ class DailyReportService:
             process_starts=report.process_starts,
             had_prior_snapshot=report.had_prior_snapshot,
         )
+        state_label = {
+            "ATTENTION": "ПОТРІБНА ПЕРЕВІРКА",
+            "RESTARTED": "ПЕРЕЗАПУЩЕНО",
+            "STARTED": "ЗАПУЩЕНО",
+            "OK": "OK",
+        }[runner_state]
+        day_costs = report.day_fees + report.day_slippage
+        total_costs = report.total_fees + report.total_slippage
+        label = (
+            "КАНДИДАТ"
+            if report.label.lower() == "candidate"
+            else "БАЗОВА СТРАТЕГІЯ"
+        )
         return [
-            (
-                f"Portfolio: {report.label} | "
-                f"simulator {report.simulation_version}"
-            ),
-            "",
-            "DAY RESULT",
-            f"Net PnL: {_signed_usd(equity_delta)}",
+            label,
+            "ДЕНЬ",
+            f"Результат: {_signed_usd(equity_delta)}",
             f"Funding: {_signed_usd(report.day_funding)}",
-            f"Fees: -${report.day_fees:.2f}",
-            f"Slippage: -${report.day_slippage:.2f}",
-            *(
-                [
-                    (
-                        "Directional PAPER is included in Net PnL and fees; "
-                        "its spread/impact is embedded in simulated fill prices."
-                    )
-                ]
-                if report.includes_directional
-                else []
+            (
+                f"Витрати: ${day_costs:.2f} "
+                f"(комісії ${report.day_fees:.2f}, "
+                f"slippage ${report.day_slippage:.2f})"
             ),
             (
-                f"Fills: {report.fills} | Opened: {report.opened} "
-                f"| Closed: {report.closed}"
+                f"Угоди: відкрито {report.opened} · закрито {report.closed} · "
+                f"виконань {report.fills}"
             ),
-            (
-                f"Unique eligible signals: {report.eligible_signals} | "
-                f"Confirmed: {report.confirmed_signals}"
-            ),
-            (
-                f"Runner: {runner_state} | snapshots: {report.snapshots} | "
-                f"cycle failures: {report.cycle_failures} | "
-                f"process starts: {report.process_starts}"
-            ),
+            f"Відкриті позиції: {report.open_positions}",
+            f"Статус: {state_label}",
             *([no_trades_note] if no_trades_note is not None else []),
             *self._venue_lines(report.venues),
             "",
-            "TOTAL — CURRENT SIMULATOR",
-            f"Equity: ${report.equity:.2f}",
-            f"Net PnL: {_signed_usd(report.total_pnl)}",
-            f"Return: {total_return_percent:+.4f}%",
+            "ВСЬОГО",
+            f"Баланс: ${report.equity:.2f}",
+            f"PnL: {_signed_usd(report.total_pnl)} ({total_return_percent:+.4f}%)",
             f"Funding: {_signed_usd(report.total_funding)}",
-            f"Fees: -${report.total_fees:.2f}",
-            f"Slippage: -${report.total_slippage:.2f}",
-            (
-                f"Tracking since: {report.first_seen.isoformat(timespec='seconds')}"
-                if report.first_seen is not None
-                else "Tracking since: no snapshots yet"
-            ),
+            f"Витрати: ${total_costs:.2f}",
+            f"Відкриті позиції: {report.open_positions}",
         ]

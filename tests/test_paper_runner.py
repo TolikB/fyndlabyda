@@ -259,6 +259,7 @@ async def test_candidate_can_allocate_profitable_quote_below_baseline_fixed_size
         paper_autotrade=True,
         paper_strategy_profile="candidate",
         paper_position_size_usd=Decimal("250"),
+        paper_max_funding_capital_usd=Decimal("200"),
     )
     baseline_settings = candidate_settings.model_copy(
         update={"paper_strategy_profile": "baseline"}
@@ -331,6 +332,11 @@ async def test_candidate_can_allocate_profitable_quote_below_baseline_fixed_size
 
     monkeypatch.setattr(candidate.executor, "open", paper_open)
     monkeypatch.setattr(baseline.executor, "open", paper_open)
+    monkeypatch.setattr(
+        paper_runner_module,
+        "next_settlement_rate",
+        lambda *_args: Decimal("0.001"),
+    )
 
     await candidate._open_confirmed([opportunity], snapshot)
     await baseline._open_confirmed([opportunity], snapshot)
@@ -348,6 +354,141 @@ async def test_candidate_can_allocate_profitable_quote_below_baseline_fixed_size
 
 
 @pytest.mark.asyncio
+async def test_funding_entries_require_exact_rate_and_share_total_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_autotrade=True,
+        paper_strategy_profile="candidate",
+        paper_initial_balance_usd=Decimal("1000"),
+        paper_venues="bybit,gate",
+        paper_size_grid_usd="50,100",
+        paper_max_funding_capital_usd=Decimal("100"),
+        paper_minimum_funding_rate=Decimal("0.0002"),
+        paper_position_size_usd=Decimal("50"),
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    costs = CostBreakdown(
+        entry_fees=Decimal("0"),
+        exit_fees=Decimal("0"),
+        entry_spread=Decimal("0"),
+        exit_spread=Decimal("0"),
+        entry_slippage=Decimal("0"),
+        exit_slippage=Decimal("0"),
+        borrowing_cost=Decimal("0"),
+        network_cost=Decimal("0"),
+    )
+
+    def opportunity(
+        asset: str,
+        quotes: tuple[Decimal, ...],
+    ) -> Opportunity:
+        return Opportunity(
+            strategy=StrategyName.CROSS_EXCHANGE_FUNDING,
+            asset=asset,
+            venue_a="gate",
+            venue_b="bybit",
+            symbol_a=f"{asset}_USDT",
+            symbol_b=f"{asset}USDT",
+            leg_a_type=InstrumentType.PERPETUAL,
+            leg_b_type=InstrumentType.PERPETUAL,
+            leg_a_side="SELL",
+            leg_b_side="BUY",
+            price_a=Decimal("100"),
+            price_b=Decimal("100"),
+            gross_edge=Decimal("0.001"),
+            net_edge=Decimal("0.0005"),
+            expected_holding_hours=Decimal("1"),
+            net_apr=Decimal("1"),
+            available_liquidity=Decimal("10000"),
+            risk_score=Decimal("10"),
+            status="confirmed",
+            size_quotes=[
+                SizeQuote(
+                    capital=capital,
+                    gross_profit=capital * Decimal("0.001"),
+                    net_profit=capital * Decimal("0.0005"),
+                    net_return_percent=Decimal("0.0005"),
+                    net_apr=Decimal("1"),
+                    costs=costs,
+                )
+                for capital in quotes
+            ],
+        )
+
+    low = opportunity("LOW", (Decimal("50"),))
+    accepted = opportunity("BTC", (Decimal("50"), Decimal("100")))
+    capped = opportunity("ETH", (Decimal("50"),))
+    now = datetime.now(UTC)
+    funding = [
+        FundingSnapshot(
+            exchange=exchange,
+            symbol=symbol,
+            funding_rate=rate,
+            funding_interval_hours=Decimal("1"),
+            next_funding_time=now + timedelta(minutes=30),
+            timestamp=now,
+        )
+        for exchange, symbol, rate in (
+            ("gate", "LOW_USDT", Decimal("0.0001")),
+            ("bybit", "LOWUSDT", Decimal("0")),
+            ("gate", "BTC_USDT", Decimal("0.0003")),
+            ("bybit", "BTCUSDT", Decimal("0")),
+            ("gate", "ETH_USDT", Decimal("0.0004")),
+            ("bybit", "ETHUSDT", Decimal("0")),
+        )
+    ]
+    snapshot = MarketSnapshot([], [], funding, {}, now)
+    opened_capital: list[Decimal] = []
+    rejected: list[str] = []
+
+    async def paper_open(
+        item: Opportunity,
+        capital: Decimal,
+        _snapshot: MarketSnapshot,
+    ) -> PaperPosition:
+        opened_capital.append(capital)
+        return PaperPosition(
+            opportunity_id=item.id,
+            asset=item.asset,
+            strategy=str(item.strategy),
+            capital=capital,
+            state=PositionState.OPEN,
+        )
+
+    def record_rejection(
+        reason: str,
+        _opportunity: Opportunity,
+        *,
+        risk_reasons: tuple[str, ...] = (),
+    ) -> None:
+        del risk_reasons
+        rejected.append(reason)
+
+    monkeypatch.setattr(runner.executor, "open", paper_open)
+    monkeypatch.setattr(runner, "_record_trade_rejection", record_rejection)
+
+    await runner._open_confirmed([low, accepted, capped], snapshot)
+
+    assert opened_capital == [Decimal("50")]
+    assert runner._funding_locked_capital() == Decimal("100")
+    assert rejected == ["minimum_funding_rate", "funding_cap"]
+    assert len(runtime.portfolio.positions) == 1
+
+    await runner.close()
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
 async def test_open_confirmed_rejects_reverse_route_duplicate_exposure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -356,6 +497,7 @@ async def test_open_confirmed_rejects_reverse_route_duplicate_exposure(
         market_data_mode="mock",
         paper_autotrade=True,
         paper_strategy_profile="candidate",
+        paper_max_funding_capital_usd=Decimal("200"),
     )
     adapters = create_public_adapters(settings)
     runtime = RuntimeState(settings, adapters)
@@ -452,6 +594,11 @@ async def test_open_confirmed_rejects_reverse_route_duplicate_exposure(
 
     monkeypatch.setattr(runner.executor, "open", paper_open)
     monkeypatch.setattr(runner, "_record_trade_rejection", record_rejection)
+    monkeypatch.setattr(
+        paper_runner_module,
+        "next_settlement_rate",
+        lambda *_args: Decimal("0.001"),
+    )
     snapshot = MarketSnapshot([], [], [], {}, datetime.now(UTC))
 
     await runner._open_confirmed([gate_to_bybit, bybit_to_gate], snapshot)

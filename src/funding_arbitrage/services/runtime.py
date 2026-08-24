@@ -67,6 +67,7 @@ class RuntimeState:
                 minimum_funding_samples=settings.scanner_minimum_funding_samples,
                 minimum_opportunity_duration_seconds=settings.scanner_minimum_duration_seconds,
             ),
+            size_grid=settings.paper_size_grid_values,
             funding_horizon_hours=settings.paper_funding_horizon_hours,
             allow_spot_short=settings.scanner_allow_spot_short,
             forecast_mode=settings.paper_strategy_profile,

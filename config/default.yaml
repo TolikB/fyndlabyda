@@ -57,7 +57,10 @@ scanner:
   allow_spot_short: false
   borrowing_cost_daily: 0
 paper_portfolio:
-  initial_balance_usd: 15000
+  initial_balance_usd: 1000
+  size_grid_usd: 50,100,250,500,1000,2500,5000
+  max_funding_capital_usd: 100
+  minimum_funding_rate: 0.0002
   reserve_percent: 20
   max_single_opportunity_percent: 20
   max_single_asset_percent: 30
@@ -71,18 +74,18 @@ paper_portfolio:
   loop_interval_seconds: 10
   confirmation_seconds: 30
   max_hold_seconds: 900
-  position_size_usd: 250
-  max_open_positions: 10
+  position_size_usd: 50
+  max_open_positions: 8
   auto_init_database: false
   history_refresh_seconds: 3600
   orderbook_symbol_limit: 10
   market_asset_limit: 12
   history_symbol_limit: 5
   market_persist_interval_seconds: 300
-  simulation_version: v33-multi-regime-candidate
+  simulation_version: v34-cost-gated-candidate
   strategy_profile: candidate
   comparison_enabled: false
-  baseline_simulation_version: v33-multi-regime-baseline
+  baseline_simulation_version: v34-cost-gated-baseline
   exit_edge_miss_cycles: 2
   funding_horizon_hours: 24
   funding_reconciliation_window_seconds: 7200

@@ -101,8 +101,10 @@ class ReportSession:
             4,
             1,
             1,
+            1,
             Decimal("0.25"),
             2,
+            1,
             1,
             1,
             10,
@@ -166,16 +168,19 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
 
     assert result
     assert len(sent) == 1
-    assert "2026-08-09" in sent[0]
-    assert "DAY RESULT" in sent[0]
-    assert "Net PnL: +$12.00" in sent[0]
+    assert "📊 PAPER · 2026-08-09" in sent[0]
+    assert "ДЕНЬ" in sent[0]
+    assert "Результат: +$12.00" in sent[0]
     assert "Funding: +$8.00" in sent[0]
-    assert "Fees: -$1.25" in sent[0]
-    assert "Fills: 6 | Opened: 2 | Closed: 2" in sent[0]
-    assert "Directional PAPER is included in Net PnL and fees" in sent[0]
-    assert "TOTAL — CURRENT SIMULATOR" in sent[0]
-    assert "Return: +0.1200%" in sent[0]
-    assert "Legacy/pre-fix simulator data is excluded." in sent[0]
+    assert "Витрати: $1.45 (комісії $1.25, slippage $0.20)" in sent[0]
+    assert "Угоди: відкрито 2 · закрито 2 · виконань 6" in sent[0]
+    assert sent[0].count("Відкриті позиції: 2") == 2
+    assert "ВСЬОГО" in sent[0]
+    assert "Баланс: $10012.00" in sent[0]
+    assert "PnL: +$12.00 (+0.1200%)" in sent[0]
+    assert "PAPER · реальних ордерів немає" in sent[0]
+    assert "simulator" not in sent[0]
+    assert "snapshots:" not in sent[0]
     assert len(session.added) == 1
 
     session.values.append(session.added[0])
@@ -231,6 +236,8 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
         0,
         0,
         0,
+        0,
+        0,
         96,
         0,
         0,
@@ -247,11 +254,11 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
     monkeypatch.setattr(service.notifier, "send_message", send)
 
     assert await service.check_and_send(datetime(2026, 8, 11, 0, 1, tzinfo=UTC))
-    assert "Net PnL: +$0.00" in sent[0]
-    assert "No eligible paper signals were observed; equity was unchanged." in sent[0]
-    assert "Unique eligible signals: 0 | Confirmed: 0" in sent[0]
-    assert "Runner: OK | snapshots: 96 | cycle failures: 0 | process starts: 0" in sent[0]
-    assert "simulator v26-oos-candidate" in sent[0]
+    assert "Результат: +$0.00" in sent[0]
+    assert "Без угод: сигналів, що пройшли фільтри, не було." in sent[0]
+    assert "Статус: OK" in sent[0]
+    assert "Відкриті позиції: 0" in sent[0]
+    assert "v26-oos-candidate" not in sent[0]
 
 
 @pytest.mark.asyncio
@@ -308,6 +315,8 @@ async def test_daily_report_includes_isolated_baseline_results(
         0,
         0,
         0,
+        0,
+        0,
         33,
         0,
         100,
@@ -323,6 +332,7 @@ async def test_daily_report_includes_isolated_baseline_results(
         2,
         1,
         0,
+        1,
         100,
         0,
         1,
@@ -339,13 +349,14 @@ async def test_daily_report_includes_isolated_baseline_results(
     monkeypatch.setattr(service.notifier, "send_message", send)
 
     assert await service.check_and_send(datetime(2026, 8, 15, 0, 1, tzinfo=UTC))
-    assert "Portfolio: candidate | simulator v29-oos-candidate" in sent[0]
-    assert "Portfolio: baseline | simulator v29-oos-baseline" in sent[0]
-    assert "Equity: $6249.64" in sent[0]
-    assert "Net PnL: -$0.36" in sent[0]
+    assert "КАНДИДАТ" in sent[0]
+    assert "БАЗОВА СТРАТЕГІЯ" in sent[0]
+    assert "Баланс: $6249.64" in sent[0]
+    assert "PnL: -$0.36 (-0.0058%)" in sent[0]
     assert "Funding: +$0.37" in sent[0]
-    assert "Fees: -$0.26" in sent[0]
-    assert "Candidate and baseline are separate virtual portfolios" in sent[0]
+    assert "Витрати: $0.26" in sent[0]
+    assert "Портфелі незалежні" in sent[0]
+    assert "v29-oos-" not in sent[0]
 
 
 def test_daily_report_distinguishes_unconfirmed_signals_from_no_edge() -> None:
@@ -359,8 +370,7 @@ def test_daily_report_distinguishes_unconfirmed_signals_from_no_edge() -> None:
     )
 
     assert note == (
-        "10 eligible signal(s) were observed, but none reached confirmed state; "
-        "no position was opened."
+        "Без угод: сигналів після фільтрів 10, але жоден не підтвердився."
     )
 
 
@@ -375,8 +385,8 @@ def test_daily_report_does_not_call_unchanged_equity_no_edge_after_failure() -> 
     )
 
     assert note is not None
-    assert "runtime evidence needs attention" in note
-    assert "does not prove that the market had no edge" in note
+    assert "торговий цикл мають помилки" in note
+    assert "потрібна перевірка" in note
     assert _runner_state(
         snapshot_count=0,
         cycle_failures=1,

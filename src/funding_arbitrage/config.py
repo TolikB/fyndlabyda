@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -332,7 +332,19 @@ class Settings(BaseSettings):
     htx_api_secret: SecretStr = Field(default=SecretStr(""), alias="HTX_API_SECRET")
     market_data_stale_seconds: int = Field(default=30, alias="MARKET_DATA_STALE_SECONDS")
     paper_initial_balance_usd: Decimal = Field(
-        default=Decimal("15000"), alias="PAPER_INITIAL_BALANCE_USD"
+        default=Decimal("15000"), gt=0, alias="PAPER_INITIAL_BALANCE_USD"
+    )
+    paper_size_grid_usd: str = Field(
+        default="50,100,250,500,1000,2500,5000", alias="PAPER_SIZE_GRID_USD"
+    )
+    paper_max_funding_capital_usd: Decimal = Field(
+        default=Decimal("100"), gt=0, alias="PAPER_MAX_FUNDING_CAPITAL_USD"
+    )
+    paper_minimum_funding_rate: Decimal = Field(
+        default=Decimal("0.0002"),
+        gt=0,
+        le=Decimal("0.01"),
+        alias="PAPER_MINIMUM_FUNDING_RATE",
     )
     paper_venues: str = Field(
         default="bybit,gate,okx,binance,hyperliquid,mexc,kucoin,htx", alias="PAPER_VENUES"
@@ -368,9 +380,9 @@ class Settings(BaseSettings):
     paper_confirmation_seconds: int = Field(default=30, alias="PAPER_CONFIRMATION_SECONDS")
     paper_max_hold_seconds: int = Field(default=900, alias="PAPER_MAX_HOLD_SECONDS")
     paper_position_size_usd: Decimal = Field(
-        default=Decimal("250"), alias="PAPER_POSITION_SIZE_USD"
+        default=Decimal("50"), gt=0, alias="PAPER_POSITION_SIZE_USD"
     )
-    paper_max_open_positions: int = Field(default=10, alias="PAPER_MAX_OPEN_POSITIONS")
+    paper_max_open_positions: int = Field(default=8, ge=1, alias="PAPER_MAX_OPEN_POSITIONS")
     paper_settlement_interval_seconds: int = Field(
         default=28800, alias="PAPER_SETTLEMENT_INTERVAL_SECONDS"
     )
@@ -383,14 +395,14 @@ class Settings(BaseSettings):
     )
     paper_auto_init_database: bool = Field(default=False, alias="PAPER_AUTO_INIT_DATABASE")
     paper_simulation_version: str = Field(
-        default="v33-multi-regime-candidate", alias="PAPER_SIMULATION_VERSION"
+        default="v34-cost-gated-candidate", alias="PAPER_SIMULATION_VERSION"
     )
     paper_strategy_profile: Literal["baseline", "candidate"] = Field(
         default="candidate", alias="PAPER_STRATEGY_PROFILE"
     )
     paper_comparison_enabled: bool = Field(default=False, alias="PAPER_COMPARISON_ENABLED")
     paper_baseline_simulation_version: str = Field(
-        default="v33-multi-regime-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
+        default="v34-cost-gated-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
     )
     paper_exit_edge_miss_cycles: int = Field(default=2, alias="PAPER_EXIT_EDGE_MISS_CYCLES")
     paper_funding_horizon_hours: Decimal = Field(
@@ -567,6 +579,21 @@ class Settings(BaseSettings):
         return tuple(value.strip() for value in self.paper_venues.split(",") if value.strip())
 
     @property
+    def paper_size_grid_values(self) -> tuple[Decimal, ...]:
+        raw_values = [value.strip() for value in self.paper_size_grid_usd.split(",")]
+        if not raw_values or any(not value for value in raw_values):
+            raise ValueError("PAPER_SIZE_GRID_USD must contain positive decimal values")
+        try:
+            values = tuple(Decimal(value) for value in raw_values)
+        except InvalidOperation as exc:
+            raise ValueError(
+                "PAPER_SIZE_GRID_USD must contain positive decimal values"
+            ) from exc
+        if any(value <= 0 for value in values):
+            raise ValueError("PAPER_SIZE_GRID_USD must contain positive decimal values")
+        return tuple(sorted(set(values)))
+
+    @property
     def live_venue_values(self) -> tuple[str, ...]:
         return tuple(
             value.strip().lower() for value in self.live_venues.split(",") if value.strip()
@@ -740,6 +767,9 @@ def get_settings() -> Settings:
         paper = raw.get("paper_portfolio", {})
         for yaml_key, field_name in {
             "initial_balance_usd": "paper_initial_balance_usd",
+            "size_grid_usd": "paper_size_grid_usd",
+            "max_funding_capital_usd": "paper_max_funding_capital_usd",
+            "minimum_funding_rate": "paper_minimum_funding_rate",
             "reserve_percent": "paper_reserve_percent",
             "max_single_opportunity_percent": "paper_max_single_opportunity_percent",
             "max_single_asset_percent": "paper_max_single_asset_percent",
@@ -913,6 +943,16 @@ def _validate_safe_values(settings: Settings) -> None:
         <= settings.live_private_stream_reconnect_max_seconds
     ):
         raise ValueError("live private stream reconnect bounds are invalid")
+    size_grid = settings.paper_size_grid_values
+    if settings.paper_max_funding_capital_usd > settings.paper_initial_balance_usd:
+        raise ValueError(
+            "PAPER_MAX_FUNDING_CAPITAL_USD cannot exceed PAPER_INITIAL_BALANCE_USD"
+        )
+    if size_grid[0] * Decimal("2") > settings.paper_max_funding_capital_usd:
+        raise ValueError(
+            "PAPER_SIZE_GRID_USD must include a two-leg size within "
+            "PAPER_MAX_FUNDING_CAPITAL_USD"
+        )
     if settings.run_mode == "paper_test" and settings.execution_mode != "paper":
         raise ValueError("paper_test requires EXECUTION_MODE=paper")
     if settings.run_mode == "paper_test" and settings.market_data_mode not in {

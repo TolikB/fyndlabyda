@@ -55,6 +55,8 @@ from funding_arbitrage.opportunity.debounce import (
 )
 from funding_arbitrage.opportunity.models import Opportunity
 from funding_arbitrage.opportunity.settlement import (
+    is_funding_strategy,
+    next_settlement_rate,
     settlement_continuation_allowed,
     settlement_entry_allowed,
     target_settlement_events,
@@ -667,6 +669,22 @@ class PaperTestRunner:
                     snapshot_scope="combined",
                 )
 
+    def _funding_locked_capital(self) -> Decimal:
+        return sum(
+            (
+                position.capital * Decimal("2")
+                for position in self.runtime.portfolio.positions.values()
+                if position.state
+                in {
+                    PositionState.OPENING,
+                    PositionState.OPEN,
+                    PositionState.CLOSING,
+                }
+                and is_funding_strategy(position.strategy)
+            ),
+            Decimal("0"),
+        )
+
     async def _open_confirmed(
         self, opportunities: list[Opportunity], snapshot: MarketSnapshot
     ) -> None:
@@ -687,6 +705,34 @@ class PaperTestRunner:
             ):
                 self._record_trade_rejection("duplicate_exposure", opportunity)
                 continue
+            if is_funding_strategy(opportunity.strategy):
+                settlement_rate = next_settlement_rate(
+                    opportunity,
+                    snapshot,
+                    snapshot.captured_at,
+                )
+                if (
+                    settlement_rate is None
+                    or settlement_rate < self.settings.paper_minimum_funding_rate
+                ):
+                    self._record_trade_rejection(
+                        "minimum_funding_rate",
+                        opportunity,
+                    )
+                    continue
+                funding_locked = self._funding_locked_capital()
+                allowed_quotes = [
+                    quote
+                    for quote in opportunity.size_quotes
+                    if funding_locked + quote.capital * Decimal("2")
+                    <= self.settings.paper_max_funding_capital_usd
+                ]
+                if not allowed_quotes:
+                    self._record_trade_rejection("funding_cap", opportunity)
+                    continue
+                opportunity = opportunity.model_copy(
+                    update={"size_quotes": allowed_quotes}
+                )
             if self.settings.paper_strategy_profile == "baseline":
                 quote = next(
                     (

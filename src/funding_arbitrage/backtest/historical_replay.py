@@ -83,6 +83,8 @@ from funding_arbitrage.opportunity.engine import OpportunityEngine
 from funding_arbitrage.opportunity.filters import OpportunityFilterConfig
 from funding_arbitrage.opportunity.models import FeeSchedule, Opportunity, SizeQuote
 from funding_arbitrage.opportunity.settlement import (
+    is_funding_strategy,
+    next_settlement_rate,
     settlement_continuation_allowed,
     settlement_entry_allowed,
     target_settlement_events,
@@ -1111,6 +1113,7 @@ def _opportunity_engine(settings: Settings, profile: str) -> OpportunityEngine:
             minimum_funding_samples=settings.scanner_minimum_funding_samples,
             minimum_opportunity_duration_seconds=0,
         ),
+        size_grid=settings.paper_size_grid_values,
         funding_horizon_hours=settings.paper_funding_horizon_hours,
         allow_spot_short=settings.scanner_allow_spot_short,
         forecast_mode=profile,
@@ -1224,20 +1227,40 @@ def _select_quote(
     settings: Settings,
     correlation_groups: tuple[frozenset[str], ...],
 ) -> SizeQuote | None:
+    funding_room: Decimal | None = None
+    if is_funding_strategy(opportunity.strategy):
+        settlement_rate = next_settlement_rate(opportunity, snapshot, timestamp)
+        if (
+            settlement_rate is None
+            or settlement_rate < settings.paper_minimum_funding_rate
+        ):
+            return None
+        funding_locked = sum(
+            (
+                position.capital * Decimal("2")
+                for position in positions.values()
+                if is_funding_strategy(position.opportunity.strategy)
+            ),
+            Decimal("0"),
+        )
+        funding_room = settings.paper_max_funding_capital_usd - funding_locked
     viable = [
         quote
         for quote in opportunity.size_quotes
-        if quote.fully_filled and quote.net_profit > 0 and quote.capital <= available
+        if quote.fully_filled
+        and quote.net_profit > 0
+        and quote.capital <= available
+        and (
+            funding_room is None
+            or quote.capital * Decimal("2") <= funding_room
+        )
     ]
     if profile == "baseline":
         return next(
             (
                 quote
-                for quote in opportunity.size_quotes
+                for quote in viable
                 if quote.capital >= settings.paper_position_size_usd
-                and quote.net_profit > 0
-                and quote.fully_filled
-                and quote.capital <= available
             ),
             None,
         )

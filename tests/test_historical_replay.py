@@ -656,6 +656,11 @@ def test_historical_snapshots_mark_open_positions_and_reconcile_final_pnl(
         "_opportunity_engine",
         lambda _settings, _profile: FixedEngine(),
     )
+    monkeypatch.setattr(
+        historical_replay_module,
+        "next_settlement_rate",
+        lambda *_args: Decimal("0.001"),
+    )
     instruments = [
         NormalizedInstrument(
             exchange="bybit",
@@ -706,6 +711,7 @@ def test_historical_snapshots_mark_open_positions_and_reconcile_final_pnl(
         Decimal("1000"),
         Settings(
             PAPER_POSITION_SIZE_USD="250",
+            PAPER_MAX_FUNDING_CAPITAL_USD="500",
             BACKTEST_FILL_MODEL_ENABLED=False,
         ),
     )
