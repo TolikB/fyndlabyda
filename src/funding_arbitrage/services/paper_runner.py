@@ -23,7 +23,6 @@ from funding_arbitrage.database.models import (
     PortfolioSnapshotRecord,
 )
 from funding_arbitrage.database.repositories.market_data import (
-    save_funding_history,
     save_market_snapshot,
     save_opportunities,
     save_paper_funding_payment,
@@ -76,6 +75,10 @@ class IncompleteMarketSnapshotError(Exception):
     def __init__(self, venues: tuple[str, ...]) -> None:
         self.venues = venues
         super().__init__(f"incomplete venues: {','.join(venues)}")
+
+
+class FundingReconciliationExhaustedError(Exception):
+    """A closed position exhausted its bounded final-history retries."""
 
 
 async def _persist_runtime_incident(
@@ -199,6 +202,10 @@ class PaperTestRunner:
         self._position_by_key: dict[str, str] = {}
         self._position_ids_by_exposure_key: dict[str, set[str]] = {}
         self._next_funding_due: dict[tuple[str, str, str], datetime] = {}
+        self._funding_apply_lock = asyncio.Lock()
+        self._pending_funding_reconciliation_failures: dict[
+            str, PaperPosition
+        ] = {}
         self._last_history_refresh: datetime | None = None
         self._history_persist_snapshot_at: datetime | None = None
         self._last_history_symbols: dict[str, tuple[str, ...]] = {}
@@ -287,7 +294,7 @@ class PaperTestRunner:
         required_books: dict[str, set[tuple[str, InstrumentType]]] = {}
         discovery_books: dict[str, set[tuple[str, InstrumentType]]] = {}
         for runner in runners:
-            for venue, symbols in runner._required_funding_symbols().items():
+            for venue, symbols in runner._required_funding_symbols(now).items():
                 required_history.setdefault(venue, set()).update(symbols)
             for venue, symbols in runner._due_funding_symbols(now).items():
                 forced_history.setdefault(venue, set()).update(symbols)
@@ -295,6 +302,8 @@ class PaperTestRunner:
                 required_books.setdefault(venue, set()).update(books)
             for venue, candidate_books in runner._candidate_orderbook_symbols.items():
                 discovery_books.setdefault(venue, set()).update(candidate_books)
+        for runner in runners:
+            await runner._persist_pending_funding_reconciliation_failures()
         normalized_history = {
             venue: tuple(sorted(symbols)) for venue, symbols in required_history.items()
         }
@@ -531,6 +540,8 @@ class PaperTestRunner:
                             extra={"position_id": position.id},
                         )
                         continue
+                if position.state is PositionState.CLOSED:
+                    self.runtime.portfolio.total_realized_pnl += position.pnl.total_pnl
                 if position.state is PositionState.OPEN:
                     self._register_open_position(position)
 
@@ -826,18 +837,33 @@ class PaperTestRunner:
         }
         history_by_key = snapshot.funding_history or {}
         for position in self.runtime.portfolio.positions.values():
-            if position.state is not PositionState.OPEN or position.opened_at is None:
+            if position.opened_at is None:
+                continue
+            if position.state is PositionState.OPEN:
+                effective_end = now
+            elif (
+                position.state is PositionState.CLOSED
+                and position.closed_at is not None
+                and self._funding_reconciliation_active(position, now)
+            ):
+                effective_end = min(now, position.closed_at)
+            else:
                 continue
             for leg in self._funding_legs(position):
                 history = history_by_key.get((leg.exchange, leg.symbol), [])
                 current = funding_by_key.get((leg.exchange, leg.symbol))
                 for event in sorted(history, key=lambda item: item.funding_timestamp):
-                    if not position.opened_at < event.funding_timestamp <= now:
+                    if not position.opened_at < event.funding_timestamp <= effective_end:
                         continue
-                    interval_hours = (
+                    marker = self._funding_event_marker(
+                        event.exchange, event.symbol, event.funding_timestamp
+                    )
+                    if marker in position.settled_funding_events:
+                        continue
+                    interval_hours = _history_interval_hours(history, event) or (
                         current.funding_interval_hours
                         if current is not None
-                        else _history_interval_hours(history, event)
+                        else Decimal("8")
                     )
                     event_funding = FundingSnapshot(
                         exchange=event.exchange,
@@ -853,6 +879,7 @@ class PaperTestRunner:
                         event_funding,
                         history_event=event,
                     )
+            self._complete_funding_reconciliation_after_poll(position, snapshot)
 
     async def _settle_mock_funding(self, snapshot: MarketSnapshot) -> None:
         now = snapshot.captured_at
@@ -888,46 +915,88 @@ class PaperTestRunner:
         *,
         history_event: FundingHistoryPoint | None = None,
     ) -> None:
+        if position.opened_at is None or funding.timestamp <= position.opened_at:
+            raise ValueError("funding event is outside the position holding window")
+        if position.state is PositionState.CLOSED and (
+            position.closed_at is None or funding.timestamp > position.closed_at
+        ):
+            raise ValueError("funding event is outside the position holding window")
+        if position.state not in {PositionState.OPEN, PositionState.CLOSED}:
+            raise ValueError("funding event requires an open or closed position")
+        async with self._funding_apply_lock:
+            await self._apply_funding_event_locked(
+                position,
+                leg,
+                funding,
+                history_event=history_event,
+            )
+
+    async def _apply_funding_event_locked(
+        self,
+        position: PaperPosition,
+        leg: PaperFill,
+        funding: FundingSnapshot,
+        *,
+        history_event: FundingHistoryPoint | None,
+    ) -> None:
+        marker = self._funding_event_marker(
+            funding.exchange, funding.symbol, funding.timestamp
+        )
+        if marker in position.settled_funding_events:
+            return
+        calculated_pnl = self.runtime.portfolio.calculate_funding_pnl(
+            leg.side, position.capital, funding.funding_rate
+        )
         async with self.session_factory() as session:
-            existing = await session.scalar(
-                select(PaperFundingPaymentRecord).where(
-                    PaperFundingPaymentRecord.position_id == position.id,
-                    PaperFundingPaymentRecord.exchange == funding.exchange,
-                    PaperFundingPaymentRecord.symbol == funding.symbol,
-                    PaperFundingPaymentRecord.funding_timestamp == funding.timestamp,
-                )
-            )
-            if existing is not None:
-                # Repair ledgers written by an older simulator build where the
-                # payment could commit between periodic market-history writes.
-                if history_event is not None:
-                    await save_funding_history(session, [history_event])
-                self._mark_funding_settled(
-                    position, funding.exchange, funding.symbol, funding.timestamp
-                )
-                return
-            pnl = self.runtime.portfolio.calculate_funding_pnl(
-                leg.side, position.capital, funding.funding_rate
-            )
-            await save_paper_funding_payment(
+            payment = await save_paper_funding_payment(
                 session,
                 position.id,
                 funding,
                 position.capital,
-                pnl,
+                calculated_pnl,
                 history_event=history_event,
             )
-            self.runtime.portfolio.settle_funding(
-                position.id, funding, position.capital, leg.side
+        durable_funding = FundingSnapshot(
+            exchange=payment.exchange,
+            symbol=payment.symbol,
+            funding_rate=Decimal(str(payment.funding_rate)),
+            funding_interval_hours=funding.funding_interval_hours,
+            timestamp=payment.funding_timestamp,
+        )
+        marker = self._funding_event_marker(
+            payment.exchange, payment.symbol, durable_funding.timestamp
+        )
+        if marker not in position.settled_funding_events:
+            self.runtime.portfolio.settle_recorded_funding(
+                position.id,
+                durable_funding,
+                Decimal(str(payment.pnl)),
             )
             position.funding_events += 1
-            self._mark_funding_settled(
-                position, funding.exchange, funding.symbol, funding.timestamp
-            )
+        self._mark_funding_settled(
+            position,
+            payment.exchange,
+            payment.symbol,
+            durable_funding.timestamp,
+        )
 
     @staticmethod
     def _funding_key(exchange: str, symbol: str) -> str:
         return f"{exchange}|{symbol}"
+
+    @classmethod
+    def _funding_event_marker(
+        cls, exchange: str, symbol: str, timestamp: datetime
+    ) -> str:
+        normalized = (
+            timestamp.replace(tzinfo=UTC)
+            if timestamp.tzinfo is None
+            else timestamp.astimezone(UTC)
+        )
+        return (
+            f"{cls._funding_key(exchange, symbol)}|"
+            f"{normalized.isoformat(timespec='microseconds')}"
+        )
 
     @classmethod
     def _mark_funding_settled(
@@ -942,14 +1011,144 @@ class PaperTestRunner:
             if timestamp.tzinfo is None
             else timestamp.astimezone(UTC)
         )
+        position.settled_funding_events.add(
+            cls._funding_event_marker(exchange, symbol, normalized)
+        )
         key = cls._funding_key(exchange, symbol)
         previous = position.settled_funding_at.get(key)
         if previous is None or normalized > previous:
             position.settled_funding_at[key] = normalized
 
+    def _schedule_funding_reconciliation(
+        self, position: PaperPosition, observed_at: datetime
+    ) -> None:
+        if (
+            self.settings.market_data_mode == "mock"
+            or position.state is not PositionState.CLOSED
+            or position.closed_at is None
+            or position.funding_reconciliation_until is not None
+        ):
+            return
+        deadline = position.closed_at + timedelta(
+            seconds=self.settings.paper_funding_reconciliation_window_seconds
+        )
+        position.funding_reconciliation_until = deadline
+        position.funding_reconciliation_next_poll_at = min(observed_at, deadline)
+        position.funding_reconciliation_completed_at = None
+        position.funding_reconciliation_post_deadline_attempts = 0
+        position.funding_reconciliation_failed_at = None
+        position.funding_reconciliation_failure_reason = None
+
+    def _funding_reconciliation_active(
+        self, position: PaperPosition, _observed_at: datetime
+    ) -> bool:
+        if position.state is not PositionState.CLOSED or position.closed_at is None:
+            return False
+        if position.funding_reconciliation_completed_at is not None:
+            return False
+        if position.funding_reconciliation_failed_at is not None:
+            return False
+        deadline = position.funding_reconciliation_until
+        if deadline is None:
+            return False
+        return True
+
+    def _complete_funding_reconciliation_after_poll(
+        self, position: PaperPosition, snapshot: MarketSnapshot
+    ) -> None:
+        if position.state is not PositionState.CLOSED:
+            return
+        deadline = position.funding_reconciliation_until
+        if deadline is None or snapshot.captured_at < deadline:
+            return
+        required_keys = {
+            (leg.exchange, leg.symbol) for leg in self._funding_legs(position)
+        }
+        if not required_keys:
+            return
+        refreshed_at = snapshot.funding_history_refreshed
+        if any(
+            key not in refreshed_at
+            or self._normalize_funding_timestamp(refreshed_at[key]) < deadline
+            for key in required_keys
+        ):
+            return
+        position.funding_reconciliation_completed_at = snapshot.captured_at
+        position.funding_reconciliation_next_poll_at = None
+
+    def _fail_funding_reconciliation(
+        self, position: PaperPosition, observed_at: datetime
+    ) -> None:
+        position.funding_reconciliation_failed_at = observed_at
+        position.funding_reconciliation_failure_reason = (
+            "post_deadline_attempts_exhausted"
+        )
+        position.funding_reconciliation_next_poll_at = None
+        self._pending_funding_reconciliation_failures[position.id] = position
+        logger.error(
+            "paper_funding_reconciliation_exhausted",
+            extra={
+                "event": "paper_funding_reconciliation",
+                "position_id": position.id,
+                "attempts": position.funding_reconciliation_post_deadline_attempts,
+            },
+        )
+
+    async def _persist_pending_funding_reconciliation_failures(self) -> None:
+        for position_id, position in tuple(
+            self._pending_funding_reconciliation_failures.items()
+        ):
+            async with self.session_factory() as session:
+                await save_paper_position(session, position, commit=False)
+                await save_paper_runtime_incident(
+                    session,
+                    (self.settings.paper_simulation_version,),
+                    "funding_reconciliation",
+                    FundingReconciliationExhaustedError.__name__,
+                    datetime.now(UTC),
+                    commit=False,
+                )
+                await session.commit()
+            self._pending_funding_reconciliation_failures.pop(position_id, None)
+
+    @staticmethod
+    def _normalize_funding_timestamp(timestamp: datetime) -> datetime:
+        return (
+            timestamp.replace(tzinfo=UTC)
+            if timestamp.tzinfo is None
+            else timestamp.astimezone(UTC)
+        )
+
     def _due_funding_symbols(self, now: datetime) -> dict[str, list[str]]:
         result: dict[str, list[str]] = {}
         for position in self.runtime.portfolio.positions.values():
+            if self._funding_reconciliation_active(position, now):
+                next_poll_at = position.funding_reconciliation_next_poll_at
+                if next_poll_at is None or now >= next_poll_at:
+                    deadline = position.funding_reconciliation_until
+                    if deadline is not None and now >= deadline:
+                        attempts = (
+                            position.funding_reconciliation_post_deadline_attempts
+                        )
+                        max_attempts = (
+                            self.settings.paper_funding_reconciliation_max_post_deadline_attempts
+                        )
+                        if attempts >= max_attempts:
+                            self._fail_funding_reconciliation(position, now)
+                            continue
+                        position.funding_reconciliation_post_deadline_attempts += 1
+                    for leg in self._funding_legs(position):
+                        result.setdefault(leg.exchange, []).append(leg.symbol)
+                    next_poll_at = now + timedelta(
+                        seconds=self.settings.paper_funding_reconciliation_poll_seconds
+                    )
+                    if deadline is not None and now < deadline:
+                        position.funding_reconciliation_next_poll_at = min(
+                            next_poll_at, deadline
+                        )
+                    else:
+                        position.funding_reconciliation_next_poll_at = next_poll_at
+                continue
             if position.state is not PositionState.OPEN:
                 continue
             if position.target_funding_events:
@@ -967,13 +1166,18 @@ class PaperTestRunner:
             venue: list(dict.fromkeys(symbols)) for venue, symbols in result.items()
         }
 
-    def _required_funding_symbols(self) -> dict[str, list[str]]:
+    def _required_funding_symbols(
+        self, now: datetime | None = None
+    ) -> dict[str, list[str]]:
+        observed_at = now or datetime.now(UTC)
         result: dict[str, list[str]] = {
             venue: list(symbols)
             for venue, symbols in self._candidate_history_symbols.items()
         }
         for position in self.runtime.portfolio.positions.values():
-            if position.state is not PositionState.OPEN:
+            if position.state is not PositionState.OPEN and not (
+                self._funding_reconciliation_active(position, observed_at)
+            ):
                 continue
             for leg in self._funding_legs(position):
                 result.setdefault(leg.exchange, []).append(leg.symbol)
@@ -1099,12 +1303,13 @@ class PaperTestRunner:
                 # after a process restart, without inventing a paper fill.
                 position.exit_requested_at = now
                 position.exit_requested_reason = exit_reason
-            if pending_target_funding or position.exit_requested_at is None:
+            if position.exit_requested_at is None:
                 continue
             await self.executor.close(position, snapshot)
             if position.state is not PositionState.CLOSED:
                 continue
             self.runtime.portfolio.close_position(position.id)
+            self._schedule_funding_reconciliation(position, now)
             self._unregister_open_position(position)
 
     @staticmethod
@@ -1308,14 +1513,14 @@ async def _wait_for_next_cycle(
 
 def _history_interval_hours(
     history: list[FundingHistoryPoint], event: FundingHistoryPoint
-) -> Decimal:
+) -> Decimal | None:
     ordered = sorted(history, key=lambda item: item.funding_timestamp)
     index = ordered.index(event)
     if index > 0:
         seconds = (event.funding_timestamp - ordered[index - 1].funding_timestamp).total_seconds()
         if seconds > 0:
             return Decimal(str(seconds / 3600))
-    return Decimal("8")
+    return None
 
 
 def _rank_warm_history_symbols(

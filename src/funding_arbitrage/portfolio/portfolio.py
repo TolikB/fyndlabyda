@@ -155,19 +155,50 @@ class PaperPortfolio:
         leg_side: str | None = None,
     ) -> Decimal:
         position = self.positions[position_id]
-        if position.state is not PositionState.OPEN:
-            raise ValueError("funding can only settle on open positions")
+        self._validate_funding_settlement(position, funding)
         same_exchange = [
             leg
             for leg in (position.leg_a, position.leg_b)
             if leg is not None and leg.exchange == funding.exchange
         ]
-        leg = same_exchange[-1] if same_exchange else None
-        if leg is None:
-            raise ValueError("funding venue is not a position leg")
+        leg = same_exchange[-1]
         side = leg_side or leg.side
         pnl = self.calculate_funding_pnl(side, notional, funding.funding_rate)
+        return self._record_funding_pnl(position, pnl)
+
+    def settle_recorded_funding(
+        self,
+        position_id: str,
+        funding: FundingSnapshot,
+        pnl: Decimal,
+    ) -> Decimal:
+        position = self.positions[position_id]
+        self._validate_funding_settlement(position, funding)
+        return self._record_funding_pnl(position, pnl)
+
+    @staticmethod
+    def _validate_funding_settlement(
+        position: PaperPosition, funding: FundingSnapshot
+    ) -> None:
+        if position.opened_at is None or funding.timestamp <= position.opened_at:
+            raise ValueError("funding must occur after the position opened")
+        if position.state is PositionState.CLOSED:
+            if position.closed_at is None or funding.timestamp > position.closed_at:
+                raise ValueError("funding must occur no later than the position close")
+        elif position.state is not PositionState.OPEN:
+            raise ValueError("funding can only settle on an open or closed position")
+        if not any(
+            leg is not None and leg.exchange == funding.exchange
+            for leg in (position.leg_a, position.leg_b)
+        ):
+            raise ValueError("funding venue is not a position leg")
+
+    def _record_funding_pnl(
+        self, position: PaperPosition, pnl: Decimal
+    ) -> Decimal:
         position.pnl.funding_pnl += pnl
+        if position.state is PositionState.CLOSED:
+            self.total_realized_pnl += pnl
         return pnl
 
     @staticmethod

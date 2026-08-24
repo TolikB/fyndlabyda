@@ -383,18 +383,28 @@ class Settings(BaseSettings):
     )
     paper_auto_init_database: bool = Field(default=False, alias="PAPER_AUTO_INIT_DATABASE")
     paper_simulation_version: str = Field(
-        default="v32-multi-regime-candidate", alias="PAPER_SIMULATION_VERSION"
+        default="v33-multi-regime-candidate", alias="PAPER_SIMULATION_VERSION"
     )
     paper_strategy_profile: Literal["baseline", "candidate"] = Field(
         default="candidate", alias="PAPER_STRATEGY_PROFILE"
     )
     paper_comparison_enabled: bool = Field(default=False, alias="PAPER_COMPARISON_ENABLED")
     paper_baseline_simulation_version: str = Field(
-        default="v31-oos-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
+        default="v33-multi-regime-baseline", alias="PAPER_BASELINE_SIMULATION_VERSION"
     )
     paper_exit_edge_miss_cycles: int = Field(default=2, alias="PAPER_EXIT_EDGE_MISS_CYCLES")
     paper_funding_horizon_hours: Decimal = Field(
         default=Decimal("24"), alias="PAPER_FUNDING_HORIZON_HOURS"
+    )
+    paper_funding_reconciliation_window_seconds: int = Field(
+        default=7200, alias="PAPER_FUNDING_RECONCILIATION_WINDOW_SECONDS"
+    )
+    paper_funding_reconciliation_poll_seconds: int = Field(
+        default=60, alias="PAPER_FUNDING_RECONCILIATION_POLL_SECONDS"
+    )
+    paper_funding_reconciliation_max_post_deadline_attempts: int = Field(
+        default=5,
+        alias="PAPER_FUNDING_RECONCILIATION_MAX_POST_DEADLINE_ATTEMPTS",
     )
     paper_entry_window_hours: Decimal = Field(
         default=Decimal("2"), alias="PAPER_ENTRY_WINDOW_HOURS"
@@ -758,6 +768,11 @@ def get_settings() -> Settings:
             "baseline_simulation_version": "paper_baseline_simulation_version",
             "exit_edge_miss_cycles": "paper_exit_edge_miss_cycles",
             "funding_horizon_hours": "paper_funding_horizon_hours",
+            "funding_reconciliation_window_seconds": "paper_funding_reconciliation_window_seconds",
+            "funding_reconciliation_poll_seconds": "paper_funding_reconciliation_poll_seconds",
+            "funding_reconciliation_max_post_deadline_attempts": (
+                "paper_funding_reconciliation_max_post_deadline_attempts"
+            ),
             "entry_window_hours": "paper_entry_window_hours",
             "min_settlement_cost_coverage": "paper_min_settlement_cost_coverage",
             "max_adverse_basis_percent": "paper_max_adverse_basis_percent",
@@ -1313,6 +1328,24 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError("shared comparison service must use candidate as the primary profile")
     if settings.paper_funding_horizon_hours <= 0:
         raise ValueError("PAPER_FUNDING_HORIZON_HOURS must be positive")
+    if not 0 < settings.paper_funding_reconciliation_window_seconds <= 21_600:
+        raise ValueError(
+            "PAPER_FUNDING_RECONCILIATION_WINDOW_SECONDS must be between 1 and 21600"
+        )
+    if not (
+        5
+        <= settings.paper_funding_reconciliation_poll_seconds
+        <= settings.paper_funding_reconciliation_window_seconds
+    ):
+        raise ValueError(
+            "PAPER_FUNDING_RECONCILIATION_POLL_SECONDS must be between 5 and "
+            "the reconciliation window"
+        )
+    if not 1 <= settings.paper_funding_reconciliation_max_post_deadline_attempts <= 60:
+        raise ValueError(
+            "PAPER_FUNDING_RECONCILIATION_MAX_POST_DEADLINE_ATTEMPTS must be "
+            "between 1 and 60"
+        )
     if settings.paper_entry_window_hours <= 0:
         raise ValueError("PAPER_ENTRY_WINDOW_HOURS must be positive")
     if settings.paper_min_settlement_cost_coverage < 1:

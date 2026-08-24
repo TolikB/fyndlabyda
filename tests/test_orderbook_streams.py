@@ -331,6 +331,9 @@ async def test_collector_bounds_history_cache_to_current_funding_universe() -> N
     assert set(snapshot.funding_history) == {
         (item.exchange, item.symbol) for item in snapshot.funding
     }
+    assert set(snapshot.funding_history_refreshed) == {
+        (item.exchange, item.symbol) for item in snapshot.funding
+    }
 
 
 @pytest.mark.asyncio
@@ -510,18 +513,26 @@ async def test_collector_only_refetches_cached_history_when_forced() -> None:
     adapter = CountingHistoryMock()
     collector = MarketDataCollector([adapter], enable_streams=False)
 
-    await collector.collect_once(include_history=True)
-    await collector.collect_once(include_history=True, force_history_refresh=False)
+    first = await collector.collect_once(include_history=True)
+    cached = await collector.collect_once(
+        include_history=True, force_history_refresh=False
+    )
     assert adapter.history_calls == 1
+    assert first.funding_history_refreshed
+    assert cached.funding_history_refreshed == {}
 
-    await collector.collect_once(
+    forced_symbol = await collector.collect_once(
         include_history=True,
-        history_symbols={"bybit": ["BTCUSDT"]},
+        history_symbols={"bybit": ["DELISTEDUSDT"]},
         force_history_refresh=False,
-        force_history_symbols={"bybit": ["BTCUSDT"]},
+        force_history_symbols={"bybit": ["DELISTEDUSDT"]},
     )
     assert adapter.history_calls == 2
 
+    delisted_key = ("bybit", "DELISTEDUSDT")
+    assert delisted_key in forced_symbol.funding_history_refreshed
+    assert delisted_key in (forced_symbol.funding_history or {})
+    assert delisted_key not in collector._funding_history_cache
     await collector.collect_once(include_history=True, force_history_refresh=True)
     assert adapter.history_calls == 3
 

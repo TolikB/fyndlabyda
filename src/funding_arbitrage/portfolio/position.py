@@ -73,6 +73,13 @@ class PaperPosition(BaseModel):
     target_settlements: tuple[datetime, ...] = ()
     target_funding_events: dict[str, datetime] = Field(default_factory=dict)
     settled_funding_at: dict[str, datetime] = Field(default_factory=dict)
+    settled_funding_events: set[str] = Field(default_factory=set)
+    funding_reconciliation_until: datetime | None = None
+    funding_reconciliation_next_poll_at: datetime | None = None
+    funding_reconciliation_completed_at: datetime | None = None
+    funding_reconciliation_post_deadline_attempts: int = Field(default=0, ge=0)
+    funding_reconciliation_failed_at: datetime | None = None
+    funding_reconciliation_failure_reason: str | None = None
     funding_events: int = Field(default=0, ge=0)
     edge_miss_count: int = Field(default=0, ge=0)
     exit_requested_at: datetime | None = None

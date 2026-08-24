@@ -3,10 +3,11 @@ import gzip
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import funding_arbitrage.backtest.historical_replay as historical_replay_module
 from funding_arbitrage.backtest.comparison import compare_paper_datasets
@@ -370,57 +371,40 @@ def test_research_universe_combines_core_funding_and_liquidity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_funding_history_batch_deduplicates_before_flush() -> None:
-    class FakeSession:
-        def __init__(self) -> None:
-            self.added: list[object] = []
-            self.scalar_calls = 0
-
-        def get_bind(self) -> Any:
-            return type("Bind", (), {"dialect": type("Dialect", (), {"name": "sqlite"})()})()
-
-        async def scalar(self, _statement: object) -> None:
-            self.scalar_calls += 1
-            return None
-
-        def add(self, item: object) -> None:
-            self.added.append(item)
-
-        async def commit(self) -> None:
-            return None
-
+async def test_funding_history_batch_deduplicates_before_flush(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, session_factory = database
     point = FundingHistoryPoint(
         exchange="hyperliquid",
         symbol="BTC",
         funding_rate=Decimal("0.0001"),
         funding_timestamp=datetime(2026, 8, 1, 15, tzinfo=UTC),
     )
-    session = FakeSession()
-    await save_funding_history(session, [point, point])  # type: ignore[arg-type]
+    async with session_factory() as session:
+        await save_funding_history(session, [point, point])
 
-    assert session.scalar_calls == 1
-    assert len(session.added) == 1
+    async with session_factory() as session:
+        records = list(
+            (
+                await session.execute(
+                    select(FundingHistoryRecord).where(
+                        FundingHistoryRecord.exchange == point.exchange,
+                        FundingHistoryRecord.symbol == point.symbol,
+                        FundingHistoryRecord.funding_timestamp
+                        == point.funding_timestamp,
+                    )
+                )
+            ).scalars()
+        )
+    assert len(records) == 1
 
 
 @pytest.mark.asyncio
-async def test_live_funding_payment_commits_raw_event_in_same_transaction() -> None:
-    class FakeSession:
-        def __init__(self) -> None:
-            self.added: list[object] = []
-            self.commits = 0
-
-        def get_bind(self) -> Any:
-            return type("Bind", (), {"dialect": type("Dialect", (), {"name": "sqlite"})()})()
-
-        async def scalar(self, _statement: object) -> None:
-            return None
-
-        def add(self, item: object) -> None:
-            self.added.append(item)
-
-        async def commit(self) -> None:
-            self.commits += 1
-
+async def test_live_funding_payment_commits_raw_event_in_same_transaction(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, session_factory = database
     event = FundingHistoryPoint(
         exchange="bybit",
         symbol="COTIUSDT",
@@ -434,21 +418,41 @@ async def test_live_funding_payment_commits_raw_event_in_same_transaction() -> N
         funding_interval_hours=Decimal("8"),
         timestamp=event.funding_timestamp,
     )
-    session = FakeSession()
+    async with session_factory() as session:
+        payment = await save_paper_funding_payment(
+            session,
+            "position-id",
+            funding,
+            Decimal("250"),
+            Decimal("-0.4668075"),
+            history_event=event,
+        )
 
-    await save_paper_funding_payment(
-        session,  # type: ignore[arg-type]
-        "position-id",
-        funding,
-        Decimal("250"),
-        Decimal("-0.4668075"),
-        history_event=event,
-    )
-
-    assert len(session.added) == 2
-    assert isinstance(session.added[0], FundingHistoryRecord)
-    assert isinstance(session.added[1], PaperFundingPaymentRecord)
-    assert session.commits == 1
+    async with session_factory() as session:
+        raw_events = list(
+            (
+                await session.execute(
+                    select(FundingHistoryRecord).where(
+                        FundingHistoryRecord.exchange == event.exchange,
+                        FundingHistoryRecord.symbol == event.symbol,
+                        FundingHistoryRecord.funding_timestamp
+                        == event.funding_timestamp,
+                    )
+                )
+            ).scalars()
+        )
+        payments = list(
+            (
+                await session.execute(
+                    select(PaperFundingPaymentRecord).where(
+                        PaperFundingPaymentRecord.position_id == "position-id"
+                    )
+                )
+            ).scalars()
+        )
+    assert len(raw_events) == 1
+    assert len(payments) == 1
+    assert payment.id == payments[0].id
 
 
 def test_replay_dataset_excludes_funding_outside_candle_universe() -> None:

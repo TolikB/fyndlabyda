@@ -265,7 +265,7 @@ async def test_market_data_repository_full_idempotent_mapping(
             _funding(),
             Decimal("100"),
             Decimal("0.01"),
-            history_event=_history(rate="0.0004"),
+            history_event=_history(),
         )
 
         instrument = await session.scalar(select(InstrumentRecord))
@@ -278,7 +278,7 @@ async def test_market_data_repository_full_idempotent_mapping(
 
         assert instrument is not None and instrument.is_active is False
         assert exchange is not None and exchange.status == "ONLINE"
-        assert history is not None and history.funding_rate == Decimal("0.0004")
+        assert history is not None and history.funding_rate == Decimal("0.0001")
         assert candle is not None and candle.close == Decimal("100.5")
         assert opportunity is not None and opportunity.status == "expired"
         assert fill is not None
@@ -290,3 +290,53 @@ async def test_market_data_repository_full_idempotent_mapping(
         assert await _count(session, PaperRuntimeIncidentRecord) == 2
         assert await _count(session, PaperFundingPaymentRecord) == 1
 
+
+
+async def test_duplicate_funding_payment_preserves_immutable_raw_event(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, factory = database
+    funding = _funding()
+    original_event = _history()
+    async with factory() as session:
+        original = await save_paper_funding_payment(
+            session,
+            "immutable-position",
+            funding,
+            Decimal("100"),
+            Decimal("0.01"),
+            history_event=original_event,
+        )
+
+    conflicting_funding = funding.model_copy(
+        update={"funding_rate": Decimal("0.0009")}
+    )
+    conflicting_event = _history(rate="0.0009")
+    async with factory() as session:
+        durable = await save_paper_funding_payment(
+            session,
+            "immutable-position",
+            conflicting_funding,
+            Decimal("100"),
+            Decimal("0.09"),
+            history_event=conflicting_event,
+        )
+
+    async with factory() as session:
+        history = await session.scalar(select(FundingHistoryRecord))
+        payments = list(
+            (
+                await session.execute(
+                    select(PaperFundingPaymentRecord).where(
+                        PaperFundingPaymentRecord.position_id
+                        == "immutable-position"
+                    )
+                )
+            ).scalars()
+        )
+    assert Decimal(str(original.funding_rate)) == Decimal("0.0001")
+    assert Decimal(str(durable.funding_rate)) == Decimal("0.0001")
+    assert Decimal(str(durable.pnl)) == Decimal("0.01")
+    assert history is not None
+    assert Decimal(str(history.funding_rate)) == Decimal("0.0001")
+    assert len(payments) == 1

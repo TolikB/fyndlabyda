@@ -39,8 +39,8 @@ shared-feed comparison in `.env`:
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
 PAPER_AUTOTRADE_START_UTC=2026-08-14T08:40:00Z
-PAPER_SIMULATION_VERSION=v31-oos-candidate
-PAPER_BASELINE_SIMULATION_VERSION=v31-oos-baseline
+PAPER_SIMULATION_VERSION=v33-multi-regime-candidate
+PAPER_BASELINE_SIMULATION_VERSION=v33-multi-regime-baseline
 ```
 
 Then run `docker compose up -d --build`. Candidate and baseline retain separate
@@ -58,7 +58,7 @@ curl http://127.0.0.1:8000/health/ready
 curl http://127.0.0.1:8000/portfolio
 curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
-curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v31-oos-candidate'
+curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v33-multi-regime-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
 docker compose logs -f app
 ```
@@ -220,6 +220,17 @@ be intentionally deleted.
   baseline; it must differ from `PAPER_SIMULATION_VERSION`.
 - `PAPER_EXIT_EDGE_MISS_CYCLES`: candidate exit debounce after edge disappears.
 - `PAPER_FUNDING_HORIZON_HOURS`: exact settlement-count forecast horizon.
+- `PAPER_FUNDING_RECONCILIATION_WINDOW_SECONDS`: post-close deadline for the final
+  funding-history check; the default is two hours, it is persisted, and restarts
+  never extend it. Polling continues through the full window. Completion requires
+  one successful fresh history query covering the deadline. Exact per-event
+  markers admit late out-of-order events once.
+- `PAPER_FUNDING_RECONCILIATION_POLL_SECONDS`: minimum retry cadence for delayed
+  raw history; defaults to 60 seconds and cannot exceed the reconciliation window.
+- `PAPER_FUNDING_RECONCILIATION_MAX_POST_DEADLINE_ATTEMPTS`: bounded final-query
+  retries after the deadline; defaults to five. Exhaustion is persisted on the
+  position and in the runtime incident ledger, then forced polling stops so one
+  unavailable or delisted contract cannot block every future paper cycle.
 - `PAPER_ENTRY_WINDOW_HOURS`: maximum time capital may sit idle before the
   nearest venue-specific settlement.
 - `PAPER_MIN_SETTLEMENT_COST_COVERAGE`: minimum nearest-settlement funding PnL
@@ -233,6 +244,10 @@ be intentionally deleted.
 - `PAPER_MARKET_ASSET_LIMIT`: liquid base-assets retained per venue; their
   available spot/perp pairs remain together.
 - `PAPER_HISTORY_SYMBOL_LIMIT`: funding-history queries per venue per refresh.
+
+The v33 namespaces are intentionally new because post-close funding reconciliation
+changes the accounting model. Never reuse a pre-v33 namespace for a new run or
+mix its PnL with v33 acceptance evidence.
 
 The accelerated settlement interval changes wall-clock test speed only; it does
 not enable real funding or real trading. It is used only by the deterministic

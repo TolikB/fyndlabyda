@@ -2,16 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import cast
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 import funding_arbitrage.services.paper_runner as paper_runner_module
 from funding_arbitrage.config import Settings
-from funding_arbitrage.database.models import FundingHistoryRecord
+from funding_arbitrage.database.models import (
+    Base,
+    FundingHistoryRecord,
+    PaperFundingPaymentRecord,
+    PaperPositionRecord,
+    PaperRuntimeIncidentRecord,
+)
+from funding_arbitrage.database.repositories.market_data import (
+    save_paper_funding_payment,
+    save_paper_position,
+    save_portfolio_snapshot,
+)
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
     FundingSnapshot,
@@ -174,6 +193,24 @@ async def test_paper_runner_opens_mock_position_without_live_orders(
         nonlocal market_persist_calls
         market_persist_calls += 1
 
+    async def save_mock_funding_payment(
+        _session: object,
+        position_id: str,
+        funding: FundingSnapshot,
+        notional: Decimal,
+        pnl: Decimal,
+        **_kwargs: object,
+    ) -> PaperFundingPaymentRecord:
+        return PaperFundingPaymentRecord(
+            position_id=position_id,
+            exchange=funding.exchange,
+            symbol=funding.symbol,
+            funding_timestamp=funding.timestamp,
+            funding_rate=funding.funding_rate,
+            notional=notional,
+            pnl=pnl,
+        )
+
     async def noop(*_args: object, **_kwargs: object) -> None:
         return None
 
@@ -181,10 +218,12 @@ async def test_paper_runner_opens_mock_position_without_live_orders(
     for name in (
         "save_opportunities",
         "save_paper_position",
-        "save_paper_funding_payment",
         "save_portfolio_snapshot",
     ):
         monkeypatch.setattr(paper_runner_module, name, noop)
+    monkeypatch.setattr(
+        paper_runner_module, "save_paper_funding_payment", save_mock_funding_payment
+    )
 
     await runner.cycle()
 
@@ -943,17 +982,773 @@ async def test_live_funding_uses_exact_perpetual_leg_symbol_and_event_time(
 
 
 @pytest.mark.asyncio
-async def test_existing_live_payment_repairs_missing_raw_history(
+@pytest.mark.parametrize(
+    "interval_hours",
+    [Decimal("1"), Decimal("4"), Decimal("8")],
+)
+async def test_closed_position_reconciles_late_funding_exactly_once(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    interval_hours: Decimal,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class ExistingPaymentSession(EmptySession):
-        async def scalar(self, _statement: object) -> object:
-            return object()
+    _, session_factory = database
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_autotrade=True,
+        paper_funding_reconciliation_window_seconds=7200,
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(settings, runtime, session_factory)
+    observed_at = datetime(2026, 8, 22, 12, tzinfo=UTC)
+    event_at = observed_at - timedelta(minutes=30)
+    previous_event_at = event_at - timedelta(hours=float(interval_hours))
+    fill = PaperFill(
+        client_order_id=f"gate-short-{interval_hours}",
+        exchange="gate",
+        symbol="COTI_USDT",
+        side="SELL",
+        requested_quantity=Decimal("1"),
+        filled_quantity=Decimal("1"),
+        price=Decimal("1"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        status=FillStatus.FILLED,
+        instrument_type=InstrumentType.PERPETUAL,
+    )
+    position = PaperPosition(
+        opportunity_id=f"late-funding-{interval_hours}",
+        asset="COTI",
+        capital=Decimal("250"),
+        simulation_version=settings.paper_simulation_version,
+        state=PositionState.CLOSED,
+        leg_a=fill,
+        leg_a_type=InstrumentType.PERPETUAL,
+        opened_at=previous_event_at,
+        closed_at=event_at,
+        target_funding_events={"gate|COTI_USDT": event_at},
+        target_settlements=(event_at,),
+    )
+    runtime.portfolio.add_position(position)
+    runtime.portfolio.close_position(position.id)
+    runner._schedule_funding_reconciliation(position, observed_at)
+    exact_event = FundingHistoryPoint(
+        exchange="gate",
+        symbol="COTI_USDT",
+        funding_rate=Decimal("0.001"),
+        funding_timestamp=event_at.astimezone(timezone(timedelta(hours=3))),
+    )
+    previous_event = exact_event.model_copy(
+        update={"funding_timestamp": previous_event_at}
+    )
+    snapshot = MarketSnapshot(
+        instruments=[],
+        tickers=[],
+        funding=[],
+        orderbooks={},
+        captured_at=observed_at,
+        funding_history={
+            ("gate", "COTI_USDT"): [
+                previous_event,
+                exact_event,
+                exact_event.model_copy(
+                    update={
+                        "funding_timestamp": position.closed_at
+                        + timedelta(microseconds=1)
+                    }
+                ),
+            ]
+        },
+    )
 
-    class ExistingPaymentSessionFactory:
-        def __call__(self) -> ExistingPaymentSession:
-            return ExistingPaymentSession()
+    observed_intervals: list[Decimal] = []
+    apply_funding_event = runner._apply_funding_event
 
+    async def capture_interval(
+        target_position: PaperPosition,
+        target_leg: PaperFill,
+        funding: FundingSnapshot,
+        *,
+        history_event: FundingHistoryPoint | None = None,
+    ) -> None:
+        observed_intervals.append(funding.funding_interval_hours)
+        await apply_funding_event(
+            target_position, target_leg, funding, history_event=history_event
+        )
+
+    monkeypatch.setattr(runner, "_apply_funding_event", capture_interval)
+    await asyncio.gather(
+        runner._settle_live_funding(snapshot),
+        runner._settle_live_funding(snapshot),
+    )
+
+    async with session_factory() as session:
+        payments = list(
+            (
+                await session.execute(
+                    select(PaperFundingPaymentRecord).where(
+                        PaperFundingPaymentRecord.position_id == position.id
+                    )
+                )
+            ).scalars()
+        )
+    assert len(payments) == 1
+    assert payments[0].exchange == "gate"
+    assert payments[0].symbol == "COTI_USDT"
+    assert payments[0].funding_timestamp.replace(tzinfo=UTC) == event_at
+    assert Decimal(str(payments[0].funding_rate)) == Decimal("0.001")
+    assert Decimal(str(payments[0].notional)) == Decimal("250")
+    assert Decimal(str(payments[0].pnl)) == Decimal("0.250")
+    assert position.pnl.funding_pnl == Decimal("0.250")
+    assert runtime.portfolio.total_realized_pnl == Decimal("0.250")
+    assert position.funding_events == 1
+    assert position.settled_funding_at["gate|COTI_USDT"] == event_at
+    assert observed_intervals == [interval_hours, interval_hours]
+    assert position.funding_reconciliation_completed_at is None
+    assert runner._due_funding_symbols(observed_at) == {"gate": ["COTI_USDT"]}
+    assert runner._required_funding_symbols(observed_at) == {
+        "gate": ["COTI_USDT"]
+    }
+    reconciliation_deadline = position.funding_reconciliation_until
+    assert reconciliation_deadline is not None
+    after_reconciliation = reconciliation_deadline + timedelta(microseconds=1)
+    assert runner._due_funding_symbols(after_reconciliation) == {
+        "gate": ["COTI_USDT"]
+    }
+    stale_snapshot = replace(
+        snapshot,
+        captured_at=after_reconciliation,
+        funding_history_refreshed={
+            ("gate", "COTI_USDT"): reconciliation_deadline
+            - timedelta(microseconds=1)
+        },
+    )
+    await runner._settle_live_funding(stale_snapshot)
+    assert position.funding_reconciliation_completed_at is None
+    final_snapshot = replace(
+        snapshot,
+        captured_at=after_reconciliation,
+        funding_history_refreshed={
+            ("gate", "COTI_USDT"): after_reconciliation
+        },
+    )
+    await runner._settle_live_funding(final_snapshot)
+    assert position.funding_reconciliation_completed_at == after_reconciliation
+    assert runner._required_funding_symbols(after_reconciliation) == {}
+
+    event_funding = FundingSnapshot(
+        exchange="gate",
+        symbol="COTI_USDT",
+        funding_rate=exact_event.funding_rate,
+        funding_interval_hours=interval_hours,
+        timestamp=event_at,
+    )
+    at_open = event_funding.model_copy(
+        update={"timestamp": position.opened_at}
+    )
+    after_close = event_funding.model_copy(
+        update={"timestamp": position.closed_at + timedelta(microseconds=1)}
+    )
+    with pytest.raises(ValueError, match="after the position opened"):
+        runtime.portfolio.settle_funding(
+            position.id, at_open, position.capital, fill.side
+        )
+    with pytest.raises(ValueError, match="no later than the position close"):
+        runtime.portfolio.settle_funding(
+            position.id, after_close, position.capital, fill.side
+        )
+
+    for adapter in adapters.values():
+        await adapter.close()
+
+@pytest.mark.asyncio
+async def test_closed_position_applies_out_of_order_funding_events_once(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, session_factory = database
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_funding_reconciliation_window_seconds=7200,
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(settings, runtime, session_factory)
+    newer_at = datetime(2026, 8, 22, 11, 50, tzinfo=UTC)
+    older_at = newer_at - timedelta(hours=1)
+    fill = PaperFill(
+        client_order_id="out-of-order-gate-short",
+        exchange="gate",
+        symbol="COTI_USDT",
+        side="SELL",
+        requested_quantity=Decimal("1"),
+        filled_quantity=Decimal("1"),
+        price=Decimal("1"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        status=FillStatus.FILLED,
+        instrument_type=InstrumentType.PERPETUAL,
+    )
+    position = PaperPosition(
+        opportunity_id="out-of-order-funding",
+        asset="COTI",
+        capital=Decimal("250"),
+        simulation_version=settings.paper_simulation_version,
+        state=PositionState.CLOSED,
+        leg_a=fill,
+        leg_a_type=InstrumentType.PERPETUAL,
+        opened_at=older_at - timedelta(minutes=1),
+        closed_at=newer_at,
+    )
+    runtime.portfolio.add_position(position)
+    runtime.portfolio.close_position(position.id)
+
+    async def apply(timestamp: datetime) -> None:
+        history_event = FundingHistoryPoint(
+            exchange="gate",
+            symbol="COTI_USDT",
+            funding_rate=Decimal("0.001"),
+            funding_timestamp=timestamp,
+        )
+        funding = FundingSnapshot(
+            exchange=history_event.exchange,
+            symbol=history_event.symbol,
+            funding_rate=history_event.funding_rate,
+            funding_interval_hours=Decimal("1"),
+            timestamp=timestamp,
+        )
+        await runner._apply_funding_event(
+            position,
+            fill,
+            funding,
+            history_event=history_event,
+        )
+
+    await apply(newer_at)
+    await apply(older_at)
+
+    async def unexpected_payment_write(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("a persisted per-event marker must skip duplicate database work")
+
+    monkeypatch.setattr(
+        paper_runner_module, "save_paper_funding_payment", unexpected_payment_write
+    )
+    await apply(older_at)
+
+    async with session_factory() as session:
+        payments = list(
+            (
+                await session.execute(
+                    select(PaperFundingPaymentRecord).where(
+                        PaperFundingPaymentRecord.position_id == position.id
+                    )
+                )
+            ).scalars()
+        )
+    assert len(payments) == 2
+    assert position.funding_events == 2
+    assert position.pnl.funding_pnl == Decimal("0.500")
+    assert runtime.portfolio.total_realized_pnl == Decimal("0.500")
+    assert position.settled_funding_at["gate|COTI_USDT"] == newer_at
+    assert len(position.settled_funding_events) == 2
+    async with session_factory() as session:
+        await save_paper_position(session, position)
+        await save_portfolio_snapshot(
+            session, runtime.portfolio.snapshot(newer_at)
+        )
+
+    restored_runtime = RuntimeState(settings, adapters)
+    restored_runner = PaperTestRunner(settings, restored_runtime, session_factory)
+    await restored_runner._restore_positions()
+    restored = restored_runtime.portfolio.positions[position.id]
+    assert restored.funding_events == 2
+    assert restored.pnl.funding_pnl == Decimal("0.500")
+    assert restored_runtime.portfolio.total_realized_pnl == Decimal("0.500")
+    assert restored.settled_funding_at["gate|COTI_USDT"] == newer_at
+    assert restored.settled_funding_events == position.settled_funding_events
+
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_exhaustion_is_bounded_and_persisted(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, session_factory = database
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_simulation_version="reconciliation-exhaustion-test",
+        paper_funding_reconciliation_window_seconds=60,
+        paper_funding_reconciliation_poll_seconds=60,
+        paper_funding_reconciliation_max_post_deadline_attempts=2,
+    )
+    adapters = create_public_adapters(settings)
+    closed_at = datetime(2026, 8, 22, 12, tzinfo=UTC)
+    fill = PaperFill(
+        client_order_id="bounded-reconciliation-gate-short",
+        exchange="gate",
+        symbol="DELISTED_USDT",
+        side="SELL",
+        requested_quantity=Decimal("1"),
+        filled_quantity=Decimal("1"),
+        price=Decimal("1"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        status=FillStatus.FILLED,
+        instrument_type=InstrumentType.PERPETUAL,
+    )
+    position = PaperPosition(
+        opportunity_id="bounded-reconciliation",
+        asset="DELISTED",
+        capital=Decimal("250"),
+        simulation_version=settings.paper_simulation_version,
+        state=PositionState.CLOSED,
+        leg_a=fill,
+        leg_a_type=InstrumentType.PERPETUAL,
+        opened_at=closed_at - timedelta(minutes=5),
+        closed_at=closed_at,
+    )
+    runtime = RuntimeState(settings, adapters)
+    runtime.portfolio.add_position(position)
+    runner = PaperTestRunner(settings, runtime, session_factory)
+    runner._schedule_funding_reconciliation(position, closed_at)
+    deadline = position.funding_reconciliation_until
+    assert deadline is not None
+
+    assert runner._due_funding_symbols(deadline) == {
+        "gate": ["DELISTED_USDT"]
+    }
+    assert position.funding_reconciliation_post_deadline_attempts == 1
+    assert runner._due_funding_symbols(deadline + timedelta(seconds=60)) == {
+        "gate": ["DELISTED_USDT"]
+    }
+    assert position.funding_reconciliation_post_deadline_attempts == 2
+
+    exhausted_at = deadline + timedelta(seconds=120)
+    assert runner._due_funding_symbols(exhausted_at) == {}
+    assert position.funding_reconciliation_failed_at == exhausted_at
+    assert (
+        position.funding_reconciliation_failure_reason
+        == "post_deadline_attempts_exhausted"
+    )
+    assert runner._required_funding_symbols(exhausted_at) == {}
+
+    original_save_incident = paper_runner_module.save_paper_runtime_incident
+
+    async def fail_after_staging_incident(
+        session: AsyncSession,
+        simulation_versions: tuple[str, ...],
+        category: str,
+        error_type: str,
+        occurred_at: datetime,
+        *,
+        commit: bool = True,
+    ) -> None:
+        await original_save_incident(
+            session,
+            simulation_versions,
+            category,
+            error_type,
+            occurred_at,
+            commit=False,
+        )
+        raise RuntimeError("simulated crash before atomic commit")
+
+    monkeypatch.setattr(
+        paper_runner_module,
+        "save_paper_runtime_incident",
+        fail_after_staging_incident,
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        await runner._persist_pending_funding_reconciliation_failures()
+    async with session_factory() as session:
+        assert await session.scalar(select(PaperPositionRecord)) is None
+        assert await session.scalar(select(PaperRuntimeIncidentRecord)) is None
+    monkeypatch.setattr(
+        paper_runner_module,
+        "save_paper_runtime_incident",
+        original_save_incident,
+    )
+    await runner._persist_pending_funding_reconciliation_failures()
+
+    async with session_factory() as session:
+        record = await session.scalar(
+            select(PaperPositionRecord).where(
+                PaperPositionRecord.position_id == position.id
+            )
+        )
+        incidents = list(
+            (
+                await session.execute(
+                    select(PaperRuntimeIncidentRecord).where(
+                        PaperRuntimeIncidentRecord.simulation_version
+                        == settings.paper_simulation_version,
+                        PaperRuntimeIncidentRecord.category
+                        == "funding_reconciliation",
+                    )
+                )
+            ).scalars()
+        )
+    assert record is not None
+    restored = PaperPosition.model_validate(record.payload)
+    assert restored.funding_reconciliation_failed_at == exhausted_at
+    assert restored.funding_reconciliation_post_deadline_attempts == 2
+    assert len(incidents) == 1
+    assert incidents[0].error_type == "FundingReconciliationExhaustedError"
+
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_funding_payment_insert_is_atomic_across_runner_instances(
+    tmp_path: Path,
+) -> None:
+    database_path = (tmp_path / "funding-atomic.db").as_posix()
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{database_path}", connect_args={"timeout": 10}
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    barrier = asyncio.Barrier(2)
+
+    async def connection_identity() -> int:
+        async with engine.connect() as connection:
+            await barrier.wait()
+            return id(connection.sync_connection.connection.driver_connection)
+
+    connection_ids = await asyncio.gather(
+        connection_identity(), connection_identity()
+    )
+    assert len(set(connection_ids)) == 2
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_funding_reconciliation_window_seconds=7200,
+    )
+    adapters = create_public_adapters(settings)
+    observed_at = datetime(2026, 8, 22, 12, tzinfo=UTC)
+    event_at = observed_at - timedelta(minutes=1)
+    fill = PaperFill(
+        client_order_id="cross-runner-gate-short",
+        exchange="gate",
+        symbol="COTI_USDT",
+        side="SELL",
+        requested_quantity=Decimal("1"),
+        filled_quantity=Decimal("1"),
+        price=Decimal("1"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        status=FillStatus.FILLED,
+        instrument_type=InstrumentType.PERPETUAL,
+    )
+    seed_position = PaperPosition(
+        opportunity_id="cross-runner-atomic",
+        asset="COTI",
+        capital=Decimal("250"),
+        simulation_version=settings.paper_simulation_version,
+        state=PositionState.CLOSED,
+        leg_a=fill,
+        leg_a_type=InstrumentType.PERPETUAL,
+        opened_at=event_at - timedelta(minutes=5),
+        closed_at=event_at + timedelta(seconds=1),
+    )
+    runtimes: list[RuntimeState] = []
+    runners: list[PaperTestRunner] = []
+    positions: list[PaperPosition] = []
+    for _ in range(2):
+        position = PaperPosition.model_validate(
+            seed_position.model_dump(mode="json")
+        )
+        runtime = RuntimeState(settings, adapters)
+        runtime.portfolio.add_position(position)
+        runtime.portfolio.close_position(position.id)
+        runner = PaperTestRunner(settings, runtime, session_factory)
+        runner._schedule_funding_reconciliation(position, observed_at)
+        positions.append(position)
+        runtimes.append(runtime)
+        runners.append(runner)
+    event = FundingHistoryPoint(
+        exchange="gate",
+        symbol="COTI_USDT",
+        funding_rate=Decimal("0.001"),
+        funding_timestamp=event_at,
+    )
+    snapshot = MarketSnapshot(
+        instruments=[],
+        tickers=[],
+        funding=[
+            FundingSnapshot(
+                exchange="gate",
+                symbol="COTI_USDT",
+                funding_rate=event.funding_rate,
+                funding_interval_hours=Decimal("1"),
+                timestamp=observed_at,
+            )
+        ],
+        orderbooks={},
+        captured_at=observed_at,
+        funding_history={("gate", "COTI_USDT"): [event]},
+    )
+
+    await asyncio.gather(
+        runners[0]._settle_live_funding(snapshot),
+        runners[1]._settle_live_funding(snapshot),
+    )
+
+    async with session_factory() as session:
+        payments = list(
+            (
+                await session.execute(
+                    select(PaperFundingPaymentRecord).where(
+                        PaperFundingPaymentRecord.position_id == seed_position.id
+                    )
+                )
+            ).scalars()
+        )
+    assert len(payments) == 1
+    assert [position.funding_events for position in positions] == [1, 1]
+    assert [position.pnl.funding_pnl for position in positions] == [
+        Decimal("0.250"),
+        Decimal("0.250"),
+    ]
+
+    for adapter in adapters.values():
+        await adapter.close()
+    await engine.dispose()
+
+@pytest.mark.asyncio
+async def test_closed_position_reconciliation_is_restored_after_restart(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, session_factory = database
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_simulation_version="late-restart-test",
+        paper_funding_reconciliation_window_seconds=7200,
+        paper_funding_reconciliation_poll_seconds=60,
+    )
+    adapters = create_public_adapters(settings)
+    observed_at = datetime.now(UTC)
+    closed_at = observed_at - timedelta(minutes=5)
+    event_at = closed_at - timedelta(minutes=1)
+    fill = PaperFill(
+        client_order_id="gate-restart-short",
+        exchange="gate",
+        symbol="HOME_USDT",
+        side="SELL",
+        requested_quantity=Decimal("1"),
+        filled_quantity=Decimal("1"),
+        price=Decimal("1"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        status=FillStatus.FILLED,
+        instrument_type=InstrumentType.PERPETUAL,
+    )
+    position = PaperPosition(
+        opportunity_id="restart-reconciliation",
+        asset="HOME",
+        capital=Decimal("250"),
+        simulation_version=settings.paper_simulation_version,
+        state=PositionState.CLOSED,
+        leg_a=fill,
+        leg_a_type=InstrumentType.PERPETUAL,
+        opened_at=closed_at - timedelta(minutes=30),
+        closed_at=closed_at,
+        target_funding_events={"gate|HOME_USDT": event_at},
+        target_settlements=(event_at,),
+    )
+    seed_runtime = RuntimeState(settings, adapters)
+    seed_runtime.portfolio.add_position(position)
+    seed_runtime.portfolio.close_position(position.id)
+    seed_runner = PaperTestRunner(settings, seed_runtime, session_factory)
+    seed_runner._schedule_funding_reconciliation(position, closed_at)
+    original_deadline = closed_at + timedelta(seconds=7200)
+    assert position.funding_reconciliation_until == original_deadline
+    async with session_factory() as session:
+        await save_paper_position(session, position)
+        await save_portfolio_snapshot(
+            session, seed_runtime.portfolio.snapshot(closed_at)
+        )
+
+    restored_runtimes: list[RuntimeState] = []
+    restored_runners: list[PaperTestRunner] = []
+    for _ in range(2):
+        restored_runtime = RuntimeState(settings, adapters)
+        runner = PaperTestRunner(settings, restored_runtime, session_factory)
+        await runner._restore_positions()
+        restored = restored_runtime.portfolio.positions[position.id]
+        assert restored.state is PositionState.CLOSED
+        assert restored.funding_reconciliation_until == original_deadline
+        assert restored_runtime.portfolio.total_realized_pnl == Decimal("0")
+        restored_runtimes.append(restored_runtime)
+        restored_runners.append(runner)
+
+    restored_runtime = restored_runtimes[-1]
+    runner = restored_runners[-1]
+    restored = restored_runtime.portfolio.positions[position.id]
+    assert runner._due_funding_symbols(observed_at) == {"gate": ["HOME_USDT"]}
+    assert runner._due_funding_symbols(observed_at + timedelta(seconds=30)) == {}
+    assert runner._required_funding_symbols(observed_at) == {
+        "gate": ["HOME_USDT"]
+    }
+    event = FundingHistoryPoint(
+        exchange="gate",
+        symbol="HOME_USDT",
+        funding_rate=Decimal("0.001"),
+        funding_timestamp=event_at,
+    )
+    snapshot = MarketSnapshot(
+        instruments=[],
+        tickers=[],
+        funding=[
+            FundingSnapshot(
+                exchange="gate",
+                symbol="HOME_USDT",
+                funding_rate=event.funding_rate,
+                funding_interval_hours=Decimal("1"),
+                timestamp=observed_at,
+            )
+        ],
+        orderbooks={},
+        captured_at=observed_at,
+        funding_history={("gate", "HOME_USDT"): [event]},
+    )
+    await runner._settle_live_funding(snapshot)
+    assert restored.pnl.funding_pnl == Decimal("0.250")
+    assert restored_runtime.portfolio.total_realized_pnl == Decimal("0.250")
+    assert restored.funding_reconciliation_completed_at is None
+    async with session_factory() as session:
+        await save_paper_position(session, restored)
+        await save_portfolio_snapshot(
+            session, restored_runtime.portfolio.snapshot(observed_at)
+        )
+
+    final_runtime = RuntimeState(settings, adapters)
+    final_runner = PaperTestRunner(settings, final_runtime, session_factory)
+    await final_runner._restore_positions()
+    final_position = final_runtime.portfolio.positions[position.id]
+    assert final_position.funding_reconciliation_until == original_deadline
+    assert final_position.pnl.funding_pnl == Decimal("0.250")
+    assert final_position.funding_events == 1
+    assert final_runtime.portfolio.total_realized_pnl == Decimal("0.250")
+    assert final_runner._due_funding_symbols(observed_at) == {}
+    assert final_runner._required_funding_symbols(observed_at) == {
+        "gate": ["HOME_USDT"]
+    }
+    after_deadline = original_deadline + timedelta(microseconds=1)
+    assert final_runner._due_funding_symbols(after_deadline) == {
+        "gate": ["HOME_USDT"]
+    }
+    final_snapshot = replace(
+        snapshot,
+        captured_at=after_deadline,
+        funding_history_refreshed={("gate", "HOME_USDT"): after_deadline},
+    )
+    await final_runner._settle_live_funding(final_snapshot)
+    assert final_position.funding_reconciliation_completed_at == after_deadline
+    assert final_runner._required_funding_symbols(after_deadline) == {}
+    async with session_factory() as session:
+        payments = list(
+            (
+                await session.execute(
+                    select(PaperFundingPaymentRecord).where(
+                        PaperFundingPaymentRecord.position_id == position.id
+                    )
+                )
+            ).scalars()
+        )
+    assert len(payments) == 1
+
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_reconciliation_deadline_is_not_extended_by_restart(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, session_factory = database
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_simulation_version="expired-restart-test",
+        paper_funding_reconciliation_window_seconds=7200,
+    )
+    adapters = create_public_adapters(settings)
+    observed_at = datetime.now(UTC)
+    closed_at = observed_at - timedelta(hours=3)
+    position = PaperPosition(
+        opportunity_id="expired-reconciliation",
+        asset="HOME",
+        capital=Decimal("250"),
+        simulation_version=settings.paper_simulation_version,
+        state=PositionState.CLOSED,
+        leg_a=PaperFill(
+            client_order_id="expired-gate-short",
+            exchange="gate",
+            symbol="HOME_USDT",
+            side="SELL",
+            requested_quantity=Decimal("1"),
+            filled_quantity=Decimal("1"),
+            price=Decimal("1"),
+            fee=Decimal("0"),
+            slippage=Decimal("0"),
+            status=FillStatus.FILLED,
+            instrument_type=InstrumentType.PERPETUAL,
+        ),
+        leg_a_type=InstrumentType.PERPETUAL,
+        opened_at=closed_at - timedelta(minutes=30),
+        closed_at=closed_at,
+    )
+    seed_runtime = RuntimeState(settings, adapters)
+    seed_runtime.portfolio.add_position(position)
+    seed_runner = PaperTestRunner(settings, seed_runtime, session_factory)
+    seed_runner._schedule_funding_reconciliation(position, closed_at)
+    expired_deadline = closed_at + timedelta(seconds=7200)
+    async with session_factory() as session:
+        await save_paper_position(session, position)
+        await save_portfolio_snapshot(
+            session, seed_runtime.portfolio.snapshot(closed_at)
+        )
+
+    for _ in range(2):
+        restored_runtime = RuntimeState(settings, adapters)
+        runner = PaperTestRunner(settings, restored_runtime, session_factory)
+        await runner._restore_positions()
+        restored = restored_runtime.portfolio.positions[position.id]
+        assert restored.funding_reconciliation_until == expired_deadline
+        assert runner._due_funding_symbols(observed_at) == {
+            "gate": ["HOME_USDT"]
+        }
+        assert runner._required_funding_symbols(observed_at) == {
+            "gate": ["HOME_USDT"]
+        }
+
+    final_snapshot = MarketSnapshot(
+        [], [], [], {}, observed_at,
+        funding_history={},
+        funding_history_refreshed={("gate", "HOME_USDT"): observed_at},
+    )
+    await runner._settle_live_funding(final_snapshot)
+    assert restored.funding_reconciliation_completed_at == observed_at
+
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_existing_live_payment_repairs_from_exact_durable_values(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, session_factory = database
     settings = Settings(
         run_mode="paper_test",
         market_data_mode="live_public",
@@ -961,11 +1756,7 @@ async def test_existing_live_payment_repairs_missing_raw_history(
     )
     adapters = create_public_adapters(settings)
     runtime = RuntimeState(settings, adapters)
-    runner = PaperTestRunner(
-        settings,
-        runtime,
-        cast(async_sessionmaker[AsyncSession], ExistingPaymentSessionFactory()),
-    )
+    runner = PaperTestRunner(settings, runtime, session_factory)
     timestamp = datetime(2026, 8, 14, 8, tzinfo=UTC)
     event = FundingHistoryPoint(
         exchange="gate",
@@ -973,12 +1764,12 @@ async def test_existing_live_payment_repairs_missing_raw_history(
         funding_rate=Decimal("-0.004494"),
         funding_timestamp=timestamp,
     )
-    funding = FundingSnapshot(
+    durable_funding = FundingSnapshot(
         exchange=event.exchange,
         symbol=event.symbol,
         funding_rate=event.funding_rate,
         funding_interval_hours=Decimal("8"),
-        timestamp=event.funding_timestamp,
+        timestamp=timestamp,
     )
     fill = PaperFill(
         client_order_id="gate-long",
@@ -1003,31 +1794,59 @@ async def test_existing_live_payment_repairs_missing_raw_history(
         leg_a_type=InstrumentType.PERPETUAL,
         opened_at=timestamp - timedelta(minutes=30),
     )
-    persisted: list[FundingHistoryPoint] = []
-
-    async def capture_history(
-        _session: object, points: list[FundingHistoryPoint]
-    ) -> None:
-        persisted.extend(points)
-
-    async def unexpected_payment(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("an existing payment must not be inserted again")
-
-    monkeypatch.setattr(paper_runner_module, "save_funding_history", capture_history)
-    monkeypatch.setattr(
-        paper_runner_module, "save_paper_funding_payment", unexpected_payment
-    )
+    runtime.portfolio.add_position(position)
+    async with session_factory() as session:
+        await save_paper_funding_payment(
+            session,
+            position.id,
+            durable_funding,
+            Decimal("250"),
+            Decimal("1.123500"),
+        )
 
     await runner._apply_funding_event(
         position,
         fill,
-        funding,
+        durable_funding,
+        history_event=event,
+    )
+    await runner._apply_funding_event(
+        position,
+        fill,
+        durable_funding,
         history_event=event,
     )
 
-    assert persisted == [event]
+    async with session_factory() as session:
+        payments = list(
+            (
+                await session.execute(
+                    select(PaperFundingPaymentRecord).where(
+                        PaperFundingPaymentRecord.position_id == position.id
+                    )
+                )
+            ).scalars()
+        )
+        history = list(
+            (
+                await session.execute(
+                    select(FundingHistoryRecord).where(
+                        FundingHistoryRecord.exchange == event.exchange,
+                        FundingHistoryRecord.symbol == event.symbol,
+                        FundingHistoryRecord.funding_timestamp == timestamp,
+                    )
+                )
+            ).scalars()
+        )
+    assert len(payments) == 1
+    durable_pnl = Decimal(str(payments[0].pnl))
+    assert Decimal(str(payments[0].funding_rate)) == event.funding_rate
+    assert Decimal(str(payments[0].notional)) == Decimal("250")
+    assert abs(durable_pnl - Decimal("1.123500")) <= Decimal("1e-15")
+    assert len(history) == 1
     assert position.settled_funding_at["gate|COTI_USDT"] == timestamp
-    assert position.funding_events == 0
+    assert position.funding_events == 1
+    assert position.pnl.funding_pnl == durable_pnl
 
     for adapter in adapters.values():
         await adapter.close()
@@ -1394,6 +2213,131 @@ def _exit_test_snapshot(
         ),
     }
     return MarketSnapshot([], tickers, funding, books, now)
+
+
+@pytest.mark.asyncio
+async def test_max_hold_closes_with_pending_funding_then_reconciles(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, session_factory = database
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="live_public",
+        paper_strategy_profile="candidate",
+        paper_max_hold_seconds=60,
+        paper_funding_reconciliation_window_seconds=7200,
+        paper_funding_reconciliation_poll_seconds=60,
+    )
+    adapters = create_public_adapters(settings)
+    runtime = RuntimeState(settings, adapters)
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        session_factory,
+    )
+    now = datetime.now(UTC)
+    settlement_at = now - timedelta(seconds=1)
+    opportunity = _exit_test_opportunity()
+    key = OpportunityDebouncer.key(opportunity)
+    position = PaperPosition(
+        opportunity_id=opportunity.id,
+        opportunity_key=key,
+        asset="BTC",
+        capital=Decimal("100"),
+        strategy=str(opportunity.strategy),
+        leg_a=_exit_test_fill("bybit", "BTCUSDT", "BUY"),
+        leg_b=_exit_test_fill("gate", "BTC_USDT", "SELL"),
+        leg_a_type=InstrumentType.PERPETUAL,
+        leg_b_type=InstrumentType.PERPETUAL,
+        state=PositionState.OPEN,
+        opened_at=now - timedelta(minutes=2),
+        target_settlements=(settlement_at,),
+        target_funding_events={
+            "bybit|BTCUSDT": settlement_at,
+            "gate|BTC_USDT": settlement_at,
+        },
+    )
+    runtime.portfolio.allocate_position(position, ("bybit", "gate"), Decimal("100"))
+    runner._position_by_key[key] = position.id
+    runtime.opportunities = [opportunity]
+
+    await runner._close_expired(_exit_test_snapshot(now))
+
+    assert position.state is PositionState.CLOSED
+    assert position.exit_requested_reason == "max_hold"
+    realized_at_close = runtime.portfolio.total_realized_pnl
+    assert runner._due_funding_symbols(now) == {
+        "bybit": ["BTCUSDT"],
+        "gate": ["BTC_USDT"],
+    }
+    assert runner._due_funding_symbols(now + timedelta(seconds=30)) == {}
+    assert runner._required_funding_symbols(now) == {
+        "bybit": ["BTCUSDT"],
+        "gate": ["BTC_USDT"],
+    }
+    next_poll_at = now + timedelta(seconds=60)
+    current = _exit_test_snapshot(next_poll_at)
+    settlement_snapshot = MarketSnapshot(
+        instruments=current.instruments,
+        tickers=current.tickers,
+        funding=current.funding,
+        orderbooks=current.orderbooks,
+        captured_at=next_poll_at,
+        funding_history={
+            ("bybit", "BTCUSDT"): [
+                FundingHistoryPoint(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    funding_rate=Decimal("0"),
+                    funding_timestamp=settlement_at,
+                )
+            ],
+            ("gate", "BTC_USDT"): [
+                FundingHistoryPoint(
+                    exchange="gate",
+                    symbol="BTC_USDT",
+                    funding_rate=Decimal("0.001"),
+                    funding_timestamp=settlement_at,
+                )
+            ],
+        },
+    )
+
+    await runner._settle_live_funding(settlement_snapshot)
+
+    assert position.funding_events == 2
+    assert abs(position.pnl.funding_pnl - Decimal("0.100")) <= Decimal("1e-15")
+    assert runtime.portfolio.total_realized_pnl == (
+        realized_at_close + position.pnl.funding_pnl
+    )
+    assert position.funding_reconciliation_completed_at is None
+    assert runner._due_funding_symbols(next_poll_at) == {
+        "bybit": ["BTCUSDT"],
+        "gate": ["BTC_USDT"],
+    }
+    assert runner._required_funding_symbols(next_poll_at) == {
+        "bybit": ["BTCUSDT"],
+        "gate": ["BTC_USDT"],
+    }
+    after_window = now + timedelta(seconds=7201)
+    assert runner._due_funding_symbols(after_window) == {
+        "bybit": ["BTCUSDT"],
+        "gate": ["BTC_USDT"],
+    }
+    final_snapshot = replace(
+        settlement_snapshot,
+        captured_at=after_window,
+        funding_history_refreshed={
+            ("bybit", "BTCUSDT"): after_window,
+            ("gate", "BTC_USDT"): after_window,
+        },
+    )
+    await runner._settle_live_funding(final_snapshot)
+    assert runner._required_funding_symbols(after_window) == {}
+    assert position.funding_reconciliation_completed_at == after_window
+
+    for adapter in adapters.values():
+        await adapter.close()
 
 
 @pytest.mark.asyncio

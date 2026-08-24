@@ -44,6 +44,7 @@ class MarketSnapshot:
     funding_history: dict[tuple[str, str], list[FundingHistoryPoint]] | None = None
     stale_after_seconds: int = 30
     incomplete_venues: tuple[str, ...] = ()
+    funding_history_refreshed: dict[tuple[str, str], datetime] = field(default_factory=dict)
     _ticker_index: dict[tuple[str, str, InstrumentType], Ticker] = field(
         init=False, repr=False, compare=False
     )
@@ -116,6 +117,9 @@ class _VenueCollection:
     orderbooks: dict[tuple[str, str, InstrumentType], OrderBook]
     funding_history: dict[tuple[str, str], list[FundingHistoryPoint]]
     operationally_complete: bool
+    funding_history_refreshed: dict[tuple[str, str], datetime] = field(
+        default_factory=dict
+    )
 
 
 class MarketDataCollector:
@@ -247,6 +251,11 @@ class MarketDataCollector:
             for result in collections
             for key, points in result.funding_history.items()
         }
+        funding_history_refreshed = dict(
+            item
+            for result in collections
+            for item in result.funding_history_refreshed.items()
+        )
         collection_by_venue = {
             adapter.name: result
             for adapter, result in zip(active_adapters, collections, strict=True)
@@ -271,9 +280,10 @@ class MarketDataCollector:
             funding=funding,
             orderbooks=orderbooks,
             captured_at=captured_at,
-            funding_history=dict(self._funding_history_cache),
+            funding_history={**self._funding_history_cache, **funding_history},
             stale_after_seconds=self.stale_after_seconds,
             incomplete_venues=incomplete_venues,
+            funding_history_refreshed=funding_history_refreshed,
         )
 
     async def _refresh_funding_aged_during_collection(
@@ -311,6 +321,7 @@ class MarketDataCollector:
                     current.orderbooks,
                     current.funding_history,
                     False,
+                    current.funding_history_refreshed,
                 )
                 logger.warning(
                     "stale_funding_refresh_failed",
@@ -337,6 +348,7 @@ class MarketDataCollector:
                 current.orderbooks,
                 current.funding_history,
                 current.operationally_complete,
+                current.funding_history_refreshed,
             )
             self._funding_cache[adapter.name] = value
             self._last_funding_fetch[adapter.name] = refreshed_at
@@ -366,6 +378,7 @@ class MarketDataCollector:
                 current.orderbooks,
                 current.funding_history,
                 current.operationally_complete,
+                current.funding_history_refreshed,
             )
             if not _required_tickers_are_fresh(
                 adapter.name,
@@ -392,6 +405,7 @@ class MarketDataCollector:
                         current.orderbooks,
                         current.funding_history,
                         False,
+                        current.funding_history_refreshed,
                     )
                     logger.warning(
                         "stale_required_ticker_refresh_failed",
@@ -442,6 +456,7 @@ class MarketDataCollector:
                     current.orderbooks,
                     current.funding_history,
                     operationally_complete,
+                    current.funding_history_refreshed,
                 )
                 self._rest_ticker_cache[adapter.name] = value
                 self._last_rest_ticker_fetch[adapter.name] = refreshed_at
@@ -465,6 +480,7 @@ class MarketDataCollector:
         breaker = self.health[adapter.name]
         orderbooks: dict[tuple[str, str, InstrumentType], OrderBook] = {}
         funding_history: dict[tuple[str, str], list[FundingHistoryPoint]] = {}
+        funding_history_refreshed: dict[tuple[str, str], datetime] = {}
         history_complete = True
         try:
             venue_instruments = self._instrument_cache.get(adapter.name)
@@ -606,7 +622,10 @@ class MarketDataCollector:
                     dict.fromkeys([*required_history, *ranked[:ranked_budget]])
                 )
                 valid_symbols = {item.symbol for item in all_venue_funding}
-                selected = [symbol for symbol in selected if symbol in valid_symbols]
+                selected = [
+                    symbol for symbol in selected
+                    if symbol in valid_symbols or symbol in forced_history
+                ]
                 symbols_to_fetch = [
                     symbol
                     for symbol in selected
@@ -629,6 +648,7 @@ class MarketDataCollector:
                             history_result,
                             key=lambda point: point.funding_timestamp,
                         )
+                        funding_history_refreshed[(adapter.name, symbol)] = end
                 covered = {
                     symbol
                     for symbol in selected
@@ -659,6 +679,7 @@ class MarketDataCollector:
                 orderbooks,
                 funding_history,
                 operationally_complete,
+                funding_history_refreshed,
             )
         except Exception:
             breaker.record_failure()

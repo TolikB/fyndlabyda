@@ -14,8 +14,51 @@ from funding_arbitrage.exchanges.base.models import (
 def test_default_simulator_namespaces_match_current_canary() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.paper_simulation_version == "v32-multi-regime-candidate"
-    assert settings.paper_baseline_simulation_version == "v31-oos-baseline"
+    assert settings.paper_simulation_version == "v33-multi-regime-candidate"
+    assert settings.paper_baseline_simulation_version == "v33-multi-regime-baseline"
+
+
+def test_funding_reconciliation_limits_are_bounded() -> None:
+    with pytest.raises(
+        ValueError,
+        match="PAPER_FUNDING_RECONCILIATION_WINDOW_SECONDS must be between",
+    ):
+        Settings(
+            _env_file=None,
+            paper_funding_reconciliation_window_seconds=0,
+        )
+    with pytest.raises(
+        ValueError,
+        match="PAPER_FUNDING_RECONCILIATION_WINDOW_SECONDS must be between",
+    ):
+        Settings(
+            _env_file=None,
+            paper_funding_reconciliation_window_seconds=21_601,
+        )
+    with pytest.raises(
+        ValueError,
+        match="PAPER_FUNDING_RECONCILIATION_POLL_SECONDS must be between",
+    ):
+        Settings(
+            _env_file=None,
+            paper_funding_reconciliation_poll_seconds=4,
+        )
+    with pytest.raises(
+        ValueError,
+        match="PAPER_FUNDING_RECONCILIATION_POLL_SECONDS must be between",
+    ):
+        Settings(
+            _env_file=None,
+            paper_funding_reconciliation_poll_seconds=7201,
+        )
+    with pytest.raises(
+        ValueError,
+        match="PAPER_FUNDING_RECONCILIATION_MAX_POST_DEADLINE_ATTEMPTS must be",
+    ):
+        Settings(
+            _env_file=None,
+            paper_funding_reconciliation_max_post_deadline_attempts=0,
+        )
 
 
 def test_comparison_rejects_shared_or_blank_simulator_namespaces() -> None:

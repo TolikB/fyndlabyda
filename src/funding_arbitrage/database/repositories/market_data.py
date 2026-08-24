@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.exchanges.base.models import (
@@ -138,15 +139,19 @@ async def _upsert_funding_history(
     bind = session.get_bind()
     if bind.dialect.name == "postgresql":
         for index in range(0, len(rows), 1000):
-            statement = pg_insert(FundingHistoryRecord).values(rows[index : index + 1000])
-            statement = statement.on_conflict_do_update(
-                constraint="uq_funding_history_event",
-                set_={
-                    "funding_rate": statement.excluded.funding_rate,
-                    "mark_price": statement.excluded.mark_price,
-                },
+            pg_statement = pg_insert(FundingHistoryRecord).values(
+                rows[index : index + 1000]
             )
-            await session.execute(statement)
+            pg_statement = pg_statement.on_conflict_do_nothing(
+                constraint="uq_funding_history_event"
+            )
+            await session.execute(pg_statement)
+    elif bind.dialect.name == "sqlite":
+        sqlite_statement = sqlite_insert(FundingHistoryRecord).values(rows)
+        sqlite_statement = sqlite_statement.on_conflict_do_nothing(
+            index_elements=["exchange", "symbol", "funding_timestamp"]
+        )
+        await session.execute(sqlite_statement)
     else:
         for row in rows:
             record = await session.scalar(
@@ -158,9 +163,6 @@ async def _upsert_funding_history(
             )
             if record is None:
                 session.add(FundingHistoryRecord(**row))
-            else:
-                record.funding_rate = row["funding_rate"]
-                record.mark_price = row["mark_price"]
 
 
 async def save_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
@@ -343,6 +345,8 @@ async def save_paper_runtime_incident(
     category: str,
     error_type: str,
     occurred_at: datetime,
+    *,
+    commit: bool = True,
 ) -> None:
     """Persist one redacted runtime event for every affected paper ledger."""
 
@@ -355,7 +359,10 @@ async def save_paper_runtime_incident(
                 error_type=error_type[:128],
             )
         )
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
 
 
 async def save_backtest_result(
@@ -417,7 +424,12 @@ async def save_backtest_result(
     await session.commit()
 
 
-async def save_paper_position(session: AsyncSession, position: PaperPosition) -> None:
+async def save_paper_position(
+    session: AsyncSession,
+    position: PaperPosition,
+    *,
+    commit: bool = True,
+) -> None:
     """Upsert paper position state and its complete PnL payload."""
 
     values: dict[str, Any] = {
@@ -447,7 +459,10 @@ async def save_paper_position(session: AsyncSession, position: PaperPosition) ->
     ):
         if fill is not None:
             await save_paper_fill(session, fill, position.id)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
 
 
 async def save_paper_fill(
@@ -486,21 +501,89 @@ async def save_paper_funding_payment(
     pnl: Decimal,
     *,
     history_event: FundingHistoryPoint | None = None,
-) -> None:
+) -> PaperFundingPaymentRecord:
+    if history_event is not None and (
+        history_event.exchange != funding.exchange
+        or history_event.symbol != funding.symbol
+        or _normalize_utc(history_event.funding_timestamp)
+        != _normalize_utc(funding.timestamp)
+        or history_event.funding_rate != funding.funding_rate
+    ):
+        raise ValueError("funding history event does not match the paper payment")
+
     # A live paper payment must never exist without its authoritative raw
-    # exchange event. Upsert both in the same transaction; mock settlements do
-    # not pass a history event and therefore cannot pollute the public ledger.
+    # exchange event. Insert both in one transaction. Funding settlement events
+    # are immutable: a duplicate may confirm an event but may never rewrite it.
     if history_event is not None:
         await _upsert_funding_history(session, [history_event])
-    session.add(
-        PaperFundingPaymentRecord(
-            position_id=position_id,
-            exchange=funding.exchange,
-            symbol=funding.symbol,
-            funding_timestamp=funding.timestamp,
-            funding_rate=funding.funding_rate,
-            notional=notional,
-            pnl=pnl,
+    values = {
+        "position_id": position_id,
+        "exchange": funding.exchange,
+        "symbol": funding.symbol,
+        "funding_timestamp": funding.timestamp,
+        "funding_rate": funding.funding_rate,
+        "notional": notional,
+        "pnl": pnl,
+    }
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        pg_statement = pg_insert(PaperFundingPaymentRecord).values(**values)
+        pg_statement = pg_statement.on_conflict_do_nothing(
+            constraint="uq_paper_funding_position_exchange_symbol_event"
+        )
+        await session.execute(pg_statement)
+    elif bind.dialect.name == "sqlite":
+        sqlite_statement = sqlite_insert(PaperFundingPaymentRecord).values(**values)
+        sqlite_statement = sqlite_statement.on_conflict_do_nothing(
+            index_elements=[
+                "position_id",
+                "exchange",
+                "symbol",
+                "funding_timestamp",
+            ]
+        )
+        await session.execute(sqlite_statement)
+    else:
+        raise RuntimeError(
+            f"atomic paper funding payment insert is unsupported for {bind.dialect.name}"
+        )
+
+    record = await session.scalar(
+        select(PaperFundingPaymentRecord).where(
+            PaperFundingPaymentRecord.position_id == position_id,
+            PaperFundingPaymentRecord.exchange == funding.exchange,
+            PaperFundingPaymentRecord.symbol == funding.symbol,
+            PaperFundingPaymentRecord.funding_timestamp == funding.timestamp,
         )
     )
+    if record is None:
+        await session.rollback()
+        raise RuntimeError("paper funding payment insert did not produce a durable record")
+    if history_event is not None:
+        history_record = await session.scalar(
+            select(FundingHistoryRecord).where(
+                FundingHistoryRecord.exchange == funding.exchange,
+                FundingHistoryRecord.symbol == funding.symbol,
+                FundingHistoryRecord.funding_timestamp == funding.timestamp,
+            )
+        )
+        if history_record is None or (
+            _normalize_utc(history_record.funding_timestamp)
+            != _normalize_utc(record.funding_timestamp)
+            or Decimal(str(history_record.funding_rate))
+            != Decimal(str(record.funding_rate))
+        ):
+            await session.rollback()
+            raise RuntimeError(
+                "raw funding history conflicts with the durable paper payment"
+            )
     await session.commit()
+    return record
+
+
+def _normalize_utc(value: datetime) -> datetime:
+    return (
+        value.replace(tzinfo=UTC)
+        if value.tzinfo is None
+        else value.astimezone(UTC)
+    )

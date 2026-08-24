@@ -79,12 +79,15 @@ paper_portfolio:
   market_asset_limit: 12
   history_symbol_limit: 5
   market_persist_interval_seconds: 300
-  simulation_version: v32-multi-regime-candidate
+  simulation_version: v33-multi-regime-candidate
   strategy_profile: candidate
   comparison_enabled: false
-  baseline_simulation_version: v31-oos-baseline
+  baseline_simulation_version: v33-multi-regime-baseline
   exit_edge_miss_cycles: 2
   funding_horizon_hours: 24
+  funding_reconciliation_window_seconds: 7200
+  funding_reconciliation_poll_seconds: 60
+  funding_reconciliation_max_post_deadline_attempts: 5
   entry_window_hours: 2
   min_settlement_cost_coverage: 2
   max_adverse_basis_percent: 0.005
