@@ -198,6 +198,7 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     verifier = _read("scripts/verify_internal_tls.sh")
     assert "openssl pkey -check -noout -passin pass:" in verifier
     assert "check_postgres_client_cn" in verifier
+    assert "internal TLS directory must not contain a CA private key" in verifier
     assert "check_private_owner secrets/internal/clickhouse-client.key 101 101" in preflight
     assert (
         'bash scripts/verify_internal_tls.sh secrets/internal 86400 "$postgres_user"'
@@ -217,7 +218,9 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
 
     generator = ROOT / "scripts" / "generate_ephemeral_test_pki.sh"
     verifier = ROOT / "scripts" / "verify_internal_tls.sh"
+    signing = tmp_path / "signing"
     valid = tmp_path / "valid"
+    fixtures = tmp_path / "issued"
     second = tmp_path / "second"
     environment = {
         **os.environ,
@@ -225,11 +228,13 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
         "KEEP_EPHEMERAL_TEST_CA_KEY": "YES",
     }
     subprocess.run(
-        ["bash", str(generator), str(valid)],
+        ["bash", str(generator), str(signing)],
         check=True,
         env=environment,
         timeout=30,
     )
+    shutil.copytree(signing, valid, ignore=shutil.ignore_patterns("ca.key"))
+    fixtures.mkdir()
     second_environment = {**os.environ, "ALLOW_EPHEMERAL_TEST_PKI": "YES"}
     subprocess.run(
         ["bash", str(generator), str(second)],
@@ -262,10 +267,14 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
         common_name: str,
         usage: str,
         san: str,
+        organization: str | None = None,
     ) -> tuple[Path, Path]:
-        key = valid / f"{name}.key"
-        request = valid / f"{name}.csr"
-        certificate = valid / f"{name}.crt"
+        key = fixtures / f"{name}.key"
+        request = fixtures / f"{name}.csr"
+        certificate = fixtures / f"{name}.crt"
+        subject = f"/CN={common_name}"
+        if organization is not None:
+            subject += f"/O={organization}"
         subprocess.run(
             [
                 "openssl",
@@ -275,7 +284,7 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
                 "-sha256",
                 "-nodes",
                 "-subj",
-                f"/CN={common_name}",
+                subject,
                 "-addext",
                 f"subjectAltName={san}",
                 "-addext",
@@ -300,9 +309,9 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
                 "-in",
                 str(request),
                 "-CA",
-                str(valid / "ca.crt"),
+                str(signing / "ca.crt"),
                 "-CAkey",
-                str(valid / "ca.key"),
+                str(signing / "ca.key"),
                 "-CAcreateserial",
                 "-copy_extensions",
                 "copy",
@@ -319,6 +328,11 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
     assert verify(valid).returncode == 0
     assert verify(valid, "999999999").returncode != 0
     assert verify(valid, postgres_username="unsafe user").returncode == 2
+
+    leaked_ca = tmp_path / "leaked-ca"
+    shutil.copytree(valid, leaked_ca)
+    shutil.copy2(signing / "ca.key", leaked_ca / "ca.key")
+    assert verify(leaked_ca).returncode != 0
 
     wrong_ca = tmp_path / "wrong-ca"
     shutil.copytree(valid, wrong_ca)
@@ -387,6 +401,19 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
     assert verify(wrong_cn).returncode != 0
     assert verify(wrong_cn, postgres_username="other_user").returncode == 0
 
+    extra_subject_cert, extra_subject_key = issue_fixture(
+        "app-extra-subject",
+        "funding",
+        "clientAuth",
+        "DNS:funding",
+        organization="Example",
+    )
+    extra_subject = tmp_path / "extra-subject"
+    shutil.copytree(valid, extra_subject)
+    shutil.copy2(extra_subject_cert, extra_subject / "app-client.crt")
+    shutil.copy2(extra_subject_key, extra_subject / "app-client.key")
+    assert verify(extra_subject).returncode == 0
+
     malformed = tmp_path / "malformed"
     shutil.copytree(valid, malformed)
     (malformed / "app-client.crt").write_text(
@@ -394,6 +421,7 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
         encoding="utf-8",
     )
     assert verify(malformed).returncode != 0
+
 
 def test_ephemeral_pki_never_deletes_or_overwrites_a_destination() -> None:
     script = _read("scripts/generate_ephemeral_test_pki.sh")

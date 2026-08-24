@@ -30,6 +30,10 @@ if [[ -L "$tls_dir" || ! -d "$tls_dir" ]]; then
 fi
 
 readonly ca_file="$tls_dir/ca.crt"
+if [[ -e "$tls_dir/ca.key" || -L "$tls_dir/ca.key" ]]; then
+  echo "internal TLS directory must not contain a CA private key" >&2
+  exit 1
+fi
 readonly certificate_names=(
   app-client
   postgres-server
@@ -81,11 +85,18 @@ check_server_identity() {
 check_postgres_client_cn() {
   local certificate_file="$1"
   local expected_cn="$2"
+  local -a common_names=()
   local subject
   subject="$(
-    openssl x509 -noout -subject -nameopt RFC2253 -in "$certificate_file"
+    openssl x509 -noout -subject -nameopt RFC2253,sep_multiline \
+      -in "$certificate_file"
   )"
-  if [[ "$subject" != "subject=CN=$expected_cn" ]]; then
+  mapfile -t common_names < <(
+    printf '%s\n' "$subject" |
+      awk '/^[[:space:]]*CN=/{sub(/^[[:space:]]*CN=/, ""); print}'
+  )
+  if (( ${#common_names[@]} != 1 )) ||
+     [[ "${common_names[0]}" != "$expected_cn" ]]; then
     echo "PostgreSQL client certificate CN does not match POSTGRES_USER" >&2
     exit 1
   fi
