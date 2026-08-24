@@ -88,12 +88,41 @@ check_postgres_client_cn() {
   local -a common_names=()
   local subject
   subject="$(
-    openssl x509 -noout -subject -nameopt RFC2253,sep_multiline \
-      -in "$certificate_file"
+    openssl x509 -noout -subject -nameopt RFC2253 -in "$certificate_file"
   )"
   mapfile -t common_names < <(
     printf '%s\n' "$subject" |
-      awk '/^[[:space:]]*CN=/{sub(/^[[:space:]]*CN=/, ""); print}'
+      awk '
+        function emit(value) {
+          sub(/^[[:space:]]+/, "", value)
+          sub(/[[:space:]]+$/, "", value)
+          if (value ~ /^CN=/) {
+            sub(/^CN=/, "", value)
+            print value
+          }
+        }
+        {
+          line = $0
+          sub(/^subject=/, "", line)
+          token = ""
+          escaped = 0
+          for (position = 1; position <= length(line); position++) {
+            character = substr(line, position, 1)
+            if ((character == "," || character == "+") && !escaped) {
+              emit(token)
+              token = ""
+              continue
+            }
+            token = token character
+            if (character == "\\" && !escaped) {
+              escaped = 1
+            } else {
+              escaped = 0
+            }
+          }
+          emit(token)
+        }
+      '
   )
   if (( ${#common_names[@]} != 1 )) ||
      [[ "${common_names[0]}" != "$expected_cn" ]]; then

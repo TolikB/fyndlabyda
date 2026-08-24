@@ -268,13 +268,17 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
         usage: str,
         san: str,
         organization: str | None = None,
+        multi_valued_rdn: bool = False,
+        additional_common_name: str | None = None,
     ) -> tuple[Path, Path]:
         key = fixtures / f"{name}.key"
         request = fixtures / f"{name}.csr"
         certificate = fixtures / f"{name}.crt"
         subject = f"/CN={common_name}"
         if organization is not None:
-            subject += f"/O={organization}"
+            subject += f"{'+' if multi_valued_rdn else '/'}O={organization}"
+        if additional_common_name is not None:
+            subject += f"/CN={additional_common_name}"
         subprocess.run(
             [
                 "openssl",
@@ -413,6 +417,33 @@ def test_internal_tls_verifier_rejects_invalid_runtime_material(
     shutil.copy2(extra_subject_cert, extra_subject / "app-client.crt")
     shutil.copy2(extra_subject_key, extra_subject / "app-client.key")
     assert verify(extra_subject).returncode == 0
+
+    multi_rdn_cert, multi_rdn_key = issue_fixture(
+        "app-multi-rdn",
+        "funding",
+        "clientAuth",
+        "DNS:funding",
+        organization="Example",
+        multi_valued_rdn=True,
+    )
+    multi_rdn = tmp_path / "multi-rdn"
+    shutil.copytree(valid, multi_rdn)
+    shutil.copy2(multi_rdn_cert, multi_rdn / "app-client.crt")
+    shutil.copy2(multi_rdn_key, multi_rdn / "app-client.key")
+    assert verify(multi_rdn).returncode == 0
+
+    duplicate_cn_cert, duplicate_cn_key = issue_fixture(
+        "app-duplicate-cn",
+        "funding",
+        "clientAuth",
+        "DNS:funding",
+        additional_common_name="funding",
+    )
+    duplicate_cn = tmp_path / "duplicate-cn"
+    shutil.copytree(valid, duplicate_cn)
+    shutil.copy2(duplicate_cn_cert, duplicate_cn / "app-client.crt")
+    shutil.copy2(duplicate_cn_key, duplicate_cn / "app-client.key")
+    assert verify(duplicate_cn).returncode != 0
 
     malformed = tmp_path / "malformed"
     shutil.copytree(valid, malformed)
