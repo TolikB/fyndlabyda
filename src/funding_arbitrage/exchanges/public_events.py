@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from time import monotonic_ns
 from typing import Any
+
+from pydantic import BaseModel
 
 from funding_arbitrage.config import Settings
 from funding_arbitrage.domain.events import (
@@ -666,10 +669,11 @@ class PublicEventSupervisor:
             if received_monotonic_ns is not None
             else monotonic_ns()
         )
-        occurrence_id = snapshot_occurrence_id(
+        base_occurrence_id = snapshot_occurrence_id(
             receive_timestamp=received_at,
             receive_monotonic_ns=observed_monotonic_ns,
         )
+        funding_rows: list[tuple[FundingSnapshot, str, str, str]] = []
         for funding in snapshot.funding:
             instrument = snapshot.instrument(
                 funding.exchange, funding.symbol, LegacyInstrumentType.PERPETUAL
@@ -704,25 +708,47 @@ class PublicEventSupervisor:
                 index_price=index_price,
                 exchange_timestamp=funding.timestamp,
             )
+            funding_rows.append(
+                (
+                    funding_payload,
+                    f"native:{funding.exchange}:funding",
+                    _polled_snapshot_sequence_id(
+                        funding.symbol, funding.timestamp
+                    ),
+                    funding.exchange,
+                )
+            )
+        funding_occurrences = _observation_occurrence_ids(
+            base_occurrence_id,
+            [
+                (source, sequence_id, payload)
+                for payload, source, sequence_id, _ in funding_rows
+            ],
+        )
+        for funding_row, funding_occurrence_id in zip(
+            funding_rows, funding_occurrences, strict=True
+        ):
+            funding_event_payload, funding_source, funding_sequence_id, exchange = (
+                funding_row
+            )
             event = _envelope(
-                funding_payload,
+                funding_event_payload,
                 kind=EventKind.FUNDING_SNAPSHOT,
-                source=f"native:{funding.exchange}:funding",
-                sequence_id=_polled_snapshot_sequence_id(
-                    funding.symbol, funding.timestamp
-                ),
+                source=funding_source,
+                sequence_id=funding_sequence_id,
                 received_at=received_at,
                 received_monotonic_ns=observed_monotonic_ns,
-                occurrence_id=occurrence_id,
+                occurrence_id=funding_occurrence_id,
             )
             await self.event_sink(event)
-            public_events_total.labels(funding.exchange, "funding", "native").inc()
+            public_events_total.labels(exchange, "funding", "native").inc()
         unsupported_oi = {
             account.profile.venue
             for account in self.accounts
             if account.profile.instrument_type is not InstrumentType.SPOT
             and not account.exchange.has.get("fetchOpenInterest")
         }
+        open_interest_rows: list[tuple[OpenInterestSnapshot, str, str, str]] = []
         for ticker in snapshot.tickers:
             if (
                 ticker.exchange not in unsupported_oi
@@ -740,22 +766,42 @@ class PublicEventSupervisor:
                 open_interest_base=ticker.open_interest,
                 exchange_timestamp=ticker.timestamp,
             )
-            await self.event_sink(
-                _envelope(
+            open_interest_rows.append(
+                (
                     oi_payload,
-                    kind=EventKind.OPEN_INTEREST_SNAPSHOT,
-                    source=f"native:{ticker.exchange}:open-interest",
-                    sequence_id=_polled_snapshot_sequence_id(
-                        ticker.symbol, ticker.timestamp
-                    ),
-                    received_at=received_at,
-                    received_monotonic_ns=observed_monotonic_ns,
-                    occurrence_id=occurrence_id,
+                    f"native:{ticker.exchange}:open-interest",
+                    _polled_snapshot_sequence_id(ticker.symbol, ticker.timestamp),
+                    ticker.exchange,
                 )
             )
-            public_events_total.labels(
-                ticker.exchange, "open_interest", "native"
-            ).inc()
+        open_interest_occurrences = _observation_occurrence_ids(
+            base_occurrence_id,
+            [
+                (source, sequence_id, payload)
+                for payload, source, sequence_id, _ in open_interest_rows
+            ],
+        )
+        for open_interest_row, open_interest_occurrence_id in zip(
+            open_interest_rows, open_interest_occurrences, strict=True
+        ):
+            (
+                open_interest_event_payload,
+                open_interest_source,
+                open_interest_sequence_id,
+                exchange,
+            ) = open_interest_row
+            await self.event_sink(
+                _envelope(
+                    open_interest_event_payload,
+                    kind=EventKind.OPEN_INTEREST_SNAPSHOT,
+                    source=open_interest_source,
+                    sequence_id=open_interest_sequence_id,
+                    received_at=received_at,
+                    received_monotonic_ns=observed_monotonic_ns,
+                    occurrence_id=open_interest_occurrence_id,
+                )
+            )
+            public_events_total.labels(exchange, "open_interest", "native").inc()
 
     async def _publish(
         self,
@@ -936,6 +982,34 @@ def _envelope(
         quality=quality,
     )
     return EventEnvelope[Any](kind=kind, metadata=metadata, payload=payload)
+
+
+def _observation_occurrence_ids(
+    base_occurrence_id: str,
+    rows: Sequence[tuple[str, str, BaseModel]],
+) -> tuple[str, ...]:
+    """Disambiguate duplicate native identities without depending on row order."""
+
+    grouped: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for row_index, (source, native_identity, payload) in enumerate(rows):
+        encoded = json.dumps(
+            payload.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        payload_fingerprint = hashlib.sha256(encoded).hexdigest()
+        grouped.setdefault((source, native_identity), []).append(
+            (row_index, payload_fingerprint)
+        )
+    result = [base_occurrence_id] * len(rows)
+    for duplicates in grouped.values():
+        if len(duplicates) == 1:
+            continue
+        for duplicate_rank, (row_index, _) in enumerate(
+            sorted(duplicates, key=lambda item: (item[1], item[0]))
+        ):
+            result[row_index] = f"{base_occurrence_id}:duplicate:{duplicate_rank}"
+    return tuple(result)
 
 
 def _polled_snapshot_sequence_id(

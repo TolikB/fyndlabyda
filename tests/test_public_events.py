@@ -12,6 +12,8 @@ from funding_arbitrage.domain.events import (
     EventEnvelope,
     EventKind,
     InstrumentType,
+    deterministic_event_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.models import (
     FundingSnapshot,
@@ -441,6 +443,122 @@ async def test_polled_derivative_observations_do_not_reuse_event_ids() -> None:
         != open_interest_events[2].metadata.event_id
     )
     assert funding_events[2].metadata.monotonic_ns == 101
+    expected_occurrence = snapshot_occurrence_id(
+        receive_timestamp=NOW,
+        receive_monotonic_ns=100,
+    )
+    assert funding_events[0].metadata.event_id == deterministic_event_id(
+        source=funding_events[0].metadata.source,
+        kind=funding_events[0].kind,
+        sequence_id=funding_events[0].metadata.sequence_id,
+        exchange_timestamp=funding_events[0].metadata.exchange_timestamp,
+        payload=funding_events[0].payload,
+        occurrence_id=expected_occurrence,
+    )
+
+
+async def test_same_native_identity_on_two_exchanges_keeps_unique_compatible_ids() -> None:
+    exchange = FakePublicExchange(open_interest=True)
+    collector = EventCollector()
+    supervisor = PublicEventSupervisor(
+        [PublicEventAccount(_profile(), exchange)],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    source = _snapshot(open_interest=None)
+    snapshot = MarketSnapshot(
+        [
+            source.instruments[0],
+            source.instruments[0].model_copy(update={"exchange": "bybit"}),
+        ],
+        [
+            source.tickers[0],
+            source.tickers[0].model_copy(update={"exchange": "bybit"}),
+        ],
+        [
+            source.funding[0],
+            source.funding[0].model_copy(update={"exchange": "bybit"}),
+        ],
+        source.orderbooks,
+        source.captured_at,
+    )
+
+    await supervisor._publish_snapshot_events(snapshot, NOW, 100)
+
+    assert len(collector.events) == 2
+    assert len({event.metadata.event_id for event in collector.events}) == 2
+    expected_occurrence = snapshot_occurrence_id(
+        receive_timestamp=NOW,
+        receive_monotonic_ns=100,
+    )
+    for event in collector.events:
+        assert event.metadata.event_id == deterministic_event_id(
+            source=event.metadata.source,
+            kind=event.kind,
+            sequence_id=event.metadata.sequence_id,
+            exchange_timestamp=event.metadata.exchange_timestamp,
+            payload=event.payload,
+            occurrence_id=expected_occurrence,
+        )
+
+
+async def test_duplicate_polled_rows_have_distinct_event_ids_within_observation() -> None:
+    exchange = FakePublicExchange(open_interest=False)
+    collector = EventCollector()
+    supervisor = PublicEventSupervisor(
+        [PublicEventAccount(_profile(), exchange)],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    source = _snapshot()
+    snapshot = MarketSnapshot(
+        source.instruments,
+        [
+            source.tickers[0],
+            source.tickers[0].model_copy(
+                update={"open_interest": Decimal("13.5")}
+            ),
+        ],
+        [
+            source.funding[0],
+            source.funding[0].model_copy(
+                update={"mark_price": Decimal("60002")}
+            ),
+        ],
+        source.orderbooks,
+        source.captured_at,
+    )
+
+    await supervisor._publish_snapshot_events(snapshot, NOW, 100)
+    first_events = collector.events.copy()
+    reversed_snapshot = MarketSnapshot(
+        source.instruments,
+        list(reversed(snapshot.tickers)),
+        list(reversed(snapshot.funding)),
+        source.orderbooks,
+        source.captured_at,
+    )
+    await supervisor._publish_snapshot_events(reversed_snapshot, NOW, 100)
+    repeated_events = collector.events[4:]
+
+    def event_identity(event: EventEnvelope[Any]) -> tuple[EventKind, str]:
+        return event.kind, event.payload.model_dump_json()
+
+    first_identity = {
+        event_identity(event): event.metadata.event_id for event in first_events
+    }
+    repeated_identity = {
+        event_identity(event): event.metadata.event_id for event in repeated_events
+    }
+    assert len(first_identity) == 4
+    assert len(set(first_identity.values())) == 4
+    assert repeated_identity == first_identity
 
 
 async def test_polled_snapshot_identity_is_bounded_for_long_symbols() -> None:
