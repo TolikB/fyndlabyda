@@ -15,6 +15,7 @@ from funding_arbitrage.domain.events import (
     BookLevel,
     BookSide,
     BookSnapshot,
+    DataQuality,
     EventEnvelope,
     EventKind,
     EventMetadata,
@@ -46,7 +47,7 @@ class MexcOrderBookSequenceGap(RuntimeError):
 
 
 class MexcOrderBookNormalizer:
-    """Apply MEXC's absolute, strictly sequential futures depth updates."""
+    """Apply MEXC's absolute futures depth updates."""
 
     def __init__(
         self,
@@ -136,6 +137,69 @@ class MexcOrderBookNormalizer:
             result=result,
             sequence_id=f"version:{version}",
             source="MEXC.PUBLIC.FUTURES.DEPTH.INCREMENTAL",
+            receive_timestamp=receive_timestamp,
+            receive_monotonic_ns=receive_monotonic_ns,
+        )
+
+    def apply_full_snapshot(
+        self,
+        payload: object,
+        *,
+        receive_timestamp: datetime | None = None,
+        receive_monotonic_ns: int | None = None,
+    ) -> MexcBookUpdate:
+        if not isinstance(payload, dict) or payload.get("channel") != "push.depth.full":
+            raise InvalidResponseError("invalid MEXC futures full depth payload")
+        data = payload.get("data")
+        symbol = str(payload.get("symbol") or "").upper()
+        if not isinstance(data, dict) or symbol != self.instrument.exchange_symbol:
+            raise InvalidResponseError("MEXC futures full depth instrument mismatch")
+        version = _nonnegative_integer(data.get("version"), "version")
+        timestamp_value = payload["ts"] if "ts" in payload else data.get("cts")
+        exchange_timestamp = _timestamp_ms(timestamp_value, "timestamp")
+        snapshot = BookSnapshot(
+            instrument=self.instrument,
+            bids=_snapshot_levels(data, "bids", self.contract_size, reverse=True),
+            asks=_snapshot_levels(data, "asks", self.contract_size, reverse=False),
+            sequence=version,
+            exchange_timestamp=exchange_timestamp,
+        )
+        current_sequence = self.local_book.sequence
+        if current_sequence is not None and version < current_sequence:
+            result = BookApplyResult(
+                status=BookApplyStatus.REJECTED,
+                quality=DataQuality.INVALID,
+                sequence=current_sequence,
+                reason="snapshot_sequence_regressed",
+            )
+        elif current_sequence == version:
+            current = self.local_book.snapshot()
+            same_levels = snapshot.bids == current.bids and snapshot.asks == current.asks
+            timestamp_regressed = snapshot.exchange_timestamp < current.exchange_timestamp
+            if same_levels and not timestamp_regressed:
+                # Full snapshots are also freshness observations.  A newer
+                # timestamp with unchanged native version must refresh the
+                # local book, while an exact replay remains a duplicate.
+                result = self.local_book.apply_snapshot(snapshot)
+            else:
+                result = BookApplyResult(
+                    status=BookApplyStatus.REJECTED,
+                    quality=DataQuality.INVALID,
+                    sequence=current_sequence,
+                    reason=(
+                        "snapshot_timestamp_regressed"
+                        if timestamp_regressed
+                        else "snapshot_identity_collision"
+                    ),
+                )
+        else:
+            result = self.local_book.apply_snapshot(snapshot)
+        return self._wrap(
+            kind=EventKind.BOOK_SNAPSHOT,
+            payload=snapshot,
+            result=result,
+            sequence_id=f"version:{version}",
+            source="MEXC.PUBLIC.FUTURES.DEPTH.WS_FULL",
             receive_timestamp=receive_timestamp,
             receive_monotonic_ns=receive_monotonic_ns,
         )
@@ -247,6 +311,33 @@ def _delta_levels(
     if not updates:
         raise InvalidResponseError("MEXC futures depth event has no updates")
     return tuple(updates)
+
+
+def _snapshot_levels(
+    data: dict[str, object],
+    key: str,
+    contract_size: Decimal,
+    *,
+    reverse: bool,
+) -> tuple[BookLevel, ...]:
+    rows = data.get(key, [])
+    if not isinstance(rows, list):
+        raise InvalidResponseError(f"invalid MEXC futures {key} levels")
+    levels: dict[Decimal, Decimal] = {}
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            raise InvalidResponseError(f"invalid MEXC futures {key} level")
+        price = decimal(row[0], f"{key}_price")
+        quantity = decimal(row[1], f"{key}_contracts") * contract_size
+        if price <= 0 or quantity <= 0:
+            raise InvalidResponseError(f"invalid MEXC futures {key} level")
+        if price in levels:
+            raise InvalidResponseError(f"duplicate MEXC futures {key} price")
+        levels[price] = quantity
+    return tuple(
+        BookLevel(price=price, quantity=quantity)
+        for price, quantity in sorted(levels.items(), reverse=reverse)
+    )
 
 
 def _nonnegative_integer(value: object, field: str) -> int:

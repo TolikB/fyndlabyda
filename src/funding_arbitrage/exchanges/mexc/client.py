@@ -67,6 +67,18 @@ def _optional_decimal(value: object, field: str) -> Decimal | None:
     return decimal(value, field)
 
 
+def _mexc_full_depth_limit(depth: int) -> int:
+    if depth <= 0:
+        raise ValueError("depth must be positive")
+    if depth > 20:
+        raise ValueError("MEXC full depth supports at most 20 levels")
+    if depth <= 5:
+        return 5
+    if depth <= 10:
+        return 10
+    return 20
+
+
 def _rows(value: object, field: str) -> list[dict[str, Any]]:
     if isinstance(value, dict):
         return [value]
@@ -622,9 +634,20 @@ class MexcPublicAdapter(ExchangeAdapter):
         self, symbols: list[str], depth: int
     ) -> AsyncIterator[OrderBook]:
         reconnects = 0
-        reconstruction_depth = max(depth, 200)
+        subscription_depth = _mexc_full_depth_limit(depth)
+        output_depth = min(depth, subscription_depth)
+        required_symbols = set(symbols)
         while True:
-            states: dict[str, MexcOrderBookNormalizer] = {}
+            healthy_symbols: set[str] = set()
+            states = {
+                symbol: MexcOrderBookNormalizer(
+                    self._canonical_instrument(symbol, InstrumentType.PERPETUAL),
+                    output_depth=output_depth,
+                    reconstruction_depth=subscription_depth,
+                    contract_size=self._contract_sizes[symbol],
+                )
+                for symbol in symbols
+            }
             try:
                 async with websockets.connect(
                     self.futures_websocket_url,
@@ -637,8 +660,11 @@ class MexcPublicAdapter(ExchangeAdapter):
                         await websocket.send(
                             json.dumps(
                                 {
-                                    "method": "sub.depth",
-                                    "param": {"symbol": symbol, "compress": False},
+                                    "method": "sub.depth.full",
+                                    "param": {
+                                        "symbol": symbol,
+                                        "limit": subscription_depth,
+                                    },
                                     "gzip": False,
                                 }
                             )
@@ -647,44 +673,26 @@ class MexcPublicAdapter(ExchangeAdapter):
                         buffered = await self._wait_for_future_depth_subscriptions(
                             websocket, expected=len(symbols)
                         )
-                    bootstrapped = await asyncio.gather(
-                        *(
-                            self._bootstrap_future_orderbook(
-                                symbol,
-                                output_depth=depth,
-                                reconstruction_depth=reconstruction_depth,
-                            )
-                            for symbol in symbols
-                        )
-                    )
-                    states.update(
-                        {
-                            symbol: state
-                            for symbol, (state, _) in zip(
-                                symbols, bootstrapped, strict=True
-                            )
-                        }
-                    )
-                    for state, update in bootstrapped:
-                        bootstrap_book = state.legacy_book(
-                            update, InstrumentType.PERPETUAL
-                        )
-                        if bootstrap_book is not None:
-                            yield bootstrap_book
                     for payload in buffered:
-                        book = await self._consume_future_orderbook_payload(payload, states)
-                        if book is not None:
-                            reconnects = 0
-                            yield book
-                    async for message in websocket:
-                        payload = _json_ws_payload(message)
-                        book = await self._consume_future_orderbook_payload(
+                        book = await self._consume_future_full_orderbook_payload(
                             payload, states
                         )
                         if book is not None:
-                            reconnects = 0
+                            healthy_symbols.add(book.symbol)
+                            if healthy_symbols == required_symbols:
+                                reconnects = 0
                             yield book
-                reconnects = 0
+                    async for message in websocket:
+                        payload = _json_ws_payload(message)
+                        book = await self._consume_future_full_orderbook_payload(
+                            payload, states
+                        )
+                        if book is not None:
+                            healthy_symbols.add(book.symbol)
+                            if healthy_symbols == required_symbols:
+                                reconnects = 0
+                            yield book
+                    raise NetworkError("MEXC futures full depth stream closed")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -706,13 +714,13 @@ class MexcPublicAdapter(ExchangeAdapter):
                 raise InvalidResponseError(
                     f"MEXC futures depth subscription failed: {payload}"
                 )
-            if channel == "rs.sub.depth":
+            if channel == "rs.sub.depth.full":
                 if payload.get("data") != "success":
                     raise InvalidResponseError(
                         f"MEXC futures depth subscription failed: {payload}"
                     )
                 acknowledgements += 1
-            elif channel == "push.depth":
+            elif channel == "push.depth.full":
                 buffered.append(payload)
         return buffered
 
@@ -755,6 +763,27 @@ class MexcPublicAdapter(ExchangeAdapter):
             )
         return state.legacy_book(update, InstrumentType.PERPETUAL)
 
+    async def _consume_future_full_orderbook_payload(
+        self,
+        payload: dict[str, Any],
+        states: dict[str, MexcOrderBookNormalizer],
+    ) -> OrderBook | None:
+        if payload.get("channel") != "push.depth.full":
+            return None
+        symbol = str(payload.get("symbol") or "").upper()
+        state = states.get(symbol)
+        if state is None:
+            return None
+        update = await self._process_future_full_orderbook_snapshot(payload, state)
+        if (
+            update.result.status in {BookApplyStatus.GAP, BookApplyStatus.REJECTED}
+            or update.result.quality is not DataQuality.VALID
+        ):
+            raise MexcOrderBookSequenceGap(
+                update.result.reason or "invalid_full_orderbook_snapshot"
+            )
+        return state.legacy_book(update, InstrumentType.PERPETUAL)
+
     async def _process_future_orderbook_update(
         self,
         payload: object,
@@ -762,6 +791,19 @@ class MexcPublicAdapter(ExchangeAdapter):
     ) -> MexcBookUpdate:
         update = state.apply(payload)
         if self.canonical_book_event_sink is not None:
+            await self.canonical_book_event_sink(update.event)
+        return update
+
+    async def _process_future_full_orderbook_snapshot(
+        self,
+        payload: object,
+        state: MexcOrderBookNormalizer,
+    ) -> MexcBookUpdate:
+        update = state.apply_full_snapshot(payload)
+        if (
+            self.canonical_book_event_sink is not None
+            and update.result.status is not BookApplyStatus.DUPLICATE
+        ):
             await self.canonical_book_event_sink(update.event)
         return update
 
