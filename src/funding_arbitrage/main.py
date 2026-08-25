@@ -161,6 +161,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             seconds=active_settings.market_data_stale_seconds * 3
         ),
         stream_timeouts={
+            "BOOK": (
+                timedelta(seconds=active_settings.orderbook_stream_stale_seconds),
+                timedelta(seconds=active_settings.orderbook_stream_stale_seconds * 3),
+            ),
             EventKind.FUNDING_SNAPSHOT.value: (
                 timedelta(seconds=active_settings.funding_snapshot_stale_seconds),
                 timedelta(seconds=active_settings.funding_snapshot_stale_seconds * 3),

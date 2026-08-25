@@ -161,11 +161,15 @@ def test_crossed_stale_unavailable_and_never_observed_are_explicit() -> None:
     assert unknown.reason == "stream_never_observed"
 
 
-def test_stream_specific_timeouts_do_not_relax_orderbook_freshness() -> None:
+def test_stream_specific_timeouts_apply_without_relaxing_other_streams() -> None:
     monitor = DataQualityMonitor(
         stale_after=timedelta(seconds=3),
         unavailable_after=timedelta(seconds=10),
         stream_timeouts={
+            "BOOK": (
+                timedelta(seconds=120),
+                timedelta(seconds=360),
+            ),
             EventKind.FUNDING_SNAPSHOT.value: (
                 timedelta(seconds=60),
                 timedelta(seconds=180),
@@ -176,13 +180,41 @@ def test_stream_specific_timeouts_do_not_relax_orderbook_freshness() -> None:
     funding_identity = StreamIdentity(
         "BYBIT", EventKind.FUNDING_SNAPSHOT.value, INSTRUMENT.canonical_id
     )
-    monitor.observe(_event(_snapshot()), identity=IDENTITY)
+    book_event = _event(_snapshot())
+    monitor.observe(book_event, identity=IDENTITY)
+    book_received_at = book_event.metadata.receive_timestamp
+    default_identity = StreamIdentity("BYBIT", "TRADES", INSTRUMENT.canonical_id)
+    default_event = _event(_snapshot(sequence=102))
+    monitor.observe(default_event, identity=default_identity)
+    default_received_at = default_event.metadata.receive_timestamp
     observed = monitor.observe(funding_event)
 
     assert observed.identity == funding_identity
 
     assert (
-        monitor.status(IDENTITY, now=NOW + timedelta(seconds=4)).quality
+        monitor.status(IDENTITY, now=book_received_at + timedelta(seconds=4)).quality
+        is DataQuality.VALID
+    )
+    assert (
+        monitor.status(IDENTITY, now=book_received_at + timedelta(seconds=120)).quality
+        is DataQuality.VALID
+    )
+    assert (
+        monitor.status(
+            IDENTITY,
+            now=book_received_at + timedelta(seconds=120, microseconds=1),
+        ).quality
+        is DataQuality.STALE
+    )
+    assert (
+        monitor.status(IDENTITY, now=book_received_at + timedelta(seconds=361)).quality
+        is DataQuality.UNAVAILABLE
+    )
+    assert (
+        monitor.status(
+            default_identity,
+            now=default_received_at + timedelta(seconds=4),
+        ).quality
         is DataQuality.STALE
     )
     assert (

@@ -331,6 +331,12 @@ class Settings(BaseSettings):
     htx_api_key: SecretStr = Field(default=SecretStr(""), alias="HTX_API_KEY")
     htx_api_secret: SecretStr = Field(default=SecretStr(""), alias="HTX_API_SECRET")
     market_data_stale_seconds: int = Field(default=30, alias="MARKET_DATA_STALE_SECONDS")
+    orderbook_stream_stale_seconds: int = Field(
+        default=120,
+        gt=0,
+        lt=300,
+        alias="ORDERBOOK_STREAM_STALE_SECONDS",
+    )
     funding_snapshot_stale_seconds: int = Field(
         default=180,
         gt=0,
