@@ -228,7 +228,7 @@ class CcxtPublicEventNormalizer:
         symbol = _text(raw.get("symbol"))
         market = self._market(symbol)
         timestamp, quality = _exchange_time(raw, received_at)
-        trade_id = _text(raw.get("id"))
+        trade_id = _trade_id(raw, venue=self.profile.venue)
         if not trade_id:
             raise PublicDataNormalizationError("trade ID is missing")
         side = _side(raw.get("side"), required=False)
@@ -1271,6 +1271,28 @@ def _contract_size(market: Mapping[str, Any]) -> Decimal:
 
 def _text(value: object | None) -> str:
     return str(value).strip() if value is not None else ""
+
+
+def _trade_id(raw: Mapping[str, Any], *, venue: str) -> str:
+    """Return the venue-native immutable trade identity.
+
+    HTX WebSocket messages expose the exact trade identity inside the raw
+    ``info`` object (``tradeId`` for spot and ``trade_id`` for derivatives).
+    CCXT Pro currently routes the spot payload through a parser that does not
+    consider the camel-case field and falls back to HTX's much larger aggregate
+    ``id``.  HTX sends that aggregate ID as a JSON number that CCXT has already
+    rounded to a float, so distinct trades can otherwise collapse to the same
+    canonical event ID.
+    """
+
+    if venue.lower() == "htx":
+        info = raw.get("info")
+        if isinstance(info, Mapping):
+            for key in ("tradeId", "trade_id", "trade-id"):
+                native_id = _text(info.get(key))
+                if native_id:
+                    return native_id
+    return _text(raw.get("id"))
 
 
 def _milliseconds(value: object) -> datetime:

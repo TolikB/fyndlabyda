@@ -303,6 +303,101 @@ def test_normalizer_preserves_contract_units_and_exchange_time() -> None:
     )
 
 
+async def test_htx_websocket_trade_uses_exact_native_trade_id(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, factory = database
+    exchange = FakePublicExchange()
+    spot_market = {
+        **MARKET,
+        "id": "btcusdt",
+        "symbol": "BTC/USDT",
+        "settle": None,
+        "spot": True,
+        "swap": False,
+        "contractSize": "1",
+    }
+    exchange.markets = {"BTC/USDT": spot_market}
+    exchange.markets_by_id = {"btcusdt": [spot_market]}
+    profile = PublicEventProfile(
+        "htx",
+        "spot",
+        "htx",
+        "spot",
+        InstrumentType.SPOT,
+    )
+    normalizer = CcxtPublicEventNormalizer(profile, exchange)
+    timestamp = int(NOW.timestamp() * 1000)
+    common = {
+        "id": 1.929663069621672e27,
+        "symbol": "BTC/USDT",
+        "timestamp": timestamp,
+        "side": "buy",
+    }
+
+    events = normalizer.trade_events(
+        [
+            {
+                **common,
+                "price": "60000",
+                "amount": "1",
+                "info": {"id": common["id"], "tradeId": 103627592326},
+            },
+            {
+                **common,
+                "price": "60001",
+                "amount": "2",
+                "info": {"id": common["id"], "tradeId": 103627592327},
+            },
+        ],
+        received_at=NOW,
+    )
+
+    assert [event.payload.trade_id for event in events] == [
+        "103627592326",
+        "103627592327",
+    ]
+    assert events[0].metadata.event_id != events[1].metadata.event_id
+    replay = normalizer.trade_events(
+        {
+            **common,
+            "price": "60000",
+            "amount": "1",
+            "info": {"id": common["id"], "tradeId": "103627592326"},
+        },
+        received_at=NOW + timedelta(seconds=1),
+    )[0]
+    assert replay.metadata.event_id == events[0].metadata.event_id
+    assert replay.payload == events[0].payload
+    async with factory() as session:
+        assert await append_events(session, events) == 2
+        assert await append_events(session, [replay]) == 0
+
+
+def test_htx_derivative_trade_uses_native_snake_case_trade_id() -> None:
+    profile = PublicEventProfile(
+        "htx",
+        "linear",
+        "htx",
+        "swap",
+        InstrumentType.PERPETUAL,
+    )
+    event = CcxtPublicEventNormalizer(profile, FakePublicExchange()).trade_events(
+        {
+            "id": "aggregate-order-id",
+            "symbol": "BTC/USDT:USDT",
+            "timestamp": int(NOW.timestamp() * 1000),
+            "side": "sell",
+            "price": "60000",
+            "amount": "2",
+            "info": {"id": "aggregate-order-id", "trade_id": "152022944"},
+        },
+        received_at=NOW,
+    )[0]
+
+    assert event.payload.trade_id == "152022944"
+
+
 def test_rest_candles_exclude_mutable_current_interval() -> None:
     normalizer = CcxtPublicEventNormalizer(_profile(), FakePublicExchange())
     received_at = NOW + timedelta(seconds=30)
