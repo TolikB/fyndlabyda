@@ -61,6 +61,18 @@ def _optional_decimal(value: object, field: str) -> Decimal | None:
     return decimal(value, field)
 
 
+def _required_expiry_from_ms(value: object, field: str) -> datetime:
+    if value in (None, ""):
+        raise InvalidResponseError(f"{field} is missing")
+    milliseconds = decimal(value, field)
+    if milliseconds <= 0:
+        raise InvalidResponseError(f"{field} must be positive")
+    try:
+        return datetime.fromtimestamp(float(milliseconds / Decimal("1000")), tz=UTC)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise InvalidResponseError(f"{field} is out of range") from exc
+
+
 class BybitPublicAdapter(ExchangeAdapter):
     name = "bybit"
 
@@ -203,8 +215,8 @@ class BybitPublicAdapter(ExchangeAdapter):
                     int(row["fundingInterval"]) // 60 if row.get("fundingInterval") else 8
                 )
             expiry = (
-                _utc_from_ms(row["deliveryTime"], "deliveryTime")
-                if row.get("deliveryTime")
+                _required_expiry_from_ms(row.get("deliveryTime"), "deliveryTime")
+                if instrument_type is InstrumentType.FUTURE
                 else None
             )
             return NormalizedInstrument(

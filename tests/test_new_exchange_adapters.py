@@ -4,6 +4,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
+from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
@@ -63,6 +64,51 @@ async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> Non
     assert funding[0].next_funding_time is not None
     assert funding[0].next_funding_time.hour == 4
     assert requested_symbols == ["ETH-USDT-SWAP"]
+
+
+def test_binance_perpetual_delivery_sentinel_is_not_an_expiry() -> None:
+    adapter = BinancePublicAdapter()
+    row: dict[str, object] = {
+        "symbol": "BTCUSDT",
+        "baseAsset": "BTC",
+        "quoteAsset": "USDT",
+        "marginAsset": "USDT",
+        "contractType": "PERPETUAL",
+        "deliveryDate": 4133404800000,
+        "status": "TRADING",
+        "filters": [
+            {"filterType": "PRICE_FILTER", "tickSize": "0.1"},
+            {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"},
+        ],
+    }
+    perpetual = adapter._parse_instrument(row, spot=False)
+    dated = adapter._parse_instrument(
+        {
+            **row,
+            "symbol": "BTCUSDT_260101",
+            "contractType": "CURRENT_QUARTER",
+            "deliveryDate": 1767225600000,
+        },
+        spot=False,
+    )
+
+    assert perpetual.instrument_type is InstrumentType.PERPETUAL
+    assert perpetual.expiry is None
+    assert dated.instrument_type is InstrumentType.FUTURE
+    assert dated.expiry is not None
+    assert dated.expiry.year == 2026
+
+    for invalid in (None, "", 0, "0", -1, 10**30):
+        with pytest.raises(InvalidResponseError):
+            adapter._parse_instrument(
+                {
+                    **row,
+                    "symbol": "BTCUSDT_INVALID",
+                    "contractType": "CURRENT_QUARTER",
+                    "deliveryDate": invalid,
+                },
+                spot=False,
+            )
 
 
 @pytest.mark.asyncio

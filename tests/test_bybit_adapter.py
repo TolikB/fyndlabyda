@@ -47,6 +47,7 @@ async def test_bybit_rest_payloads_are_normalized() -> None:
                             "quoteCoin": "USDT",
                             "settleCoin": "USDT",
                             "contractType": "LinearPerpetual",
+                            "deliveryTime": "0",
                             "status": "Trading",
                             "priceFilter": {"tickSize": "0.1"},
                             "lotSizeFilter": {"qtyStep": "0.001", "minOrderQty": "0.001"},
@@ -112,12 +113,42 @@ async def test_bybit_rest_payloads_are_normalized() -> None:
         InstrumentType.SPOT,
         InstrumentType.PERPETUAL,
     }
+    assert (
+        next(
+            item for item in instruments if item.instrument_type is InstrumentType.PERPETUAL
+        ).expiry
+        is None
+    )
     assert tickers[0].last_price == Decimal("100")
     assert tickers[0].timestamp == datetime(2025, 1, 1, tzinfo=UTC)
     assert funding[0].funding_rate_daily == Decimal("0.003")
     assert funding[0].timestamp == datetime(2025, 1, 1, tzinfo=UTC)
     assert history[0].funding_timestamp.year == 2025
     assert orderbook.bids[0].price < orderbook.asks[0].price
+
+
+def test_bybit_dated_future_requires_positive_expiry() -> None:
+    adapter = BybitPublicAdapter()
+    row: dict[str, object] = {
+        "symbol": "BTC-01JAN26",
+        "baseCoin": "BTC",
+        "quoteCoin": "USDT",
+        "settleCoin": "USDT",
+        "contractType": "LinearFutures",
+        "deliveryTime": 1767225600000,
+        "status": "Trading",
+        "priceFilter": {"tickSize": "0.1"},
+        "lotSizeFilter": {"qtyStep": "0.001", "minOrderQty": "0.001"},
+    }
+    dated = adapter._parse_instrument(row, "linear")
+
+    assert dated.instrument_type is InstrumentType.FUTURE
+    assert dated.expiry is not None
+    assert dated.expiry.year == 2026
+
+    for invalid in (None, "", 0, "0", -1, 10**30):
+        with pytest.raises(InvalidResponseError):
+            adapter._parse_instrument({**row, "deliveryTime": invalid}, "linear")
 
 
 @pytest.mark.asyncio

@@ -45,6 +45,18 @@ def _ms(value: object) -> datetime:
     return datetime.fromtimestamp(float(decimal(value, "timestamp") / Decimal("1000")), tz=UTC)
 
 
+def _required_expiry_from_ms(value: object) -> datetime:
+    if value in (None, ""):
+        raise InvalidResponseError("deliveryDate is missing")
+    milliseconds = decimal(value, "deliveryDate")
+    if milliseconds <= 0:
+        raise InvalidResponseError("deliveryDate must be positive")
+    try:
+        return datetime.fromtimestamp(float(milliseconds / Decimal("1000")), tz=UTC)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise InvalidResponseError("deliveryDate is out of range") from exc
+
+
 def _opt(value: object, field: str) -> Decimal | None:
     return None if value in (None, "") else decimal(value, field)
 
@@ -177,7 +189,11 @@ class BinancePublicAdapter(ExchangeAdapter):
                     else InstrumentType.FUTURE
                 )
             )
-            expiry = _ms(row["deliveryDate"]) if not spot and row.get("deliveryDate", 0) else None
+            expiry = (
+                _required_expiry_from_ms(row.get("deliveryDate"))
+                if instrument_type is InstrumentType.FUTURE
+                else None
+            )
             return NormalizedInstrument(
                 exchange=self.name,
                 exchange_symbol=symbol,
