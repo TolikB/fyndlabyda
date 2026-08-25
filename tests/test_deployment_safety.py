@@ -363,6 +363,13 @@ def test_release_workflow_pins_actions_and_has_no_remote_vm_deployment() -> None
     assert workflow.count("docker build") == 1
     assert "Build candidate image exactly once" in workflow
     assert workflow.count("scripts/ci_load_candidate_image.sh") == 5
+    loader = (
+        Path(__file__).resolve().parents[1] / "scripts" / "ci_load_candidate_image.sh"
+    ).read_text(encoding="utf-8")
+    assert "index.json" in loader
+    assert ".manifests | type == \"array\" and length == 1" in loader
+    assert 'actual_image_id" == "$manifest_digest' in loader
+    assert 'config_digest" == "$expected_image_id' in loader
     assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
     assert workflow.count(
         "actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53"
