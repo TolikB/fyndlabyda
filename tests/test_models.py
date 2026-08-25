@@ -26,10 +26,23 @@ def test_default_paper_safety_and_namespaces_are_cost_gated() -> None:
     )
     assert settings.paper_max_funding_capital_usd == Decimal("100")
     assert settings.paper_minimum_funding_rate == Decimal("0.0002")
+    assert settings.funding_snapshot_stale_seconds == 180
     assert settings.paper_position_size_usd == Decimal("50")
     assert settings.paper_max_open_positions == 8
     assert settings.paper_simulation_version == "v34-cost-gated-candidate"
     assert settings.paper_baseline_simulation_version == "v34-cost-gated-baseline"
+
+
+def test_funding_snapshot_timeout_cannot_relax_below_book_timeout() -> None:
+    with pytest.raises(ValueError, match="FUNDING_SNAPSHOT_STALE_SECONDS"):
+        Settings(
+            _env_file=None,
+            MARKET_DATA_STALE_SECONDS=30,
+            FUNDING_SNAPSHOT_STALE_SECONDS=29,
+        )
+
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, FUNDING_SNAPSHOT_STALE_SECONDS=300)
 
 
 def test_paper_size_grid_is_sorted_deduplicated_and_fail_closed() -> None:

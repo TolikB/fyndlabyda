@@ -16,6 +16,7 @@ from funding_arbitrage.domain.events import (
     EventEnvelope,
     EventKind,
     EventMetadata,
+    FundingSnapshot,
     InstrumentKey,
     InstrumentType,
     Side,
@@ -89,6 +90,33 @@ def _delta(first: int, last: int, previous: int | None = None) -> BookDelta:
     )
 
 
+def _funding_event() -> EventEnvelope[FundingSnapshot]:
+    payload = FundingSnapshot(
+        instrument=INSTRUMENT,
+        funding_rate=Decimal("0.0001"),
+        funding_interval_seconds=28_800,
+        next_funding_time=NOW + timedelta(hours=8),
+        mark_price=Decimal("100"),
+        index_price=Decimal("99.9"),
+        exchange_timestamp=NOW,
+    )
+    return EventEnvelope(
+        kind=EventKind.FUNDING_SNAPSHOT,
+        metadata=EventMetadata(
+            event_id="funding-snapshot-1",
+            exchange_timestamp=NOW,
+            receive_timestamp=NOW,
+            monotonic_ns=3,
+            sequence_id="funding-snapshot-1",
+            source="bybit:funding",
+            correlation_id=INSTRUMENT.canonical_id,
+            payload_version=1,
+            quality=DataQuality.VALID,
+        ),
+        payload=payload,
+    )
+
+
 def _monitor() -> DataQualityMonitor:
     return DataQualityMonitor(
         stale_after=timedelta(seconds=3),
@@ -131,6 +159,70 @@ def test_crossed_stale_unavailable_and_never_observed_are_explicit() -> None:
     unknown = monitor.status(StreamIdentity("OKX", "BOOK", "missing"), now=NOW)
     assert unknown.quality is DataQuality.UNAVAILABLE
     assert unknown.reason == "stream_never_observed"
+
+
+def test_stream_specific_timeouts_do_not_relax_orderbook_freshness() -> None:
+    monitor = DataQualityMonitor(
+        stale_after=timedelta(seconds=3),
+        unavailable_after=timedelta(seconds=10),
+        stream_timeouts={
+            EventKind.FUNDING_SNAPSHOT.value: (
+                timedelta(seconds=60),
+                timedelta(seconds=180),
+            )
+        },
+    )
+    funding_event = _funding_event()
+    funding_identity = StreamIdentity(
+        "BYBIT", EventKind.FUNDING_SNAPSHOT.value, INSTRUMENT.canonical_id
+    )
+    monitor.observe(_event(_snapshot()), identity=IDENTITY)
+    observed = monitor.observe(funding_event)
+
+    assert observed.identity == funding_identity
+
+    assert (
+        monitor.status(IDENTITY, now=NOW + timedelta(seconds=4)).quality
+        is DataQuality.STALE
+    )
+    assert (
+        monitor.status(funding_identity, now=NOW + timedelta(seconds=4)).quality
+        is DataQuality.VALID
+    )
+    assert (
+        monitor.status(funding_identity, now=NOW + timedelta(seconds=60)).quality
+        is DataQuality.VALID
+    )
+    assert (
+        monitor.status(
+            funding_identity,
+            now=NOW + timedelta(seconds=60, microseconds=1),
+        ).quality
+        is DataQuality.STALE
+    )
+    assert (
+        monitor.status(funding_identity, now=NOW + timedelta(seconds=181)).quality
+        is DataQuality.UNAVAILABLE
+    )
+
+
+@pytest.mark.parametrize(
+    "stream_timeouts",
+    [
+        {"": (timedelta(seconds=1), timedelta(seconds=2))},
+        {"BOOK": (timedelta(0), timedelta(seconds=2))},
+        {"BOOK": (timedelta(seconds=2), timedelta(seconds=2))},
+    ],
+)
+def test_invalid_stream_specific_timeouts_are_rejected(
+    stream_timeouts: dict[str, tuple[timedelta, timedelta]],
+) -> None:
+    with pytest.raises(ValueError):
+        DataQualityMonitor(
+            stale_after=timedelta(seconds=3),
+            unavailable_after=timedelta(seconds=10),
+            stream_timeouts=stream_timeouts,
+        )
 
 
 def test_invalid_timestamp_source_quality_and_manual_unavailable_fail_closed() -> None:

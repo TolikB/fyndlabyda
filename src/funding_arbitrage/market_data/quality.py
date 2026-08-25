@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -53,6 +54,7 @@ class DataQualityMonitor:
         stale_after: timedelta,
         unavailable_after: timedelta,
         max_future_skew: timedelta = timedelta(seconds=2),
+        stream_timeouts: Mapping[str, tuple[timedelta, timedelta]] | None = None,
     ) -> None:
         if stale_after <= timedelta(0):
             raise ValueError("stale_after must be positive")
@@ -63,6 +65,23 @@ class DataQualityMonitor:
         self.stale_after = stale_after
         self.unavailable_after = unavailable_after
         self.max_future_skew = max_future_skew
+        self._stream_timeouts: dict[str, tuple[timedelta, timedelta]] = {}
+        for stream, (stream_stale_after, stream_unavailable_after) in (
+            stream_timeouts or {}
+        ).items():
+            normalized_stream = stream.strip().upper()
+            if not normalized_stream:
+                raise ValueError("stream timeout name cannot be blank")
+            if normalized_stream in self._stream_timeouts:
+                raise ValueError("duplicate stream timeout")
+            if stream_stale_after <= timedelta(0):
+                raise ValueError("stream stale_after must be positive")
+            if stream_unavailable_after <= stream_stale_after:
+                raise ValueError("stream unavailable_after must exceed stale_after")
+            self._stream_timeouts[normalized_stream] = (
+                stream_stale_after,
+                stream_unavailable_after,
+            )
         self._states: dict[StreamIdentity, _StreamState] = {}
 
     def preview(
@@ -205,12 +224,16 @@ class DataQualityMonitor:
     ) -> StreamQualitySnapshot:
         quality = state.quality
         reason = state.reason
+        stale_after, unavailable_after = self._stream_timeouts.get(
+            identity.stream.upper(),
+            (self.stale_after, self.unavailable_after),
+        )
         if state.last_receive_timestamp is not None and quality is not DataQuality.UNAVAILABLE:
             age = now - state.last_receive_timestamp
-            if age > self.unavailable_after:
+            if age > unavailable_after:
                 quality = DataQuality.UNAVAILABLE
                 reason = "stream_timeout"
-            elif age > self.stale_after:
+            elif age > stale_after:
                 quality = DataQuality.STALE
                 reason = "stream_stale"
         return StreamQualitySnapshot(

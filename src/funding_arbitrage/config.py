@@ -331,6 +331,12 @@ class Settings(BaseSettings):
     htx_api_key: SecretStr = Field(default=SecretStr(""), alias="HTX_API_KEY")
     htx_api_secret: SecretStr = Field(default=SecretStr(""), alias="HTX_API_SECRET")
     market_data_stale_seconds: int = Field(default=30, alias="MARKET_DATA_STALE_SECONDS")
+    funding_snapshot_stale_seconds: int = Field(
+        default=180,
+        gt=0,
+        lt=300,
+        alias="FUNDING_SNAPSHOT_STALE_SECONDS",
+    )
     paper_initial_balance_usd: Decimal = Field(
         default=Decimal("15000"), gt=0, alias="PAPER_INITIAL_BALANCE_USD"
     )
@@ -831,6 +837,11 @@ def get_settings() -> Settings:
 
 def _validate_safe_values(settings: Settings) -> None:
     mode = settings.effective_trading_mode
+    if settings.funding_snapshot_stale_seconds < settings.market_data_stale_seconds:
+        raise ValueError(
+            "FUNDING_SNAPSHOT_STALE_SECONDS cannot be lower than "
+            "MARKET_DATA_STALE_SECONDS"
+        )
     allowed_modes = {
         "api": {TradingMode.BACKTEST, TradingMode.REPLAY, TradingMode.SAFE_MODE},
         "paper_test": {TradingMode.SHADOW, TradingMode.PAPER, TradingMode.SAFE_MODE},

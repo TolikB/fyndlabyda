@@ -39,7 +39,7 @@ from funding_arbitrage.database.repositories.control_plane import (
     DatabaseControlPlaneIdempotencyStore,
 )
 from funding_arbitrage.database.session import create_database, init_database
-from funding_arbitrage.domain.events import TradingMode
+from funding_arbitrage.domain.events import EventKind, TradingMode
 from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.exchanges.private_streams import create_private_stream_supervisor
 from funding_arbitrage.exchanges.public_events import create_public_event_supervisor
@@ -160,6 +160,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         unavailable_after=timedelta(
             seconds=active_settings.market_data_stale_seconds * 3
         ),
+        stream_timeouts={
+            EventKind.FUNDING_SNAPSHOT.value: (
+                timedelta(seconds=active_settings.funding_snapshot_stale_seconds),
+                timedelta(seconds=active_settings.funding_snapshot_stale_seconds * 3),
+            )
+        },
     )
     event_router = CanonicalEventRouter(event_writer, event_quality_monitor)
     multi_regime_runtime: DurableMultiRegimeRuntime | None = None
