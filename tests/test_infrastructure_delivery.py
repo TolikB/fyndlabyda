@@ -243,7 +243,7 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert '"$(uname -s)" != "Linux"' in preflight
     assert "NTPSynchronized" in preflight
     assert "chronyc waitsync 10 0.1" in preflight
-    assert "memory_kib < 3000000" in preflight
+    assert "memory_kib < 6291456" in preflight
     assert "root_free_kib < 10485760" in preflight
     assert "for port in 5432 9108 9109" in preflight
     assert "forbidden public listener" in preflight

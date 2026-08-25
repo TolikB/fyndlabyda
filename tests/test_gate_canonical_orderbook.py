@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from funding_arbitrage.domain.events import EventKind, InstrumentKey, InstrumentType
+from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 from funding_arbitrage.exchanges.gate.orderbook import GateOrderBookNormalizer
@@ -64,6 +67,25 @@ def test_gate_perpetual_object_levels_become_canonical_snapshot() -> None:
     assert update.event.metadata.source == "GATE.PUBLIC.FUTURES.ORDER_BOOK"
     assert update.book is not None
     assert update.book.sequence == 10
+
+
+def test_gate_snapshot_ignores_zero_size_levels_and_rejects_negative_size() -> None:
+    normalizer = GateOrderBookNormalizer(_instrument(InstrumentType.SPOT), depth=20)
+    payload = {
+        "s": "BTC_USDT",
+        "lastUpdateId": 9,
+        "t": 1786881600000,
+        "bids": [["99", "0"], ["100", "1"]],
+        "asks": [["101", "2"]],
+    }
+
+    update = normalizer.apply(payload, instrument_type=LegacyInstrumentType.SPOT)
+
+    assert update.book is not None
+    assert [level.price for level in update.book.bids] == [Decimal("100")]
+    payload["bids"] = [["100", "-1"]]
+    with pytest.raises(InvalidResponseError, match="cannot be negative"):
+        normalizer.apply(payload, instrument_type=LegacyInstrumentType.SPOT)
 
 
 async def test_gate_adapter_publishes_event_before_book_use() -> None:

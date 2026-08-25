@@ -60,8 +60,8 @@ class GateOrderBookNormalizer:
         exchange_timestamp = _timestamp_ms(payload.get("t"), "t")
         snapshot = BookSnapshot(
             instrument=self.instrument,
-            bids=_levels(payload.get("bids"), "bids", reverse=True),
-            asks=_levels(payload.get("asks"), "asks", reverse=False),
+            bids=normalize_gate_levels(payload.get("bids"), "bids", reverse=True),
+            asks=normalize_gate_levels(payload.get("asks"), "asks", reverse=False),
             sequence=sequence,
             exchange_timestamp=exchange_timestamp,
         )
@@ -125,7 +125,9 @@ class GateOrderBookNormalizer:
         )
 
 
-def _levels(value: object, side: str, *, reverse: bool) -> tuple[BookLevel, ...]:
+def normalize_gate_levels(
+    value: object, side: str, *, reverse: bool
+) -> tuple[BookLevel, ...]:
     if not isinstance(value, list):
         raise InvalidResponseError(f"invalid Gate {side} snapshot levels")
     levels: dict[Decimal, Decimal] = {}
@@ -138,12 +140,20 @@ def _levels(value: object, side: str, *, reverse: bool) -> tuple[BookLevel, ...]
             raise InvalidResponseError(f"invalid Gate {side} orderbook level")
         price = decimal(raw_price, f"{side}_price")
         quantity = decimal(raw_quantity, f"{side}_quantity")
-        if quantity <= 0:
-            raise InvalidResponseError("Gate snapshot quantity must be positive")
+        if quantity < 0:
+            raise InvalidResponseError("Gate snapshot quantity cannot be negative")
+        if quantity == 0:
+            continue
         levels[price] = quantity
-    return tuple(
-        BookLevel(price=price, quantity=levels[price]) for price in sorted(levels, reverse=reverse)
+    normalized = tuple(
+        BookLevel(price=price, quantity=levels[price])
+        for price in sorted(levels, reverse=reverse)
     )
+    if not normalized:
+        raise InvalidResponseError(
+            f"Gate {side} snapshot has no executable levels"
+        )
+    return normalized
 
 
 def _nonnegative_integer(value: object, field: str) -> int:

@@ -439,6 +439,24 @@ def test_htx_gzip_websocket_parsers_keep_contract_quantities_in_base_units() -> 
     assert ticker.instrument_type is InstrumentType.SPOT
 
 
+def test_htx_spot_depth_version_is_the_native_sequence() -> None:
+    adapter = HtxPublicAdapter()
+    payload = {
+        "ch": "market.btcusdt.depth.step0",
+        "ts": 1_787_604_357_952,
+        "tick": {
+            "bids": [["99999", "2"]],
+            "asks": [["100001", "3"]],
+            "ts": 1_787_604_357_008,
+            "version": 192_939_594_849,
+        },
+    }
+
+    book = adapter._parse_ws_orderbook(payload, InstrumentType.SPOT, 20)
+
+    assert book.sequence == 192_939_594_849
+
+
 @pytest.mark.asyncio
 async def test_htx_funding_history_pages_backward_and_sorts() -> None:
     adapter = HtxPublicAdapter()

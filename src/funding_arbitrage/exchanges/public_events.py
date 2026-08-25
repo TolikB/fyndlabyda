@@ -946,7 +946,7 @@ def _legacy_instrument(instrument: Any) -> InstrumentKey:
         base_asset=instrument.base_asset,
         quote_asset=instrument.quote_asset,
         instrument_type=_legacy_type(instrument.instrument_type),
-        settlement_asset=instrument.settlement_asset,
+        settlement_asset=_text(instrument.settlement_asset) or None,
         expiry=instrument.expiry,
     )
 

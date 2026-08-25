@@ -452,7 +452,12 @@ class HtxPublicAdapter(ExchangeAdapter):
                 timestamp=_ms(timestamp),
                 sequence=(
                     int(sequence)
-                    if (sequence := tick.get("mrid") or tick.get("id")) is not None
+                    if (
+                        sequence := tick.get("mrid")
+                        or tick.get("id")
+                        or tick.get("version")
+                    )
+                    is not None
                     else None
                 ),
             )

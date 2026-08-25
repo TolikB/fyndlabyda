@@ -61,7 +61,7 @@ services:
       - control_plane
       - data_plane
     cpus: "1.00"
-    mem_limit: 1024m
+    mem_limit: 1536m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=20)"]
       interval: 30s
@@ -229,7 +229,7 @@ services:
       - ALL
     pids_limit: 256
     cpus: "0.50"
-    mem_limit: 768m
+    mem_limit: 1280m
     logging: *bounded-logging
     healthcheck:
       test:

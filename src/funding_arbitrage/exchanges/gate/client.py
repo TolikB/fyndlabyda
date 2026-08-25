@@ -35,6 +35,7 @@ from funding_arbitrage.exchanges.base.models import (
 from funding_arbitrage.exchanges.gate.orderbook import (
     GateBookUpdate,
     GateOrderBookNormalizer,
+    normalize_gate_levels,
 )
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
@@ -498,34 +499,18 @@ class GatePublicAdapter(ExchangeAdapter):
         try:
             raw_bids = payload["bids"]
             raw_asks = payload["asks"]
-            if instrument_type is InstrumentType.SPOT:
-                bids = tuple(
-                    OrderBookLevel(
-                        price=decimal(level[0], "bid_price"), quantity=decimal(level[1], "bid_qty")
-                    )
-                    for level in raw_bids
-                )
-                asks = tuple(
-                    OrderBookLevel(
-                        price=decimal(level[0], "ask_price"), quantity=decimal(level[1], "ask_qty")
-                    )
-                    for level in raw_asks
-                )
-            else:
-                bids = tuple(
-                    OrderBookLevel(
-                        price=decimal(level["p"], "bid_price"),
-                        quantity=decimal(level["s"], "bid_qty"),
-                    )
-                    for level in raw_bids
-                )
-                asks = tuple(
-                    OrderBookLevel(
-                        price=decimal(level["p"], "ask_price"),
-                        quantity=decimal(level["s"], "ask_qty"),
-                    )
-                    for level in raw_asks
-                )
+            bids = tuple(
+                OrderBookLevel(price=level.price, quantity=level.quantity)
+                for level in normalize_gate_levels(
+                    raw_bids, "bids", reverse=True
+                )[:depth]
+            )
+            asks = tuple(
+                OrderBookLevel(price=level.price, quantity=level.quantity)
+                for level in normalize_gate_levels(
+                    raw_asks, "asks", reverse=False
+                )[:depth]
+            )
             timestamp_value = payload.get("current", payload.get("update"))
             timestamp = (
                 _utc_from_seconds(timestamp_value, "orderbook_timestamp")
@@ -865,27 +850,24 @@ class GatePublicAdapter(ExchangeAdapter):
         bids_key = "bids"
         asks_key = "asks"
 
-        def level(row: object, side: str) -> OrderBookLevel:
-            if isinstance(row, dict):
-                return OrderBookLevel(
-                    price=decimal(row["p"], f"{side}_price"),
-                    quantity=decimal(row["s"], f"{side}_quantity"),
-                )
-            if not isinstance(row, (list, tuple)):
-                raise ValueError("orderbook level must be an object or pair")
-            return OrderBookLevel(
-                price=decimal(row[0], f"{side}_price"),
-                quantity=decimal(row[1], f"{side}_quantity"),
-            )
-
         try:
             sequence_value = payload.get("lastUpdateId") or payload.get("id")
             book = OrderBook(
                 exchange=self.name,
                 symbol=str(payload[symbol_key]),
                 instrument_type=instrument_type,
-                bids=tuple(level(row, "bid") for row in payload[bids_key][:depth]),
-                asks=tuple(level(row, "ask") for row in payload[asks_key][:depth]),
+                bids=tuple(
+                    OrderBookLevel(price=level.price, quantity=level.quantity)
+                    for level in normalize_gate_levels(
+                        payload[bids_key], "bids", reverse=True
+                    )[:depth]
+                ),
+                asks=tuple(
+                    OrderBookLevel(price=level.price, quantity=level.quantity)
+                    for level in normalize_gate_levels(
+                        payload[asks_key], "asks", reverse=False
+                    )[:depth]
+                ),
                 timestamp=_utc_from_milliseconds(payload["t"], "orderbook_timestamp"),
                 sequence=int(sequence_value) if sequence_value is not None else None,
             )

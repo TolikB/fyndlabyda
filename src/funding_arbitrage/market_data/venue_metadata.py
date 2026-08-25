@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -11,6 +12,8 @@ from enum import StrEnum
 from typing import Any
 
 from funding_arbitrage.domain.events import InstrumentKey, InstrumentType
+
+logger = logging.getLogger(__name__)
 
 
 class VenueCapabilityStatus(StrEnum):
@@ -94,6 +97,27 @@ class VenueMetadataRegistry:
         raw_markets = getattr(exchange, "markets", None)
         if not isinstance(raw_markets, dict):
             raise VenueMetadataError("exchange markets are unavailable")
+        expected_markets = tuple(
+            market
+            for market in raw_markets.values()
+            if isinstance(market, dict)
+            and _market_type(market) is expected_type
+        )
+        valid_markets = tuple(
+            market
+            for market in expected_markets
+            if _has_complete_market_identity(market)
+        )
+        if expected_markets and not valid_markets:
+            raise VenueMetadataError(
+                "all expected markets have incomplete identity"
+            )
+        dropped_markets = len(expected_markets) - len(valid_markets)
+        if dropped_markets:
+            logger.warning(
+                "venue_metadata_incomplete_markets_dropped",
+                extra={"venue": venue.lower(), "count": dropped_markets},
+            )
         instruments = tuple(
             sorted(
                 (
@@ -103,9 +127,7 @@ class VenueMetadataRegistry:
                         expected_type,
                         getattr(exchange, "precisionMode", None),
                     )
-                    for market in raw_markets.values()
-                    if isinstance(market, dict)
-                    and _market_type(market) is expected_type
+                    for market in valid_markets
                 ),
                 key=lambda item: item.instrument.canonical_id,
             )
@@ -216,6 +238,10 @@ def _market_type(market: dict[str, Any]) -> InstrumentType | None:
     if market.get("future"):
         return InstrumentType.FUTURE
     return None
+
+
+def _has_complete_market_identity(market: dict[str, Any]) -> bool:
+    return all(_text(market.get(field)) for field in ("id", "base", "quote"))
 
 
 def _decimal(value: object, label: str) -> Decimal:

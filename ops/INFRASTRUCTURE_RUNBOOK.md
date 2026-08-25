@@ -59,7 +59,7 @@ sudo systemctl start funding-arbitrage-v1.service
 sudo systemctl status funding-arbitrage-v1.service --no-pager
 ```
 
-The host preflight requires UTC + synchronized Chrony, at least 3 GiB RAM and
+The host preflight requires UTC + synchronized Chrony, at least 6 GiB RAM and
 10 GiB free disk, exact Compose scope, private secret-file permissions, and no
 public listeners on 5432/9108/9109. The mTLS control plane remains loopback-only.
 

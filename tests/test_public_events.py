@@ -383,6 +383,34 @@ async def test_supervisor_mirrors_exact_funding_and_only_falls_back_for_missing_
     assert funding.next_funding_time == datetime(2026, 8, 20, 16, 0, tzinfo=UTC)
 
 
+async def test_supervisor_normalizes_blank_legacy_settlement_asset() -> None:
+    exchange = FakePublicExchange(open_interest=True)
+    collector = EventCollector()
+    supervisor = PublicEventSupervisor(
+        [PublicEventAccount(_profile(), exchange)],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    source = _snapshot(open_interest=None)
+    instrument = source.instruments[0].model_copy(update={"settlement_asset": ""})
+    snapshot = MarketSnapshot(
+        [instrument],
+        source.tickers,
+        source.funding,
+        source.orderbooks,
+        source.captured_at,
+    )
+
+    await supervisor.observe_snapshot(snapshot)
+
+    assert len(collector.events) == 1
+    assert collector.events[0].payload.instrument.settlement_asset is None
+    assert supervisor.required_quality_streams
+
+
 async def test_supervisor_does_not_duplicate_open_interest_when_rest_is_supported() -> None:
     exchange = FakePublicExchange(open_interest=True)
     collector = EventCollector()

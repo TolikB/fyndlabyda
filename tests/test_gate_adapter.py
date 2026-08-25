@@ -5,6 +5,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
+from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType, Ticker
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 
@@ -144,6 +145,80 @@ async def test_gate_rest_payloads_are_normalized() -> None:
     assert history[0].funding_timestamp.year == 2025
     assert orderbook.sequence == 42
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instrument_type", "payload"),
+    (
+        (
+            InstrumentType.SPOT,
+            {
+                "id": 42,
+                "current": 1735689600,
+                "bids": [["99.8", "0"], ["99.9", "2"]],
+                "asks": [["100.1", "3"]],
+            },
+        ),
+        (
+            InstrumentType.PERPETUAL,
+            {
+                "id": 42,
+                "current": 1735689600,
+                "bids": [{"p": "99.8", "s": "0"}, {"p": "99.9", "s": "2"}],
+                "asks": [{"p": "100.1", "s": "3"}],
+            },
+        ),
+    ),
+)
+async def test_gate_rest_orderbook_ignores_zero_size_levels(
+    instrument_type: InstrumentType,
+    payload: dict[str, object],
+) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: response(payload)),
+        base_url="https://test.invalid/api/v4",
+    ) as client:
+        adapter = GatePublicAdapter(
+            base_url="https://test.invalid/api/v4", http_client=client
+        )
+        orderbook = await adapter.get_orderbook(
+            "BTC_USDT", 20, instrument_type=instrument_type
+        )
+
+    assert [level.price for level in orderbook.bids] == [Decimal("99.9")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instrument_type", "bids"),
+    (
+        (InstrumentType.SPOT, [["99.9", "-1"]]),
+        (InstrumentType.PERPETUAL, [{"p": "99.9", "s": "0"}]),
+    ),
+)
+async def test_gate_rest_orderbook_rejects_non_executable_side(
+    instrument_type: InstrumentType,
+    bids: list[object],
+) -> None:
+    payload: dict[str, object] = {
+        "id": 42,
+        "current": 1735689600,
+        "bids": bids,
+        "asks": [["100.1", "3"]],
+    }
+    if instrument_type is InstrumentType.PERPETUAL:
+        payload["asks"] = [{"p": "100.1", "s": "3"}]
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: response(payload)),
+        base_url="https://test.invalid/api/v4",
+    ) as client:
+        adapter = GatePublicAdapter(
+            base_url="https://test.invalid/api/v4", http_client=client
+        )
+        with pytest.raises(InvalidResponseError):
+            await adapter.get_orderbook(
+                "BTC_USDT", 20, instrument_type=instrument_type
+            )
 
 @pytest.mark.asyncio
 async def test_gate_websocket_reconnects_after_disconnect() -> None:

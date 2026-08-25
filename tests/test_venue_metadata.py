@@ -95,6 +95,50 @@ def test_registry_captures_dynamic_capabilities_units_fees_and_clock_offset() ->
     assert registry.get("BINANCE", "LINEAR") == snapshot
 
 
+def test_registry_drops_only_markets_with_incomplete_identity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = VenueMetadataRegistry()
+    exchange = FakeExchange()
+    incomplete = dict(exchange.markets["BTC/USDT:USDT"])
+    incomplete["id"] = ""
+    exchange.markets["invalid"] = incomplete
+
+    snapshot = registry.update_from_ccxt(
+        venue="okx",
+        account="linear",
+        exchange=exchange,
+        expected_type=InstrumentType.PERPETUAL,
+        observed_at=NOW,
+        server_time_ms=None,
+    )
+
+    assert len(snapshot.instruments) == 1
+    assert snapshot.instruments[0].instrument.exchange_symbol == "BTCUSDT"
+    assert "venue_metadata_incomplete_markets_dropped" in caplog.messages
+
+
+def test_registry_rejects_all_expected_markets_with_incomplete_identity() -> None:
+    registry = VenueMetadataRegistry()
+    exchange = FakeExchange()
+    invalid = dict(exchange.markets["BTC/USDT:USDT"])
+    invalid["id"] = " "
+    exchange.markets = {"invalid": invalid}
+
+    with pytest.raises(
+        VenueMetadataError,
+        match="all expected markets have incomplete identity",
+    ):
+        registry.update_from_ccxt(
+            venue="okx",
+            account="linear",
+            exchange=exchange,
+            expected_type=InstrumentType.PERPETUAL,
+            observed_at=NOW,
+            server_time_ms=None,
+        )
+
+
 def test_revision_is_stable_for_same_metadata_and_changes_with_fee() -> None:
     registry = VenueMetadataRegistry()
     exchange = FakeExchange()

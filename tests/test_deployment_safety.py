@@ -79,7 +79,8 @@ def test_every_service_has_cpu_and_memory_limits() -> None:
 
     app = services["app"]
     assert app["cpus"] == "1.00"
-    assert app["mem_limit"] == "1024m"
+    assert app["mem_limit"] == "1536m"
+    assert services["clickhouse"]["mem_limit"] == "1280m"
 
 
 def test_every_service_has_bounded_json_log_rotation() -> None:
