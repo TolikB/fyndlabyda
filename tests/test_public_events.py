@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -381,6 +381,94 @@ async def test_supervisor_mirrors_exact_funding_and_only_falls_back_for_missing_
     assert funding.mark_price == Decimal("60001")
     assert funding.index_price == Decimal("59999")
     assert funding.next_funding_time == datetime(2026, 8, 20, 16, 0, tzinfo=UTC)
+
+
+async def test_polled_derivative_observations_do_not_reuse_event_ids() -> None:
+    exchange = FakePublicExchange(open_interest=False)
+    collector = EventCollector()
+    supervisor = PublicEventSupervisor(
+        [PublicEventAccount(_profile(), exchange)],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    first = _snapshot()
+    second = MarketSnapshot(
+        first.instruments,
+        [first.tickers[0].model_copy(update={"open_interest": Decimal("13.5")})],
+        [
+            first.funding[0].model_copy(
+                update={
+                    "mark_price": Decimal("60002"),
+                    "index_price": Decimal("60000"),
+                }
+            )
+        ],
+        first.orderbooks,
+        first.captured_at,
+    )
+
+    await supervisor._publish_snapshot_events(first, NOW, 100)
+    await supervisor._publish_snapshot_events(first, NOW, 100)
+    await supervisor._publish_snapshot_events(
+        second,
+        NOW - timedelta(seconds=1),
+        101,
+    )
+
+    funding_events = [
+        event for event in collector.events if event.kind is EventKind.FUNDING_SNAPSHOT
+    ]
+    open_interest_events = [
+        event
+        for event in collector.events
+        if event.kind is EventKind.OPEN_INTEREST_SNAPSHOT
+    ]
+    assert len(funding_events) == 3
+    assert len(open_interest_events) == 3
+    assert len({event.metadata.sequence_id for event in funding_events}) == 1
+    assert len({event.metadata.sequence_id for event in open_interest_events}) == 1
+    assert funding_events[0].metadata.event_id == funding_events[1].metadata.event_id
+    assert funding_events[1].metadata.event_id != funding_events[2].metadata.event_id
+    assert (
+        open_interest_events[0].metadata.event_id
+        == open_interest_events[1].metadata.event_id
+    )
+    assert (
+        open_interest_events[1].metadata.event_id
+        != open_interest_events[2].metadata.event_id
+    )
+    assert funding_events[2].metadata.monotonic_ns == 101
+
+
+async def test_polled_snapshot_identity_is_bounded_for_long_symbols() -> None:
+    exchange = FakePublicExchange(open_interest=False)
+    collector = EventCollector()
+    supervisor = PublicEventSupervisor(
+        [PublicEventAccount(_profile(), exchange)],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    source = _snapshot()
+    symbol = "X" * 512
+    snapshot = MarketSnapshot(
+        [source.instruments[0].model_copy(update={"exchange_symbol": symbol})],
+        [source.tickers[0].model_copy(update={"symbol": symbol})],
+        [source.funding[0].model_copy(update={"symbol": symbol})],
+        source.orderbooks,
+        source.captured_at,
+    )
+
+    await supervisor._publish_snapshot_events(snapshot, NOW, 100)
+
+    assert len(collector.events) == 2
+    assert all(len(event.metadata.sequence_id) <= 128 for event in collector.events)
+    assert all(len(event.metadata.correlation_id) <= 128 for event in collector.events)
 
 
 async def test_supervisor_normalizes_blank_legacy_settlement_asset() -> None:

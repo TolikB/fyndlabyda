@@ -10,6 +10,7 @@ synthetic liquidation or open-interest records are produced.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ from funding_arbitrage.domain.events import (
     Side,
     TradeTick,
     deterministic_event_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
 from funding_arbitrage.market_data.collector import MarketSnapshot
@@ -319,7 +321,7 @@ class PublicEventSupervisor:
         """Mirror exact native funding and update the bounded CCXT universe."""
 
         received_at = datetime.now(UTC)
-        await self._publish_snapshot_events(snapshot, received_at)
+        await self._publish_snapshot_events(snapshot, received_at, monotonic_ns())
         self._update_required_quality_streams(snapshot)
         for account in self.accounts:
             key = self._key(account)
@@ -654,8 +656,20 @@ class PublicEventSupervisor:
             )
 
     async def _publish_snapshot_events(
-        self, snapshot: MarketSnapshot, received_at: datetime
+        self,
+        snapshot: MarketSnapshot,
+        received_at: datetime,
+        received_monotonic_ns: int | None = None,
     ) -> None:
+        observed_monotonic_ns = (
+            received_monotonic_ns
+            if received_monotonic_ns is not None
+            else monotonic_ns()
+        )
+        occurrence_id = snapshot_occurrence_id(
+            receive_timestamp=received_at,
+            receive_monotonic_ns=observed_monotonic_ns,
+        )
         for funding in snapshot.funding:
             instrument = snapshot.instrument(
                 funding.exchange, funding.symbol, LegacyInstrumentType.PERPETUAL
@@ -694,8 +708,12 @@ class PublicEventSupervisor:
                 funding_payload,
                 kind=EventKind.FUNDING_SNAPSHOT,
                 source=f"native:{funding.exchange}:funding",
-                sequence_id=f"{funding.symbol}:{int(funding.timestamp.timestamp() * 1000)}",
+                sequence_id=_polled_snapshot_sequence_id(
+                    funding.symbol, funding.timestamp
+                ),
                 received_at=received_at,
+                received_monotonic_ns=observed_monotonic_ns,
+                occurrence_id=occurrence_id,
             )
             await self.event_sink(event)
             public_events_total.labels(funding.exchange, "funding", "native").inc()
@@ -727,8 +745,12 @@ class PublicEventSupervisor:
                     oi_payload,
                     kind=EventKind.OPEN_INTEREST_SNAPSHOT,
                     source=f"native:{ticker.exchange}:open-interest",
-                    sequence_id=f"{ticker.symbol}:{int(ticker.timestamp.timestamp() * 1000)}",
+                    sequence_id=_polled_snapshot_sequence_id(
+                        ticker.symbol, ticker.timestamp
+                    ),
                     received_at=received_at,
+                    received_monotonic_ns=observed_monotonic_ns,
+                    occurrence_id=occurrence_id,
                 )
             )
             public_events_total.labels(
@@ -887,7 +909,14 @@ def _envelope(
     sequence_id: str,
     received_at: datetime,
     quality: DataQuality = DataQuality.VALID,
+    received_monotonic_ns: int | None = None,
+    occurrence_id: str | None = None,
 ) -> EventEnvelope[Any]:
+    observed_monotonic_ns = (
+        received_monotonic_ns
+        if received_monotonic_ns is not None
+        else monotonic_ns()
+    )
     metadata = EventMetadata(
         event_id=deterministic_event_id(
             source=source,
@@ -895,10 +924,11 @@ def _envelope(
             sequence_id=sequence_id,
             exchange_timestamp=payload.exchange_timestamp,
             payload=payload,
+            occurrence_id=occurrence_id,
         ),
         exchange_timestamp=payload.exchange_timestamp,
         receive_timestamp=received_at,
-        monotonic_ns=monotonic_ns(),
+        monotonic_ns=observed_monotonic_ns,
         sequence_id=sequence_id,
         source=source,
         correlation_id=f"{source}:{sequence_id}",
@@ -906,6 +936,21 @@ def _envelope(
         quality=quality,
     )
     return EventEnvelope[Any](kind=kind, metadata=metadata, payload=payload)
+
+
+def _polled_snapshot_sequence_id(
+    symbol: str,
+    exchange_timestamp: datetime,
+) -> str:
+    """Return a stable bounded identity for one venue snapshot stream point."""
+
+    exchange_time = (
+        exchange_timestamp
+        if exchange_timestamp.tzinfo is not None
+        else exchange_timestamp.replace(tzinfo=UTC)
+    ).astimezone(UTC)
+    symbol_digest = hashlib.sha256(symbol.encode()).hexdigest()[:24]
+    return f"snapshot:{symbol_digest}:{int(exchange_time.timestamp() * 1_000_000)}"
 
 
 def _instrument(

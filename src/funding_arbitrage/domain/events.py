@@ -495,8 +495,12 @@ def deterministic_event_id(
         "source": source,
     }
     if occurrence_id is not None:
-        if kind is not EventKind.BOOK_SNAPSHOT:
-            raise ValueError("occurrence_id is only valid for book snapshots")
+        if kind not in {
+            EventKind.BOOK_SNAPSHOT,
+            EventKind.FUNDING_SNAPSHOT,
+            EventKind.OPEN_INTEREST_SNAPSHOT,
+        }:
+            raise ValueError("occurrence_id is only valid for observation snapshots")
         normalized_occurrence = occurrence_id.strip()
         if not normalized_occurrence:
             raise ValueError("occurrence_id cannot be blank when provided")

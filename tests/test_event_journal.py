@@ -20,12 +20,14 @@ from funding_arbitrage.domain.events import (
     EventEnvelope,
     EventKind,
     EventMetadata,
+    FundingSnapshot,
     InstrumentKey,
     InstrumentType,
     LiquidationTick,
     Side,
     TradeTick,
     deterministic_event_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.hyperliquid.orderbook import HyperliquidOrderBookNormalizer
 
@@ -166,6 +168,78 @@ async def test_replay_orders_equal_timestamp_books_by_numeric_native_sequence() 
     assert [event.metadata.sequence_id for event in replay] == ["version:2", "version:10"]
     assert [event.metadata.native_sequence for event in replay] == [2, 10]
     assert stored_sequences == [2, 10]
+
+
+def _funding_observation(
+    *,
+    mark_price: Decimal,
+    received_at: datetime,
+    received_monotonic_ns: int,
+) -> EventEnvelope[FundingSnapshot]:
+    payload = FundingSnapshot(
+        instrument=INSTRUMENT,
+        funding_rate=Decimal("0.0001"),
+        funding_interval_seconds=28_800,
+        next_funding_time=NOW + timedelta(hours=4),
+        mark_price=mark_price,
+        index_price=Decimal("62000"),
+        exchange_timestamp=NOW,
+    )
+    sequence_id = "snapshot:funding-btc:fixed-exchange-time"
+    occurrence_id = snapshot_occurrence_id(
+        receive_timestamp=received_at,
+        receive_monotonic_ns=received_monotonic_ns,
+    )
+    return EventEnvelope[FundingSnapshot](
+        kind=EventKind.FUNDING_SNAPSHOT,
+        metadata=EventMetadata(
+            event_id=deterministic_event_id(
+                source="native:bybit:funding",
+                kind=EventKind.FUNDING_SNAPSHOT,
+                sequence_id=sequence_id,
+                exchange_timestamp=NOW,
+                payload=payload,
+                occurrence_id=occurrence_id,
+            ),
+            exchange_timestamp=NOW,
+            receive_timestamp=received_at,
+            monotonic_ns=received_monotonic_ns,
+            sequence_id=sequence_id,
+            source="native:bybit:funding",
+            correlation_id="native:bybit:funding:snapshot:funding-btc",
+            payload_version=1,
+        ),
+        payload=payload,
+    )
+
+
+async def test_polled_snapshot_replay_uses_arrival_order_during_clock_rollback() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _funding_observation(
+        mark_price=Decimal("62001"),
+        received_at=NOW,
+        received_monotonic_ns=100,
+    )
+    second = _funding_observation(
+        mark_price=Decimal("62002"),
+        received_at=NOW - timedelta(seconds=1),
+        received_monotonic_ns=101,
+    )
+
+    async with factory() as session:
+        assert await append_event(session, first) is True
+        assert await append_event(session, second) is True
+        assert await append_event(session, second) is False
+        replay = await load_events(session, kinds=(EventKind.FUNDING_SNAPSHOT,))
+
+    await engine.dispose()
+    assert [event.payload.mark_price for event in replay] == [
+        Decimal("62001"),
+        Decimal("62002"),
+    ]
 
 
 async def test_revised_same_sequence_snapshot_appends_without_collision() -> None:

@@ -176,7 +176,7 @@ def test_occurrence_id_is_rejected_for_transactional_events() -> None:
         exchange_timestamp=NOW,
     )
 
-    with pytest.raises(ValueError, match="only valid for book snapshots"):
+    with pytest.raises(ValueError, match="only valid for observation snapshots"):
         deterministic_event_id(
             source="bybit.public.trade",
             kind=EventKind.TRADE_TICK,
