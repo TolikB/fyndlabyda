@@ -303,7 +303,7 @@ def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
         assert len(requirements) == expected_count
         assert len(requirements) == len(set(requirements))
         assert "ccxt==4.5.73" in requirements
-        assert "protobuf==5.29.5" in requirements
+        assert "protobuf==5.29.6" in requirements
         assert any(item.startswith(event_loop + "==") for item in requirements)
 
 
