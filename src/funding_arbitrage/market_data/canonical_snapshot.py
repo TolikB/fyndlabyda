@@ -49,6 +49,14 @@ def canonical_snapshot_event(
     result = local_book.apply_snapshot(payload)
     sequence_id = instrument_scoped_sequence_id(instrument, f"snapshot:{book.sequence}")
     received_at = _utc(receive_timestamp or datetime.now(UTC))
+    received_monotonic_ns = (
+        receive_monotonic_ns
+        if receive_monotonic_ns is not None
+        else monotonic_ns()
+    )
+    occurrence_id = (
+        f"snapshot-observation-v1:{received_at.isoformat()}:{received_monotonic_ns}"
+    )
     metadata = EventMetadata(
         event_id=deterministic_event_id(
             source=source,
@@ -56,10 +64,11 @@ def canonical_snapshot_event(
             sequence_id=sequence_id,
             exchange_timestamp=exchange_timestamp,
             payload=payload,
+            occurrence_id=occurrence_id,
         ),
         exchange_timestamp=exchange_timestamp,
         receive_timestamp=received_at,
-        monotonic_ns=(receive_monotonic_ns if receive_monotonic_ns is not None else monotonic_ns()),
+        monotonic_ns=received_monotonic_ns,
         sequence_id=sequence_id,
         source=source,
         correlation_id=f"market:{instrument.canonical_id}",

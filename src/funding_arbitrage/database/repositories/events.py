@@ -194,13 +194,15 @@ def event_query(
     native_sequence_is_missing = case(
         (CanonicalEventRecord.native_sequence.is_(None), 1), else_=0
     )
+    # The durable row ID preserves arrival order when a venue reuses native
+    # snapshot identity, including across wall-clock changes and process restarts.
     return statement.order_by(
         CanonicalEventRecord.exchange_timestamp,
         CanonicalEventRecord.source,
         native_sequence_is_missing,
         CanonicalEventRecord.native_sequence,
         CanonicalEventRecord.sequence_id,
-        CanonicalEventRecord.event_id,
+        CanonicalEventRecord.id,
     )
 
 

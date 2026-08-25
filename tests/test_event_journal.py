@@ -97,15 +97,30 @@ async def test_journal_is_idempotent_and_replays_in_authoritative_order() -> Non
     assert replay[0].payload.price == Decimal("62001")
 
 
-def _book_event(sequence: int) -> EventEnvelope[BookSnapshot]:
+def _book_event(
+    sequence: int,
+    *,
+    bid_quantity: Decimal = Decimal("1"),
+    receive_offset_ms: int = 0,
+    receive_monotonic_ns: int | None = None,
+) -> EventEnvelope[BookSnapshot]:
+    received_at = NOW + timedelta(milliseconds=receive_offset_ms)
+    observed_monotonic = (
+        receive_monotonic_ns
+        if receive_monotonic_ns is not None
+        else sequence + receive_offset_ms
+    )
     payload = BookSnapshot(
         instrument=INSTRUMENT,
-        bids=(BookLevel(price=Decimal("61999"), quantity=Decimal("1")),),
+        bids=(BookLevel(price=Decimal("61999"), quantity=bid_quantity),),
         asks=(BookLevel(price=Decimal("62001"), quantity=Decimal("1")),),
         sequence=sequence,
         exchange_timestamp=NOW,
     )
     sequence_id = f"version:{sequence}"
+    occurrence_id = (
+        f"snapshot-observation-v1:{received_at.isoformat()}:{observed_monotonic}"
+    )
     return EventEnvelope[BookSnapshot](
         kind=EventKind.BOOK_SNAPSHOT,
         metadata=EventMetadata(
@@ -115,10 +130,11 @@ def _book_event(sequence: int) -> EventEnvelope[BookSnapshot]:
                 sequence_id=sequence_id,
                 exchange_timestamp=NOW,
                 payload=payload,
+                occurrence_id=occurrence_id,
             ),
             exchange_timestamp=NOW,
-            receive_timestamp=NOW,
-            monotonic_ns=sequence,
+            receive_timestamp=received_at,
+            monotonic_ns=observed_monotonic,
             sequence_id=sequence_id,
             source="mexc.public.book",
             correlation_id="market:MEXC:BTCUSDT",
@@ -152,7 +168,83 @@ async def test_replay_orders_equal_timestamp_books_by_numeric_native_sequence() 
     assert stored_sequences == [2, 10]
 
 
+async def test_revised_same_sequence_snapshot_appends_without_collision() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    original = _book_event(10)
+    revised = _book_event(
+        10, bid_quantity=Decimal("2"), receive_offset_ms=1
+    )
+    restored = _book_event(
+        10, bid_quantity=Decimal("1"), receive_offset_ms=2
+    )
+
+    async with factory() as session:
+        assert await append_event(session, original) is True
+        assert await append_event(session, revised) is True
+        assert await append_event(session, restored) is True
+        assert await append_event(session, restored) is False
+        replay = await load_events(
+            session,
+            kinds=(EventKind.BOOK_SNAPSHOT,),
+            source="mexc.public.book",
+        )
+        count = await session.scalar(
+            select(func.count()).select_from(CanonicalEventRecord)
+        )
+
+    await engine.dispose()
+
+    assert len(
+        {
+            original.metadata.event_id,
+            revised.metadata.event_id,
+            restored.metadata.event_id,
+        }
+    ) == 3
+    assert len(replay) == 3
+    assert [event.payload.bids[0].quantity for event in replay] == [
+        Decimal("1"),
+        Decimal("2"),
+        Decimal("1"),
+    ]
+    assert count == 3
+
+
+async def test_replay_uses_durable_arrival_order_during_clock_rollback() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _book_event(20, receive_offset_ms=0, receive_monotonic_ns=100)
+    second = _book_event(
+        20,
+        bid_quantity=Decimal("2"),
+        receive_offset_ms=-1,
+        receive_monotonic_ns=101,
+    )
+
+    async with factory() as session:
+        assert await append_event(session, first) is True
+        assert await append_event(session, second) is True
+        replay = await load_events(
+            session,
+            kinds=(EventKind.BOOK_SNAPSHOT,),
+            source="mexc.public.book",
+        )
+
+    await engine.dispose()
+
+    assert [event.payload.bids[0].quantity for event in replay] == [
+        Decimal("1"),
+        Decimal("2"),
+    ]
+
+
 async def test_journal_filters_by_source_correlation_and_half_open_time_range() -> None:
+
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

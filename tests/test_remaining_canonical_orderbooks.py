@@ -142,3 +142,35 @@ def test_common_snapshot_identity_includes_instrument() -> None:
 
     assert btc_event.metadata.event_id != eth_event.metadata.event_id
     assert btc_event.metadata.sequence_id != eth_event.metadata.sequence_id
+
+
+def test_common_snapshot_identity_distinguishes_observations() -> None:
+    instrument = InstrumentKey(
+        venue="MEXC",
+        exchange_symbol="BTC_USDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        instrument_type=InstrumentType.PERPETUAL,
+    )
+    book = _book(
+        "mexc",
+        "BTC_USDT",
+        LegacyInstrumentType.PERPETUAL,
+    )
+    first = canonical_snapshot_event(
+        book,
+        instrument,
+        source="MEXC.PUBLIC.FUTURES.DEPTH",
+        receive_timestamp=NOW,
+        receive_monotonic_ns=100,
+    )
+    second = canonical_snapshot_event(
+        book,
+        instrument,
+        source="MEXC.PUBLIC.FUTURES.DEPTH",
+        receive_timestamp=NOW,
+        receive_monotonic_ns=101,
+    )
+
+    assert first.metadata.sequence_id == second.metadata.sequence_id
+    assert first.metadata.event_id != second.metadata.event_id

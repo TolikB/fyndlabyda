@@ -478,12 +478,13 @@ def deterministic_event_id(
     sequence_id: str,
     exchange_timestamp: datetime,
     payload: BaseModel,
+    occurrence_id: str | None = None,
 ) -> str:
-    """Return a stable logical ID independent of corrected payload content.
+    """Return a stable ID for a logical event or explicit observation.
 
-    ``payload`` remains in the signature for producer compatibility. Its checksum
-    is stored separately by the journal, where conflicting content for the same
-    logical event is rejected as an integrity collision.
+    ``payload`` stays outside logical identity so corrected content still causes
+    a journal integrity collision. ``occurrence_id`` lets snapshot producers
+    distinguish observations when a venue's native identity is not unique.
     """
 
     del payload
@@ -493,5 +494,12 @@ def deterministic_event_id(
         "sequence_id": sequence_id,
         "source": source,
     }
+    if occurrence_id is not None:
+        if kind is not EventKind.BOOK_SNAPSHOT:
+            raise ValueError("occurrence_id is only valid for book snapshots")
+        normalized_occurrence = occurrence_id.strip()
+        if not normalized_occurrence:
+            raise ValueError("occurrence_id cannot be blank when provided")
+        canonical["occurrence_id"] = normalized_occurrence
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return "evt_" + hashlib.sha256(encoded).hexdigest()

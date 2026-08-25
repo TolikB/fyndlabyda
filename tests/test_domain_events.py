@@ -132,6 +132,60 @@ def test_event_id_tracks_logical_identity_not_payload_revision() -> None:
 
     assert _metadata(original).event_id == _metadata(corrected).event_id
 
+
+def test_event_id_can_distinguish_explicit_observations() -> None:
+    original = BookSnapshot(
+        instrument=INSTRUMENT,
+        bids=(BookLevel(price=Decimal("100"), quantity=Decimal("2")),),
+        asks=(BookLevel(price=Decimal("101"), quantity=Decimal("3")),),
+        sequence=10,
+        exchange_timestamp=NOW,
+    )
+    revised = original.model_copy(
+        update={
+            "bids": (BookLevel(price=Decimal("100"), quantity=Decimal("4")),),
+        }
+    )
+
+    def event_id(payload: BookSnapshot, occurrence: str) -> str:
+        return deterministic_event_id(
+            source="mexc.public.book",
+            kind=EventKind.BOOK_SNAPSHOT,
+            sequence_id="10",
+            exchange_timestamp=NOW,
+            payload=payload,
+            occurrence_id=occurrence,
+        )
+
+    assert event_id(original, "observation-1") == event_id(
+        revised, "observation-1"
+    )
+    assert event_id(original, "observation-1") != event_id(
+        original, "observation-2"
+    )
+    with pytest.raises(ValueError, match="cannot be blank"):
+        event_id(original, " ")
+
+
+def test_occurrence_id_is_rejected_for_transactional_events() -> None:
+    tick = TradeTick(
+        instrument=INSTRUMENT,
+        trade_id="trade-occurrence",
+        price=Decimal("1"),
+        quantity=Decimal("1"),
+        exchange_timestamp=NOW,
+    )
+
+    with pytest.raises(ValueError, match="only valid for book snapshots"):
+        deterministic_event_id(
+            source="bybit.public.trade",
+            kind=EventKind.TRADE_TICK,
+            sequence_id="trade-occurrence",
+            exchange_timestamp=NOW,
+            payload=tick,
+            occurrence_id="observation-1",
+        )
+
 def test_envelope_rejects_kind_or_exchange_timestamp_mismatch() -> None:
     tick = TradeTick(
         instrument=INSTRUMENT,
