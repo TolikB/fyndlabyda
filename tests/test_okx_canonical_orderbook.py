@@ -171,3 +171,27 @@ async def test_okx_adapter_publishes_canonical_event_before_legacy_book() -> Non
     book = states["BTC-USDT-SWAP"].legacy_book(update, LegacyInstrumentType.PERPETUAL)
     assert book is not None
     assert book.sequence == 100
+
+
+def test_okx_reused_native_snapshot_id_is_unique_per_observation() -> None:
+    payload = _row(
+        sequence=100,
+        previous_sequence=-1,
+        bids=[["100", "2"]],
+        asks=[["101", "4"]],
+    )
+    first = OkxOrderBookNormalizer(INSTRUMENT, depth=20).apply(
+        payload,
+        action="snapshot",
+        receive_timestamp=RECEIVED,
+        receive_monotonic_ns=100,
+    )
+    second = OkxOrderBookNormalizer(INSTRUMENT, depth=20).apply(
+        payload,
+        action="snapshot",
+        receive_timestamp=RECEIVED,
+        receive_monotonic_ns=101,
+    )
+
+    assert first is not None and second is not None
+    assert first.event.metadata.event_id != second.event.metadata.event_id

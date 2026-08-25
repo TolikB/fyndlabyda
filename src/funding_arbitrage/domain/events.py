@@ -503,3 +503,16 @@ def deterministic_event_id(
         canonical["occurrence_id"] = normalized_occurrence
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return "evt_" + hashlib.sha256(encoded).hexdigest()
+
+
+def snapshot_occurrence_id(
+    *, receive_timestamp: datetime, receive_monotonic_ns: int
+) -> str:
+    """Return the stable identity of one received snapshot observation."""
+
+    if receive_monotonic_ns < 0:
+        raise ValueError("snapshot receive monotonic timestamp cannot be negative")
+    return (
+        "snapshot-observation-v1:"
+        f"{_utc(receive_timestamp).isoformat()}:{receive_monotonic_ns}"
+    )

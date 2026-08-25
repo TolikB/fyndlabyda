@@ -14,6 +14,7 @@ dependencies = [
   "fastapi>=0.115,<1",
   "httpx>=0.27,<1",
   "prometheus-client>=0.20,<1",
+  "protobuf==5.29.5",
   "pyarrow>=21,<24",
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",

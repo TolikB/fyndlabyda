@@ -21,6 +21,7 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     deterministic_event_id,
     instrument_scoped_sequence_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import (
@@ -119,6 +120,14 @@ class OkxOrderBookNormalizer:
                 sequence_id=sequence_id,
                 exchange_timestamp=exchange_timestamp,
                 payload=event_payload,
+                occurrence_id=(
+                    snapshot_occurrence_id(
+                        receive_timestamp=received_at,
+                        receive_monotonic_ns=received_monotonic,
+                    )
+                    if kind is EventKind.BOOK_SNAPSHOT
+                    else None
+                ),
             ),
             exchange_timestamp=exchange_timestamp,
             receive_timestamp=received_at,

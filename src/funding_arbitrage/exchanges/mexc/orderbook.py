@@ -21,6 +21,7 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     deterministic_event_id,
     instrument_scoped_sequence_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
@@ -174,6 +175,9 @@ class MexcOrderBookNormalizer:
     ) -> MexcBookUpdate:
         sequence_id = instrument_scoped_sequence_id(self.instrument, sequence_id)
         received_at = _utc(receive_timestamp or datetime.now(UTC))
+        received_monotonic = (
+            receive_monotonic_ns if receive_monotonic_ns is not None else monotonic_ns()
+        )
         metadata = EventMetadata(
             event_id=deterministic_event_id(
                 source=source,
@@ -181,12 +185,18 @@ class MexcOrderBookNormalizer:
                 sequence_id=sequence_id,
                 exchange_timestamp=payload.exchange_timestamp,
                 payload=payload,
+                occurrence_id=(
+                    snapshot_occurrence_id(
+                        receive_timestamp=received_at,
+                        receive_monotonic_ns=received_monotonic,
+                    )
+                    if kind is EventKind.BOOK_SNAPSHOT
+                    else None
+                ),
             ),
             exchange_timestamp=payload.exchange_timestamp,
             receive_timestamp=received_at,
-            monotonic_ns=(
-                receive_monotonic_ns if receive_monotonic_ns is not None else monotonic_ns()
-            ),
+            monotonic_ns=received_monotonic,
             sequence_id=sequence_id,
             source=source,
             correlation_id=f"market:{self.instrument.canonical_id}",

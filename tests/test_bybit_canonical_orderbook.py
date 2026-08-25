@@ -133,3 +133,26 @@ def test_bybit_u_one_forces_full_reset_even_if_frame_says_delta() -> None:
     assert reset.book.sequence == 1
     assert reset.book.bids[0].price == 90
     assert reset.book.asks[0].price == 91
+
+
+def test_bybit_reused_native_snapshot_id_is_unique_per_observation() -> None:
+    payload = _frame(
+        frame_type="snapshot",
+        update_id=10,
+        cross_sequence=1000,
+        bids=[["100", "2"]],
+        asks=[["101", "4"]],
+    )
+    first = BybitOrderBookNormalizer(INSTRUMENT, depth=50).apply(
+        payload,
+        receive_timestamp=RECEIVED,
+        receive_monotonic_ns=100,
+    )
+    second = BybitOrderBookNormalizer(INSTRUMENT, depth=50).apply(
+        payload,
+        receive_timestamp=RECEIVED,
+        receive_monotonic_ns=101,
+    )
+
+    assert first.event.metadata.sequence_id == second.event.metadata.sequence_id
+    assert first.event.metadata.event_id != second.event.metadata.event_id

@@ -20,6 +20,7 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     InstrumentKey,
     instrument_scoped_sequence_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import (
@@ -124,6 +125,14 @@ class BybitOrderBookNormalizer:
             sequence_id=sequence_id,
             timestamp=exchange_timestamp,
             payload=event_payload,
+            occurrence_id=(
+                snapshot_occurrence_id(
+                    receive_timestamp=received_at,
+                    receive_monotonic_ns=received_monotonic,
+                )
+                if kind is EventKind.BOOK_SNAPSHOT
+                else None
+            ),
         )
         metadata = EventMetadata(
             event_id=event_id,
@@ -236,6 +245,7 @@ def _event_id(
     sequence_id: str,
     timestamp: datetime,
     payload: BookSnapshot | BookDelta,
+    occurrence_id: str | None,
 ) -> str:
     from funding_arbitrage.domain.events import deterministic_event_id
 
@@ -245,4 +255,5 @@ def _event_id(
         sequence_id=sequence_id,
         exchange_timestamp=timestamp,
         payload=payload,
+        occurrence_id=occurrence_id,
     )

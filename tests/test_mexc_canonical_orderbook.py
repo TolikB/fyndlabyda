@@ -166,3 +166,15 @@ async def test_mexc_subscription_ack_barrier_buffers_early_depth() -> None:
     )
 
     assert buffered == [early]
+
+
+def test_mexc_reused_native_snapshot_id_is_unique_per_observation() -> None:
+    first = _normalizer().bootstrap(
+        _snapshot(), receive_timestamp=NOW, receive_monotonic_ns=100
+    )
+    second = _normalizer().bootstrap(
+        _snapshot(), receive_timestamp=NOW, receive_monotonic_ns=101
+    )
+
+    assert first.event.metadata.sequence_id == second.event.metadata.sequence_id
+    assert first.event.metadata.event_id != second.event.metadata.event_id

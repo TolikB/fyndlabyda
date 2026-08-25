@@ -84,3 +84,19 @@ async def test_hyperliquid_adapter_publishes_before_legacy_book() -> None:
     book = states["BTC"].legacy_book(update, LegacyInstrumentType.PERPETUAL)
     assert book is not None
     assert book.sequence == 1786881600000
+
+
+def test_hyperliquid_reused_native_snapshot_id_is_unique_per_observation() -> None:
+    first = HyperliquidOrderBookNormalizer(INSTRUMENT, depth=20).apply(
+        _payload(),
+        receive_timestamp=NOW,
+        receive_monotonic_ns=100,
+    )
+    second = HyperliquidOrderBookNormalizer(INSTRUMENT, depth=20).apply(
+        _payload(),
+        receive_timestamp=NOW,
+        receive_monotonic_ns=101,
+    )
+
+    assert first.event.metadata.sequence_id == second.event.metadata.sequence_id
+    assert first.event.metadata.event_id != second.event.metadata.event_id

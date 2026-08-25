@@ -17,6 +17,7 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     deterministic_event_id,
     instrument_scoped_sequence_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
@@ -70,6 +71,9 @@ class HyperliquidOrderBookNormalizer:
         received_at = (
             received_at if received_at.tzinfo else received_at.replace(tzinfo=UTC)
         ).astimezone(UTC)
+        received_monotonic = (
+            receive_monotonic_ns if receive_monotonic_ns is not None else monotonic_ns()
+        )
         metadata = EventMetadata(
             event_id=deterministic_event_id(
                 source=source,
@@ -77,12 +81,14 @@ class HyperliquidOrderBookNormalizer:
                 sequence_id=sequence_id,
                 exchange_timestamp=exchange_timestamp,
                 payload=snapshot,
+                occurrence_id=snapshot_occurrence_id(
+                    receive_timestamp=received_at,
+                    receive_monotonic_ns=received_monotonic,
+                ),
             ),
             exchange_timestamp=exchange_timestamp,
             receive_timestamp=received_at,
-            monotonic_ns=(
-                receive_monotonic_ns if receive_monotonic_ns is not None else monotonic_ns()
-            ),
+            monotonic_ns=received_monotonic,
             sequence_id=sequence_id,
             source=source,
             correlation_id=f"market:{self.instrument.canonical_id}",

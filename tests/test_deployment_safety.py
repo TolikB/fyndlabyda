@@ -283,9 +283,9 @@ def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
         in dockerfile
     )
 
-    for path, event_loop in (
-        (REQUIREMENTS_LOCK_PATH, "winloop"),
-        (LINUX_REQUIREMENTS_LOCK_PATH, "uvloop"),
+    for path, event_loop, expected_count in (
+        (REQUIREMENTS_LOCK_PATH, "winloop", 55),
+        (LINUX_REQUIREMENTS_LOCK_PATH, "uvloop", 54),
     ):
         content = path.read_text(encoding="utf-8")
         blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
@@ -300,9 +300,10 @@ def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
             assert len(hashes) == len(set(hashes)), first_line
             requirements.append(first_line.removesuffix(" \\"))
 
-        assert len(requirements) == 54
+        assert len(requirements) == expected_count
         assert len(requirements) == len(set(requirements))
         assert "ccxt==4.5.73" in requirements
+        assert "protobuf==5.29.5" in requirements
         assert any(item.startswith(event_loop + "==") for item in requirements)
 
 

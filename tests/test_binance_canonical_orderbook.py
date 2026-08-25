@@ -201,3 +201,17 @@ async def test_binance_subscription_ack_barrier_buffers_early_depth() -> None:
     )
 
     assert buffered == [early]
+
+
+def test_binance_reused_native_snapshot_id_is_unique_per_observation() -> None:
+    first_state = BinanceOrderBookNormalizer(INSTRUMENT, output_depth=2, reconstruction_depth=3)
+    second_state = BinanceOrderBookNormalizer(INSTRUMENT, output_depth=2, reconstruction_depth=3)
+    first = first_state.bootstrap(
+        _snapshot(), receive_timestamp=NOW, receive_monotonic_ns=100
+    )
+    second = second_state.bootstrap(
+        _snapshot(), receive_timestamp=NOW, receive_monotonic_ns=101
+    )
+
+    assert first.event.metadata.sequence_id == second.event.metadata.sequence_id
+    assert first.event.metadata.event_id != second.event.metadata.event_id

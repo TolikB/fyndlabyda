@@ -15,6 +15,7 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     deterministic_event_id,
     instrument_scoped_sequence_id,
+    snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import OrderBook
@@ -54,8 +55,9 @@ def canonical_snapshot_event(
         if receive_monotonic_ns is not None
         else monotonic_ns()
     )
-    occurrence_id = (
-        f"snapshot-observation-v1:{received_at.isoformat()}:{received_monotonic_ns}"
+    occurrence_id = snapshot_occurrence_id(
+        receive_timestamp=received_at,
+        receive_monotonic_ns=received_monotonic_ns,
     )
     metadata = EventMetadata(
         event_id=deterministic_event_id(

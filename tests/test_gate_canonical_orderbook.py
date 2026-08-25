@@ -111,3 +111,32 @@ async def test_gate_adapter_publishes_event_before_book_use() -> None:
 
     assert update is not None
     assert events == [update.event]
+
+
+def test_gate_reused_native_snapshot_id_is_unique_per_observation() -> None:
+    payload = {
+        "s": "BTC_USDT",
+        "lastUpdateId": 9,
+        "t": 1786881600000,
+        "bids": [["100", "1"]],
+        "asks": [["101", "2"]],
+    }
+    first = GateOrderBookNormalizer(
+        _instrument(InstrumentType.SPOT), depth=20
+    ).apply(
+        payload,
+        instrument_type=LegacyInstrumentType.SPOT,
+        receive_timestamp=NOW,
+        receive_monotonic_ns=100,
+    )
+    second = GateOrderBookNormalizer(
+        _instrument(InstrumentType.SPOT), depth=20
+    ).apply(
+        payload,
+        instrument_type=LegacyInstrumentType.SPOT,
+        receive_timestamp=NOW,
+        receive_monotonic_ns=101,
+    )
+
+    assert first.event.metadata.sequence_id == second.event.metadata.sequence_id
+    assert first.event.metadata.event_id != second.event.metadata.event_id
