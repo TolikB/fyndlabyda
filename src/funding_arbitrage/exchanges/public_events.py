@@ -59,6 +59,10 @@ from funding_arbitrage.services.event_writer import EventWriterFailed
 
 logger = logging.getLogger(__name__)
 
+_CANDLE_INTERVAL_MILLISECONDS = 60_000
+_CANDLE_BACKFILL_LIMIT = 10
+_CANDLE_FINALITY_DELAY = timedelta(seconds=5)
+
 CanonicalEventSink = Callable[[EventEnvelope[Any]], Awaitable[None]]
 
 
@@ -103,7 +107,12 @@ class CcxtPublicEventNormalizer:
         return tuple(self._liquidation_event(row, received_at) for row in _rows(rows))
 
     def candle_event(
-        self, symbol: str, row: object, *, received_at: datetime
+        self,
+        symbol: str,
+        row: object,
+        *,
+        received_at: datetime,
+        received_monotonic_ns: int | None = None,
     ) -> EventEnvelope[Any]:
         values = _sequence(row, "OHLCV")
         if len(values) < 6:
@@ -133,10 +142,47 @@ class CcxtPublicEventNormalizer:
             source=f"ccxt-pro:{self.profile.venue}:{self.profile.account}:ohlcv",
             sequence_id=f"{symbol}:{int(open_time.timestamp() * 1000)}:60",
             received_at=received_at,
+            received_monotonic_ns=received_monotonic_ns,
+        )
+
+    def closed_candle_events(
+        self,
+        symbol: str,
+        rows: object,
+        *,
+        received_at: datetime,
+        received_monotonic_ns: int | None = None,
+    ) -> tuple[EventEnvelope[Any], ...]:
+        """Return only immutable candles whose interval has already closed.
+
+        REST venues normally return the current in-progress bar together with
+        the latest closed bar.  Publishing that mutable bar would reuse its
+        logical event ID with a different payload on the next poll and
+        correctly trip the append-only journal integrity guard.
+        """
+
+        events = tuple(
+            self.candle_event(
+                symbol,
+                row,
+                received_at=received_at,
+                received_monotonic_ns=received_monotonic_ns,
+            )
+            for row in _rows(rows)
+        )
+        return tuple(
+            event
+            for event in events
+            if event.payload.closed
+            and received_at >= event.payload.close_time + _CANDLE_FINALITY_DELAY
         )
 
     def open_interest_event(
-        self, row: object, *, received_at: datetime
+        self,
+        row: object,
+        *,
+        received_at: datetime,
+        received_monotonic_ns: int | None = None,
     ) -> EventEnvelope[Any]:
         raw = _object(row, "open interest")
         symbol = _text(raw.get("symbol"))
@@ -158,6 +204,11 @@ class CcxtPublicEventNormalizer:
             open_interest_quote=quote,
             exchange_timestamp=timestamp,
         )
+        observed_monotonic_ns = (
+            received_monotonic_ns
+            if received_monotonic_ns is not None
+            else monotonic_ns()
+        )
         return _envelope(
             payload,
             kind=EventKind.OPEN_INTEREST_SNAPSHOT,
@@ -165,6 +216,11 @@ class CcxtPublicEventNormalizer:
             sequence_id=f"{market['id']}:{int(timestamp.timestamp() * 1000)}",
             received_at=received_at,
             quality=quality,
+            received_monotonic_ns=observed_monotonic_ns,
+            occurrence_id=snapshot_occurrence_id(
+                receive_timestamp=received_at,
+                receive_monotonic_ns=observed_monotonic_ns,
+            ),
         )
 
     def _trade_event(self, row: object, received_at: datetime) -> EventEnvelope[Any]:
@@ -284,6 +340,7 @@ class PublicEventSupervisor:
         }
         self.metadata_registry = VenueMetadataRegistry()
         self._last_metadata_refresh: dict[tuple[str, str], datetime] = {}
+        self._last_closed_candle_open_ms: dict[tuple[str, str, str], int] = {}
         self._available: set[tuple[str, str]] = set()
         self._desired_symbols: dict[tuple[str, str], tuple[str, ...]] = {}
         self._required_quality_streams: tuple[StreamIdentity, ...] = ()
@@ -595,17 +652,41 @@ class PublicEventSupervisor:
         profile = account.profile
         normalizer = self._normalizers[self._key(account)]
         if account.exchange.has.get("fetchOHLCV"):
-            await self._poll(
+            candle_key = (*self._key(account), symbol)
+            previous_open_ms = self._last_closed_candle_open_ms.get(candle_key)
+            since = (
+                previous_open_ms + _CANDLE_INTERVAL_MILLISECONDS
+                if previous_open_ms is not None
+                else None
+            )
+            candle_events = await self._poll(
                 account,
                 "ohlcv",
                 lambda: account.exchange.fetch_ohlcv(
-                    symbol, "1m", limit=2, params=profile.params
+                    symbol,
+                    "1m",
+                    since=since,
+                    limit=_CANDLE_BACKFILL_LIMIT,
+                    params=profile.params,
                 ),
-                lambda rows: tuple(
-                    normalizer.candle_event(symbol, row, received_at=received_at)
-                    for row in _rows(rows)
+                lambda rows, observed_at, observed_monotonic_ns: (
+                    normalizer.closed_candle_events(
+                        symbol,
+                        rows,
+                        received_at=observed_at,
+                        received_monotonic_ns=observed_monotonic_ns,
+                    )
                 ),
             )
+            if candle_events:
+                latest_open_ms = max(
+                    int(event.payload.open_time.timestamp() * 1000)
+                    for event in candle_events
+                )
+                self._last_closed_candle_open_ms[candle_key] = max(
+                    previous_open_ms or latest_open_ms,
+                    latest_open_ms,
+                )
         if (
             profile.instrument_type is not InstrumentType.SPOT
             and account.exchange.has.get("fetchOpenInterest")
@@ -614,7 +695,13 @@ class PublicEventSupervisor:
                 account,
                 "open_interest",
                 lambda: account.exchange.fetch_open_interest(symbol, params=profile.params),
-                lambda row: (normalizer.open_interest_event(row, received_at=received_at),),
+                lambda row, observed_at, observed_monotonic_ns: (
+                    normalizer.open_interest_event(
+                        row,
+                        received_at=observed_at,
+                        received_monotonic_ns=observed_monotonic_ns,
+                    ),
+                ),
             )
         if (
             profile.instrument_type is not InstrumentType.SPOT
@@ -631,7 +718,9 @@ class PublicEventSupervisor:
                 lambda: account.exchange.fetch_liquidations(
                     symbol, since=since, limit=100, params=profile.params
                 ),
-                lambda rows: normalizer.liquidation_events(rows, received_at=received_at),
+                lambda rows, observed_at, _: normalizer.liquidation_events(
+                    rows, received_at=observed_at
+                ),
             )
 
     async def _poll(
@@ -639,17 +728,27 @@ class PublicEventSupervisor:
         account: PublicEventAccount,
         stream: str,
         fetch: Callable[[], Awaitable[object]],
-        normalize: Callable[[object], Sequence[EventEnvelope[Any]]],
-    ) -> None:
+        normalize: Callable[[object, datetime, int], Sequence[EventEnvelope[Any]]],
+    ) -> tuple[EventEnvelope[Any], ...]:
         try:
             raw = await fetch()
-            await self._publish(normalize(raw), account.profile, stream, "rest")
+            observed_at = datetime.now(UTC)
+            observed_monotonic_ns = monotonic_ns()
+            events = tuple(normalize(raw, observed_at, observed_monotonic_ns))
+            await self._publish(
+                events,
+                account.profile,
+                stream,
+                "rest",
+            )
+            return events
         except asyncio.CancelledError:
             raise
         except PublicDataNormalizationError:
             market_data_dropped_total.labels(
                 account.profile.venue, f"invalid_{stream}"
             ).inc()
+            return ()
         except EventWriterFailed:
             raise
         except Exception:
@@ -657,6 +756,7 @@ class PublicEventSupervisor:
                 "public_event_rest_poll_failed",
                 extra={"exchange": account.profile.venue, "stream": stream},
             )
+            return ()
 
     async def _publish_snapshot_events(
         self,
