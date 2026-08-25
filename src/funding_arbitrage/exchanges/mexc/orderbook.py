@@ -116,9 +116,11 @@ class MexcOrderBookNormalizer:
         if not isinstance(data, dict) or symbol != self.instrument.exchange_symbol:
             raise InvalidResponseError("MEXC futures depth instrument mismatch")
         version = _nonnegative_integer(data.get("version"), "version")
-        exchange_timestamp = _timestamp_ms(
-            data.get("cts", payload.get("ts")), "timestamp"
-        )
+        # The documented event time is the top-level `ts`.  Some production
+        # payloads also expose `data.cts`, but it can remain unchanged across
+        # many updates and therefore isn't a safe freshness timestamp.
+        timestamp_value = payload["ts"] if "ts" in payload else data.get("cts")
+        exchange_timestamp = _timestamp_ms(timestamp_value, "timestamp")
         delta = BookDelta(
             instrument=self.instrument,
             updates=_delta_levels(data, self.contract_size),
@@ -259,6 +261,8 @@ def _nonnegative_integer(value: object, field: str) -> int:
 
 def _timestamp_ms(value: object, field: str) -> datetime:
     milliseconds = decimal(value, field)
+    if milliseconds <= 0:
+        raise InvalidResponseError(f"invalid MEXC futures orderbook {field}")
     return datetime.fromtimestamp(float(milliseconds / Decimal("1000")), tz=UTC)
 
 

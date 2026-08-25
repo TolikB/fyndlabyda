@@ -36,6 +36,7 @@ from funding_arbitrage.exchanges.binance.orderbook import (
     BinanceOrderBookNormalizer,
     BinanceOrderBookSequenceGap,
 )
+from funding_arbitrage.market_data.l2_book import BookApplyStatus
 from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
 from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
@@ -120,13 +121,20 @@ class BinancePublicAdapter(ExchangeAdapter):
             self._http = None
 
     async def _request(self, base_url: str, path: str, params: dict[str, str | int]) -> Any:
+        payload, _ = await self._request_with_started_at(base_url, path, params)
+        return payload
+
+    async def _request_with_started_at(
+        self, base_url: str, path: str, params: dict[str, str | int]
+    ) -> tuple[Any, datetime]:
         await self._limiter.acquire()
+        request_started_at = datetime.now(UTC)
         try:
             response = await (await self._ensure_http()).get(f"{base_url}{path}", params=params)
             if response.status_code == 429:
                 raise RateLimitError("Binance HTTP rate limit")
             response.raise_for_status()
-            return response.json()
+            return response.json(), request_started_at
         except RateLimitError:
             raise
         except (httpx.HTTPError, ValueError) as exc:
@@ -456,7 +464,9 @@ class BinancePublicAdapter(ExchangeAdapter):
         else:
             base_url = self.futures_base_url
             path = "/fapi/v1/depth"
-        payload = await self._request(base_url, path, {"symbol": symbol, "limit": depth})
+        payload, request_started_at = await self._request_with_started_at(
+            base_url, path, {"symbol": symbol, "limit": depth}
+        )
         if not isinstance(payload, dict):
             raise InvalidResponseError("Binance orderbook response must be an object")
         try:
@@ -476,7 +486,11 @@ class BinancePublicAdapter(ExchangeAdapter):
                     )
                     for row in payload["asks"]
                 ),
-                timestamp=_ms(payload.get("E", int(datetime.now(UTC).timestamp() * 1000))),
+                timestamp=(
+                    _ms(payload["E"])
+                    if payload.get("E") is not None
+                    else request_started_at
+                ),
                 sequence=int(str(payload.get("lastUpdateId")))
                 if payload.get("lastUpdateId") is not None
                 else None,
@@ -778,7 +792,7 @@ class BinancePublicAdapter(ExchangeAdapter):
         if state is None:
             return None
         update = await self._process_ws_orderbook_update(payload, state)
-        if update.result.status.value == "GAP":
+        if update.result.status in {BookApplyStatus.GAP, BookApplyStatus.REJECTED}:
             raise BinanceOrderBookSequenceGap(
                 update.result.reason or "orderbook_sequence_gap"
             )

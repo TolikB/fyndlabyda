@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
+import funding_arbitrage.exchanges.mexc.client as mexc_client
 from funding_arbitrage.domain.events import (
     BookDelta,
     DataQuality,
@@ -11,12 +15,16 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     InstrumentType,
 )
+from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError, NetworkError
 from funding_arbitrage.exchanges.base.models import (
     InstrumentType as LegacyInstrumentType,
 )
 from funding_arbitrage.exchanges.base.models import OrderBook, OrderBookLevel
 from funding_arbitrage.exchanges.mexc import MexcPublicAdapter
-from funding_arbitrage.exchanges.mexc.orderbook import MexcOrderBookNormalizer
+from funding_arbitrage.exchanges.mexc.orderbook import (
+    MexcOrderBookNormalizer,
+    MexcOrderBookSequenceGap,
+)
 from funding_arbitrage.market_data.l2_book import BookApplyStatus
 
 NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
@@ -117,6 +125,213 @@ def test_mexc_duplicate_is_journalable_but_not_reemitted_to_strategy() -> None:
     assert duplicate.result.status is BookApplyStatus.DUPLICATE
     assert duplicate.book is None
     assert duplicate.event.metadata.quality is DataQuality.VALID
+
+
+def test_mexc_prefers_documented_event_timestamp_over_stale_cts() -> None:
+    state = _normalizer()
+    state.bootstrap(_snapshot())
+    payload = _delta(101, bids=[["100", "9"]], asks=[])
+    data = payload["data"]
+    assert isinstance(data, dict)
+    data["cts"] = int((NOW - timedelta(minutes=6)).timestamp() * 1000)
+
+    update = state.apply(payload)
+
+    assert update.result.status is BookApplyStatus.APPLIED
+    assert update.event.payload.exchange_timestamp == datetime.fromtimestamp(
+        1786881600010 / 1000, tz=UTC
+    )
+
+
+@pytest.mark.parametrize("timestamp", [None, "", 0])
+def test_mexc_rejects_malformed_documented_event_timestamp(
+    timestamp: object,
+) -> None:
+    state = _normalizer()
+    state.bootstrap(_snapshot())
+    payload = _delta(101, bids=[["100", "9"]], asks=[])
+    payload["ts"] = timestamp
+    data = payload["data"]
+    assert isinstance(data, dict)
+    data["cts"] = 1786881600010
+
+    with pytest.raises(InvalidResponseError, match="timestamp"):
+        state.apply(payload)
+
+
+async def test_mexc_adapter_reconnects_after_invalid_delta() -> None:
+    state = _normalizer()
+    state.bootstrap(
+        _snapshot().model_copy(update={"timestamp": NOW + timedelta(seconds=1)})
+    )
+    events = []
+
+    async def capture(event: object) -> None:
+        events.append(event)
+
+    adapter = MexcPublicAdapter(canonical_book_event_sink=capture)
+
+    with pytest.raises(MexcOrderBookSequenceGap, match="delta_timestamp_regressed"):
+        await adapter._consume_future_orderbook_payload(
+            _delta(101, bids=[["100", "9"]], asks=[]),
+            {"BTC_USDT": state},
+        )
+    assert len(events) == 1
+    assert events[0].metadata.quality is DataQuality.INVALID
+
+
+async def test_mexc_stream_rebootstraps_after_rejected_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Socket:
+        def __init__(self, updates: list[dict[str, object]]) -> None:
+            self.updates = iter(updates)
+
+        async def send(self, _message: str) -> None:
+            return None
+
+        async def recv(self) -> str:
+            return json.dumps({"channel": "rs.sub.depth", "data": "success"})
+
+        def __aiter__(self) -> Socket:
+            return self
+
+        async def __anext__(self) -> str:
+            try:
+                return json.dumps(next(self.updates))
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class Connection:
+        def __init__(self, socket: Socket) -> None:
+            self.socket = socket
+
+        async def __aenter__(self) -> Socket:
+            return self.socket
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    sockets = iter(
+        [
+            Socket([_delta(101, bids=[["100", "9"]], asks=[])]),
+            Socket([_delta(101, bids=[["100", "10"]], asks=[])]),
+        ]
+    )
+    connections = 0
+
+    def connect(*_args: object, **_kwargs: object) -> Connection:
+        nonlocal connections
+        connections += 1
+        return Connection(next(sockets))
+
+    snapshots = iter(
+        [
+            _snapshot().model_copy(update={"timestamp": NOW + timedelta(seconds=1)}),
+            _snapshot(),
+        ]
+    )
+    snapshot_requests = 0
+
+    async def get_orderbook(*_args: object, **_kwargs: object) -> OrderBook:
+        nonlocal snapshot_requests
+        snapshot_requests += 1
+        await asyncio.sleep(0)
+        return next(snapshots)
+
+    events = []
+
+    async def capture(event: object) -> None:
+        events.append(event)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    adapter = MexcPublicAdapter(
+        canonical_book_event_sink=capture,
+        max_reconnects=1,
+        sleep=no_sleep,
+    )
+    adapter._contract_sizes["BTC_USDT"] = Decimal("0.0001")
+    monkeypatch.setattr(mexc_client.websockets, "connect", connect)
+    monkeypatch.setattr(adapter, "get_orderbook", get_orderbook)
+    stream = adapter._stream_future_books(["BTC_USDT"], 2)
+
+    first_bootstrap = await anext(stream)
+    second_bootstrap = await anext(stream)
+    updated = await anext(stream)
+    await stream.aclose()
+
+    assert first_bootstrap.sequence == 100
+    assert second_bootstrap.sequence == 100
+    assert updated.sequence == 101
+    assert connections == 2
+    assert snapshot_requests == 2
+    assert [event.metadata.quality for event in events] == [
+        DataQuality.VALID,
+        DataQuality.INVALID,
+        DataQuality.VALID,
+        DataQuality.VALID,
+    ]
+
+
+async def test_mexc_persistent_rejection_exhausts_reconnect_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Socket:
+        def __init__(self) -> None:
+            self.sent_update = False
+
+        async def send(self, _message: str) -> None:
+            return None
+
+        async def recv(self) -> str:
+            return json.dumps({"channel": "rs.sub.depth", "data": "success"})
+
+        def __aiter__(self) -> Socket:
+            return self
+
+        async def __anext__(self) -> str:
+            if self.sent_update:
+                raise StopAsyncIteration
+            self.sent_update = True
+            return json.dumps(_delta(101, bids=[["100", "9"]], asks=[]))
+
+    class Connection:
+        async def __aenter__(self) -> Socket:
+            return Socket()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    connections = 0
+
+    def connect(*_args: object, **_kwargs: object) -> Connection:
+        nonlocal connections
+        connections += 1
+        return Connection()
+
+    async def get_orderbook(*_args: object, **_kwargs: object) -> OrderBook:
+        return _snapshot().model_copy(
+            update={"timestamp": NOW + timedelta(seconds=1)}
+        )
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    adapter = MexcPublicAdapter(max_reconnects=1, sleep=no_sleep)
+    adapter._contract_sizes["BTC_USDT"] = Decimal("0.0001")
+    monkeypatch.setattr(mexc_client.websockets, "connect", connect)
+    monkeypatch.setattr(adapter, "get_orderbook", get_orderbook)
+    stream = adapter._stream_future_books(["BTC_USDT"], 2)
+
+    assert (await anext(stream)).sequence == 100
+    assert (await anext(stream)).sequence == 100
+    with pytest.raises(NetworkError, match="exhausted reconnects"):
+        await anext(stream)
+    await stream.aclose()
+
+    assert connections == 2
 
 
 def test_mexc_nonconsecutive_version_marks_gap_and_blocks_book() -> None:

@@ -670,7 +670,6 @@ class MexcPublicAdapter(ExchangeAdapter):
                             update, InstrumentType.PERPETUAL
                         )
                         if bootstrap_book is not None:
-                            reconnects = 0
                             yield bootstrap_book
                     for payload in buffered:
                         book = await self._consume_future_orderbook_payload(payload, states)
@@ -750,7 +749,7 @@ class MexcPublicAdapter(ExchangeAdapter):
         if state is None:
             return None
         update = await self._process_future_orderbook_update(payload, state)
-        if update.result.status is BookApplyStatus.GAP:
+        if update.result.status in {BookApplyStatus.GAP, BookApplyStatus.REJECTED}:
             raise MexcOrderBookSequenceGap(
                 update.result.reason or "orderbook_sequence_gap"
             )
