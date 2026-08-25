@@ -183,9 +183,17 @@ TELEGRAM_REPORT_HOUR=0
 TELEGRAM_REPORT_MINUTE=0
 ```
 
-The report is generated for the previous local calendar day and sent once per
-day. The database ledger prevents duplicate reports after restarts. Until the
-token and chat ID are set, no Telegram request is made.
+Telegram sends only three human-facing message types: bot started after the
+first healthy paper cycle, bot stopped after graceful shutdown, and one concise
+trading report for the previous local calendar day. The report shows daily and
+all-time result, balance, funding, costs, trades, open positions, and a
+plain-language no-trade reason. Runtime versions, snapshots, restarts, coverage,
+and other diagnostic fields remain in logs and metrics. Before a daily report
+is submitted, the database ledger durably claims that local date. An ambiguous
+Telegram delivery is not retried automatically, which prevents duplicates after
+timeouts or restarts; operators can inspect the delivery_unknown ledger state
+if a report is missing. Until the token and chat ID are set, no Telegram request
+is made.
 
 ## Stop without deleting data
 

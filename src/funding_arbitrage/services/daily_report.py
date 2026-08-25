@@ -9,6 +9,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funding_arbitrage.config import Settings
@@ -131,20 +132,6 @@ def _no_fill_note(
     return "Без угод: сигналів, що пройшли фільтри, не було."
 
 
-def _runner_state(
-    *,
-    snapshot_count: int,
-    cycle_failures: int,
-    process_starts: int,
-    had_prior_snapshot: bool,
-) -> str:
-    if snapshot_count == 0 or cycle_failures > 0:
-        return "ATTENTION"
-    if process_starts > 0:
-        return "RESTARTED" if had_prior_snapshot else "STARTED"
-    return "OK"
-
-
 class DailyReportService:
     """Send one previous-calendar-day paper report after configured local midnight."""
 
@@ -169,9 +156,54 @@ class DailyReportService:
             settings.telegram_api_base_url,
             settings.request_timeout_seconds,
         )
+        self._started_notification_attempted = False
+        self._started_notification_sent = False
+        self._stopped_notification_attempted = False
 
     async def close(self) -> None:
         await self.notifier.close()
+
+    async def notify_started(self) -> bool:
+        """Attempt one start message after the first fully completed paper cycle."""
+
+        if (
+            self._started_notification_attempted
+            or not self.settings.telegram_enabled
+            or not self.notifier.configured
+        ):
+            return False
+        self._started_notification_attempted = True
+        try:
+            await self.notifier.send_message("✅ Бот запущено")
+        except Exception:
+            logger.exception(
+                "telegram_lifecycle_notification_failed",
+                extra={"state": "started"},
+            )
+            return False
+        self._started_notification_sent = True
+        return True
+
+    async def notify_stopped(self) -> bool:
+        """Attempt one stop message after paper resources close cleanly."""
+
+        if (
+            not self._started_notification_sent
+            or self._stopped_notification_attempted
+            or not self.settings.telegram_enabled
+            or not self.notifier.configured
+        ):
+            return False
+        self._stopped_notification_attempted = True
+        try:
+            await self.notifier.send_message("⏹ Бот зупинено")
+        except Exception:
+            logger.exception(
+                "telegram_lifecycle_notification_failed",
+                extra={"state": "stopped"},
+            )
+            return False
+        return True
 
     async def check_and_send(self, now: datetime | None = None) -> bool:
         if not self.settings.telegram_enabled or not self.notifier.configured:
@@ -187,30 +219,40 @@ class DailyReportService:
             return False
         report_date = current.date() - timedelta(days=1)
         async with self.session_factory() as session:
-            already_sent = await session.scalar(
+            existing = await session.scalar(
                 select(TelegramDailyReportRecord).where(
                     TelegramDailyReportRecord.report_date == report_date,
-                    TelegramDailyReportRecord.status == "sent",
                 )
             )
-            if already_sent is not None:
+            if existing is not None:
                 return False
             message = await self._build_message(session, report_date)
+            record = TelegramDailyReportRecord(
+                report_date=report_date,
+                status="delivery_started",
+                sent_at=None,
+                message=message,
+                error=None,
+            )
+            session.add(record)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                return False
             try:
                 await self.notifier.send_message(message)
-            except Exception:
+            except Exception as error:
+                record.status = "delivery_unknown"
+                record.error = type(error).__name__
+                await session.commit()
                 logger.exception(
                     "telegram_daily_report_failed", extra={"report_date": str(report_date)}
                 )
                 return False
-            session.add(
-                TelegramDailyReportRecord(
-                    report_date=report_date,
-                    status="sent",
-                    sent_at=datetime.now(UTC),
-                    message=message,
-                )
-            )
+            record.status = "sent"
+            record.sent_at = datetime.now(UTC)
+            record.error = None
             await session.commit()
             return True
 
@@ -242,11 +284,13 @@ class DailyReportService:
                     ),
                 )
             )
-        lines = [f"📊 PAPER · {report_date.isoformat()}"]
+        lines = [f"📊 Звіт про торгівлю · {report_date.isoformat()}"]
         for index, report in enumerate(reports):
             if index:
                 lines.append("")
-            lines.extend(self._portfolio_lines(report))
+            lines.extend(
+                self._portfolio_lines(report, include_label=len(reports) > 1)
+            )
         if len(reports) > 1:
             lines.extend(
                 [
@@ -254,7 +298,7 @@ class DailyReportService:
                     "Портфелі незалежні — їхній PnL не потрібно підсумовувати.",
                 ]
             )
-        lines.extend(["", "PAPER · реальних ордерів немає"])
+        lines.extend(["", "Тестовий режим · реальних ордерів немає"])
         return "\n".join(lines)
 
     async def _load_portfolio_report(
@@ -693,7 +737,9 @@ class DailyReportService:
             )
         return lines
 
-    def _portfolio_lines(self, report: _PortfolioReport) -> list[str]:
+    def _portfolio_lines(
+        self, report: _PortfolioReport, *, include_label: bool = True
+    ) -> list[str]:
         equity_delta = report.equity - report.previous_equity
         total_return_percent = (
             (report.equity / self.settings.paper_initial_balance_usd - Decimal("1"))
@@ -709,28 +755,16 @@ class DailyReportService:
             snapshot_count=report.snapshots,
             cycle_failures=report.cycle_failures,
         )
-        runner_state = _runner_state(
-            snapshot_count=report.snapshots,
-            cycle_failures=report.cycle_failures,
-            process_starts=report.process_starts,
-            had_prior_snapshot=report.had_prior_snapshot,
-        )
-        state_label = {
-            "ATTENTION": "ПОТРІБНА ПЕРЕВІРКА",
-            "RESTARTED": "ПЕРЕЗАПУЩЕНО",
-            "STARTED": "ЗАПУЩЕНО",
-            "OK": "OK",
-        }[runner_state]
         day_costs = report.day_fees + report.day_slippage
         total_costs = report.total_fees + report.total_slippage
         label = (
-            "КАНДИДАТ"
+            "ОСНОВНА СТРАТЕГІЯ"
             if report.label.lower() == "candidate"
-            else "БАЗОВА СТРАТЕГІЯ"
+            else "СТРАТЕГІЯ ДЛЯ ПОРІВНЯННЯ"
         )
         return [
-            label,
-            "ДЕНЬ",
+            *([label] if include_label else []),
+            "ЗА ДЕНЬ",
             f"Результат: {_signed_usd(equity_delta)}",
             f"Funding: {_signed_usd(report.day_funding)}",
             (
@@ -738,18 +772,15 @@ class DailyReportService:
                 f"(комісії ${report.day_fees:.2f}, "
                 f"slippage ${report.day_slippage:.2f})"
             ),
-            (
-                f"Угоди: відкрито {report.opened} · закрито {report.closed} · "
-                f"виконань {report.fills}"
-            ),
-            f"Відкриті позиції: {report.open_positions}",
-            f"Статус: {state_label}",
+            f"Угоди: відкрито {report.opened} · закрито {report.closed}",
             *([no_trades_note] if no_trades_note is not None else []),
-            *self._venue_lines(report.venues),
             "",
-            "ВСЬОГО",
+            "ЗАГАЛОМ",
             f"Баланс: ${report.equity:.2f}",
-            f"PnL: {_signed_usd(report.total_pnl)} ({total_return_percent:+.4f}%)",
+            (
+                f"Результат: {_signed_usd(report.total_pnl)} "
+                f"({total_return_percent:+.4f}%)"
+            ),
             f"Funding: {_signed_usd(report.total_funding)}",
             f"Витрати: ${total_costs:.2f}",
             f"Відкриті позиції: {report.open_positions}",

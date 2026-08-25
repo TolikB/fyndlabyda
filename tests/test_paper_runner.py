@@ -41,6 +41,7 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.execution.base import FillStatus, PaperFill
+from funding_arbitrage.main import _attempt_shutdown, _finalize_shutdown
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.opportunity.debounce import OpportunityDebouncer
 from funding_arbitrage.opportunity.models import (
@@ -730,8 +731,24 @@ async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
     assert len(portfolio_snapshots) == 2
     assert {item.timestamp for item in portfolio_snapshots} == {snapshot.captured_at}
 
-    await candidate.close()
-    await baseline.close()
+    shared = SharedMarketPaperComparisonRunner(candidate, baseline)
+    shutdown_order: list[str] = []
+
+    async def close_baseline(*, send_stopped: bool = True) -> None:
+        assert send_stopped is False
+        shutdown_order.append("baseline")
+
+    async def notify_candidate_stopped() -> bool:
+        shutdown_order.append("candidate_stop")
+        return True
+
+    monkeypatch.setattr(baseline, "close", close_baseline)
+    monkeypatch.setattr(candidate.daily_report, "notify_stopped", notify_candidate_stopped)
+
+    await shared.close()
+
+    assert shutdown_order == ["baseline", "candidate_stop"]
+    await baseline.daily_report.close()
     for adapter in adapters.values():
         await adapter.close()
 
@@ -844,6 +861,7 @@ async def test_shared_runner_persists_cycle_failure_for_both_versions(
     shared = SharedMarketPaperComparisonRunner(candidate, baseline)
     captured: list[tuple[tuple[str, ...], str, str]] = []
     starts: list[tuple[str, ...]] = []
+    lifecycle_messages: list[str] = []
 
     async def noop(*_args: object, **_kwargs: object) -> None:
         return None
@@ -866,6 +884,10 @@ async def test_shared_runner_persists_cycle_failure_for_both_versions(
     ) -> None:
         starts.append(versions)
 
+    async def notify_started() -> bool:
+        lifecycle_messages.append("started")
+        return True
+
     monkeypatch.setattr(candidate, "restore", noop)
     monkeypatch.setattr(baseline, "restore", noop)
     monkeypatch.setattr(candidate, "collect_snapshot", fail)
@@ -873,6 +895,7 @@ async def test_shared_runner_persists_cycle_failure_for_both_versions(
         paper_runner_module, "_persist_runtime_incident", capture_incident
     )
     monkeypatch.setattr(paper_runner_module, "_persist_runner_start", capture_start)
+    monkeypatch.setattr(candidate.daily_report, "notify_started", notify_started)
 
     await shared.run()
 
@@ -884,6 +907,7 @@ async def test_shared_runner_persists_cycle_failure_for_both_versions(
             "RuntimeError",
         )
     ]
+    assert lifecycle_messages == []
     await shared.close()
     for adapter in adapters.values():
         await adapter.close()
@@ -954,6 +978,239 @@ async def test_shared_runner_skips_incomplete_market_without_incident(
     await shared.close()
     for adapter in adapters.values():
         await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_helper_records_failures_and_runs_following_cleanup() -> None:
+    failures: list[BaseException] = []
+    order: list[str] = []
+
+    async def fail() -> None:
+        order.append("failed")
+        raise RuntimeError("synthetic shutdown failure")
+
+    async def cancel() -> None:
+        order.append("cancelled")
+        raise asyncio.CancelledError
+
+    async def succeed() -> None:
+        order.append("succeeded")
+
+    await _attempt_shutdown("failed_component", fail, failures)
+    await _attempt_shutdown("cancelled_component", cancel, failures)
+    await _attempt_shutdown("healthy_component", succeed, failures)
+
+    assert order == ["failed", "cancelled", "succeeded"]
+    assert [type(error) for error in failures] == [
+        RuntimeError,
+        asyncio.CancelledError,
+    ]
+
+
+def test_shutdown_failures_do_not_mask_primary_application_error() -> None:
+    primary = ValueError("primary application failure")
+    cleanup = RuntimeError("cleanup failure")
+
+    _finalize_shutdown([cleanup], primary)
+
+    assert primary.__notes__ == [
+        "application shutdown also failed: RuntimeError",
+    ]
+    with pytest.raises(ExceptionGroup, match="application shutdown failed"):
+        _finalize_shutdown([cleanup], None)
+
+
+@pytest.mark.asyncio
+async def test_run_notifies_started_only_after_first_successful_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_autotrade=False,
+    )
+    adapters = create_public_adapters(settings)
+    runner = PaperTestRunner(
+        settings,
+        RuntimeState(settings, adapters),
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    order: list[str] = []
+
+    async def restore(*, restore_history: bool) -> None:
+        assert restore_history is True
+        order.append("restore")
+
+    async def persist_start(*_args: object, **_kwargs: object) -> None:
+        order.append("persist_start")
+
+    async def cycle() -> None:
+        order.append("cycle")
+
+    async def notify_started() -> bool:
+        order.append("started")
+        runner.stop_event.set()
+        return True
+
+    monkeypatch.setattr(runner, "restore", restore)
+    monkeypatch.setattr(runner, "cycle", cycle)
+    monkeypatch.setattr(paper_runner_module, "_persist_runner_start", persist_start)
+    monkeypatch.setattr(runner.daily_report, "notify_started", notify_started)
+
+    await runner.run()
+
+    assert order == ["restore", "persist_start", "cycle", "started"]
+    await runner.close(send_stopped=False)
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_run_suppresses_started_notification_when_stop_arrives_during_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_autotrade=False,
+    )
+    adapters = create_public_adapters(settings)
+    runner = PaperTestRunner(
+        settings,
+        RuntimeState(settings, adapters),
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    lifecycle_messages: list[str] = []
+
+    async def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def cycle() -> None:
+        runner.stop_event.set()
+
+    async def notify_started() -> bool:
+        lifecycle_messages.append("started")
+        return True
+
+    monkeypatch.setattr(runner, "restore", noop)
+    monkeypatch.setattr(runner, "cycle", cycle)
+    monkeypatch.setattr(paper_runner_module, "_persist_runner_start", noop)
+    monkeypatch.setattr(runner.daily_report, "notify_started", notify_started)
+
+    await runner.run()
+
+    assert lifecycle_messages == []
+    await runner.close(send_stopped=False)
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_close_notifies_stopped_after_paper_resources_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_autotrade=False,
+    )
+    adapters = create_public_adapters(settings)
+    runner = PaperTestRunner(
+        settings,
+        RuntimeState(settings, adapters),
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    order: list[str] = []
+
+    async def close_collector() -> None:
+        order.append("collector")
+
+    async def notify_stopped() -> bool:
+        order.append("stopped")
+        return True
+
+    async def close_notifier() -> None:
+        order.append("notifier")
+
+    monkeypatch.setattr(runner.collector, "close", close_collector)
+    monkeypatch.setattr(runner.daily_report, "notify_stopped", notify_stopped)
+    monkeypatch.setattr(runner.daily_report, "close", close_notifier)
+
+    await runner.close()
+
+    assert order == ["collector", "stopped", "notifier"]
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_close_attempts_notifier_cleanup_and_suppresses_false_stop_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_autotrade=False,
+    )
+    adapters = create_public_adapters(settings)
+    runner = PaperTestRunner(
+        settings,
+        RuntimeState(settings, adapters),
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    order: list[str] = []
+
+    async def fail_collector() -> None:
+        order.append("collector")
+        raise RuntimeError("collector close failed")
+
+    async def notify_stopped() -> bool:
+        order.append("stopped")
+        return True
+
+    async def close_notifier() -> None:
+        order.append("notifier")
+
+    monkeypatch.setattr(runner.collector, "close", fail_collector)
+    monkeypatch.setattr(runner.daily_report, "notify_stopped", notify_stopped)
+    monkeypatch.setattr(runner.daily_report, "close", close_notifier)
+
+    with pytest.raises(ExceptionGroup, match="paper runner shutdown failed"):
+        await runner.close()
+
+    assert order == ["collector", "notifier"]
+    for adapter in adapters.values():
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_close_attempts_candidate_after_baseline_failure() -> None:
+    collector = object()
+    calls: list[tuple[str, bool]] = []
+
+    class StubRunner:
+        def __init__(self, version: str, *, fail: bool) -> None:
+            self.collector = collector
+            self.settings = type(
+                "StubSettings",
+                (),
+                {"paper_simulation_version": version},
+            )()
+            self.fail = fail
+
+        async def close(self, *, send_stopped: bool = True) -> None:
+            calls.append((self.settings.paper_simulation_version, send_stopped))
+            if self.fail:
+                raise RuntimeError("synthetic close failure")
+
+    candidate = cast(PaperTestRunner, StubRunner("candidate", fail=False))
+    baseline = cast(PaperTestRunner, StubRunner("baseline", fail=True))
+    shared = SharedMarketPaperComparisonRunner(candidate, baseline)
+
+    with pytest.raises(ExceptionGroup, match="paper comparison shutdown failed"):
+        await shared.close()
+
+    assert calls == [("baseline", False), ("candidate", False)]
 
 
 @pytest.mark.asyncio

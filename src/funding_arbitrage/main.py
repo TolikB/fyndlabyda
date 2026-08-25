@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -79,6 +80,36 @@ from funding_arbitrage.storage.replication import (
     ClickHouseDecisionReplicator,
     ClickHouseEventReplicator,
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def _attempt_shutdown(
+    component: str,
+    operation: Callable[[], Awaitable[object]],
+    failures: list[BaseException],
+) -> None:
+    try:
+        await operation()
+    except asyncio.CancelledError as error:
+        failures.append(error)
+        logger.warning("shutdown_component_cancelled", extra={"component": component})
+    except Exception as error:
+        failures.append(error)
+        logger.exception("shutdown_component_failed", extra={"component": component})
+
+
+def _finalize_shutdown(
+    failures: list[BaseException],
+    primary_error: BaseException | None,
+) -> None:
+    if not failures:
+        return
+    if primary_error is not None:
+        failure_types = ", ".join(type(error).__name__ for error in failures)
+        primary_error.add_note(f"application shutdown also failed: {failure_types}")
+        return
+    raise BaseExceptionGroup("application shutdown failed", failures)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -347,16 +378,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             app.state.live_runner = runner
             task = asyncio.create_task(runner.run(), name="live-trading-runner")
+        primary_error: BaseException | None = None
         try:
             yield
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
+            shutdown_failures: list[BaseException] = []
             background_tasks = tuple(runtime.background_tasks)
             for background_task in background_tasks:
                 background_task.cancel()
             if background_tasks:
-                await asyncio.gather(*background_tasks, return_exceptions=True)
+                await _attempt_shutdown(
+                    "background_tasks",
+                    lambda: asyncio.gather(
+                        *background_tasks,
+                        return_exceptions=True,
+                    ),
+                    shutdown_failures,
+                )
             if runner is not None:
-                await runner.stop()
+                await _attempt_shutdown("runner_stop", runner.stop, shutdown_failures)
             if task is not None:
                 try:
                     shutdown_timeout = (
@@ -372,25 +415,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     await asyncio.wait_for(task, timeout=shutdown_timeout)
                 except TimeoutError:
                     task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+                    await _attempt_shutdown(
+                        "runner_task_cancel",
+                        lambda: asyncio.gather(task, return_exceptions=True),
+                        shutdown_failures,
+                    )
+                except asyncio.CancelledError as error:
+                    shutdown_failures.append(error)
+                    logger.warning(
+                        "shutdown_component_cancelled",
+                        extra={"component": "runner_task"},
+                    )
+                except Exception as error:
+                    shutdown_failures.append(error)
+                    logger.exception(
+                        "shutdown_component_failed",
+                        extra={"component": "runner_task"},
+                    )
             if runner is not None:
-                await runner.close()
-            for adapter in adapters.values():
-                await adapter.close()
-            try:
-                await event_writer.stop()
-            finally:
-                try:
-                    await control_plane_rate_limiter.close()
-                finally:
-                    try:
-                        await control_plane_token_revocation_store.close()
-                    finally:
-                        try:
-                            if clickhouse_writer is not None:
-                                await clickhouse_writer.close()
-                        finally:
-                            await engine.dispose()
+                await _attempt_shutdown("runner_close", runner.close, shutdown_failures)
+            for venue, adapter in adapters.items():
+                await _attempt_shutdown(
+                    f"public_adapter:{venue}",
+                    adapter.close,
+                    shutdown_failures,
+                )
+            await _attempt_shutdown("event_writer", event_writer.stop, shutdown_failures)
+            await _attempt_shutdown(
+                "control_plane_rate_limiter",
+                control_plane_rate_limiter.close,
+                shutdown_failures,
+            )
+            await _attempt_shutdown(
+                "control_plane_token_revocation_store",
+                control_plane_token_revocation_store.close,
+                shutdown_failures,
+            )
+            if clickhouse_writer is not None:
+                await _attempt_shutdown(
+                    "clickhouse_writer",
+                    clickhouse_writer.close,
+                    shutdown_failures,
+                )
+            await _attempt_shutdown("database_engine", engine.dispose, shutdown_failures)
+            _finalize_shutdown(shutdown_failures, primary_error)
 
     app = FastAPI(title="Funding Arbitrage Bot", version="0.1.0", lifespan=lifespan)
     control_plane_security = ControlPlaneSecurity(ControlPlanePolicy.from_settings(active_settings))

@@ -233,6 +233,8 @@ class PaperTestRunner:
                 paper_runner_cycle_duration_seconds.observe(time.monotonic() - started)
                 paper_runner_cycles_total.inc()
                 paper_runner_last_cycle_timestamp.set(datetime.now(UTC).timestamp())
+                if not self.stop_event.is_set():
+                    await self.daily_report.notify_started()
             except asyncio.CancelledError:
                 raise
             except IncompleteMarketSnapshotError as error:
@@ -262,13 +264,49 @@ class PaperTestRunner:
     async def stop(self) -> None:
         self.stop_event.set()
 
-    async def close(self) -> None:
+    async def close(self, *, send_stopped: bool = True) -> None:
         await self.stop()
+        errors: list[Exception] = []
+        resources_closed_cleanly = True
         if self._owns_collector:
-            await self.collector.close()
+            try:
+                await self.collector.close()
+            except Exception as error:
+                resources_closed_cleanly = False
+                errors.append(error)
+                logger.exception(
+                    "paper_shutdown_component_failed",
+                    extra={"component": "market_data_collector"},
+                )
         if self.public_events is not None:
-            await self.public_events.close()
-        await self.daily_report.close()
+            try:
+                await self.public_events.close()
+            except Exception as error:
+                resources_closed_cleanly = False
+                errors.append(error)
+                logger.exception(
+                    "paper_shutdown_component_failed",
+                    extra={"component": "public_event_supervisor"},
+                )
+        if send_stopped and resources_closed_cleanly:
+            try:
+                await self.daily_report.notify_stopped()
+            except Exception as error:
+                errors.append(error)
+                logger.exception(
+                    "paper_shutdown_component_failed",
+                    extra={"component": "stopped_notification"},
+                )
+        try:
+            await self.daily_report.close()
+        except Exception as error:
+            errors.append(error)
+            logger.exception(
+                "paper_shutdown_component_failed",
+                extra={"component": "telegram_notifier"},
+            )
+        if errors:
+            raise ExceptionGroup("paper runner shutdown failed", errors)
 
     async def restore(self, *, restore_history: bool) -> None:
         async with self._restore_lock:
@@ -1500,6 +1538,8 @@ class SharedMarketPaperComparisonRunner:
                 paper_runner_cycle_duration_seconds.observe(time.monotonic() - started)
                 paper_runner_cycles_total.inc()
                 paper_runner_last_cycle_timestamp.set(datetime.now(UTC).timestamp())
+                if not self.stop_event.is_set():
+                    await self.candidate.daily_report.notify_started()
             except asyncio.CancelledError:
                 raise
             except IncompleteMarketSnapshotError as error:
@@ -1534,8 +1574,25 @@ class SharedMarketPaperComparisonRunner:
 
     async def close(self) -> None:
         await self.stop()
-        await self.candidate.close()
-        await self.baseline.close()
+        errors: list[Exception] = []
+        try:
+            await self.baseline.close(send_stopped=False)
+        except Exception as error:
+            errors.append(error)
+            logger.exception(
+                "paper_comparison_shutdown_component_failed",
+                extra={"component": "baseline"},
+            )
+        try:
+            await self.candidate.close(send_stopped=not errors)
+        except Exception as error:
+            errors.append(error)
+            logger.exception(
+                "paper_comparison_shutdown_component_failed",
+                extra={"component": "candidate"},
+            )
+        if errors:
+            raise ExceptionGroup("paper comparison shutdown failed", errors)
 
 
 async def _wait_for_next_cycle(

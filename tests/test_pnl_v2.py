@@ -789,11 +789,21 @@ async def test_paper_autotrade_false_does_not_call_open(monkeypatch: pytest.Monk
     monkeypatch.setattr(runner, "_open_confirmed", AsyncMock())
     monkeypatch.setattr(runner, "_persist_market", AsyncMock())
     monkeypatch.setattr(runner, "_persist_portfolio", AsyncMock())
-    monkeypatch.setattr(runner.daily_report, "check_and_send", AsyncMock())
+    notification_order: list[str] = []
+
+    async def report_checked(*_args: object, **_kwargs: object) -> None:
+        notification_order.append("daily")
+
+    started = AsyncMock()
+    monkeypatch.setattr(runner.daily_report, "check_and_send", report_checked)
+    monkeypatch.setattr(runner.daily_report, "notify_started", started)
 
     await runner.cycle()
 
     runner._open_confirmed.assert_not_awaited()  # type: ignore[attr-defined]
+    started.assert_not_awaited()
+    assert runtime.last_completed_snapshot is snapshot
+    assert notification_order == ["daily"]
     for adapter in adapters.values():
         await adapter.close()
 
