@@ -200,8 +200,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 + (multi_regime_runtime.failure_reason or "unknown")
             )
         if public_events is not None:
-            healthy, _ = event_router.required_streams_usable(
+            configured_venues = (
+                active_settings.live_venue_values
+                if active_settings.run_mode == "live"
+                else active_settings.paper_venue_values
+            )
+            healthy, _ = event_router.venue_streams_usable(
                 public_events.required_quality_streams,
+                configured_venues,
+                ("BOOK", EventKind.FUNDING_SNAPSHOT.value),
                 now=datetime.now(UTC),
             )
             if not healthy:

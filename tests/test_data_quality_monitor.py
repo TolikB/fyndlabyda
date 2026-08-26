@@ -319,6 +319,84 @@ def test_required_stream_gate_reports_every_non_valid_identity() -> None:
     assert usable is False
     assert reasons == ("MEXC:LIQUIDATIONS:BTC-USDT:UNAVAILABLE",)
 
+
+def test_venue_stream_gate_tolerates_one_bad_optional_instrument() -> None:
+    monitor = _monitor()
+    writer = _RecordingWriter()
+    router = CanonicalEventRouter(writer, monitor)  # type: ignore[arg-type]
+    healthy_book = IDENTITY
+    bad_book = StreamIdentity("BYBIT", "BOOK", "BYBIT:ETH-USDT:PERPETUAL")
+    funding = StreamIdentity(
+        "BYBIT", EventKind.FUNDING_SNAPSHOT.value, INSTRUMENT.canonical_id
+    )
+    monitor.observe(_event(_snapshot()), identity=healthy_book)
+    monitor.mark_unavailable(
+        bad_book, reason="optional_book_failed", observed_at=NOW
+    )
+    monitor.observe(_funding_event(), identity=funding)
+
+    usable, reasons = router.venue_streams_usable(
+        (healthy_book, bad_book, funding),
+        ("bybit",),
+        ("BOOK", EventKind.FUNDING_SNAPSHOT.value),
+        now=NOW,
+    )
+
+    assert usable is True
+    assert reasons == ()
+
+
+def test_venue_stream_gate_requires_each_configured_venue_and_stream_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monitor = _monitor()
+    writer = _RecordingWriter()
+    router = CanonicalEventRouter(writer, monitor)  # type: ignore[arg-type]
+    metric_snapshots = []
+    monkeypatch.setattr(router, "_set_metric", metric_snapshots.append)
+    mexc_book = StreamIdentity("MEXC", "BOOK", "MEXC:BTC-USDT:PERPETUAL")
+    monitor.mark_unavailable(
+        IDENTITY, reason="venue_book_failed", observed_at=NOW
+    )
+    monitor.observe(_event(_snapshot()), identity=mexc_book)
+
+    usable, reasons = router.venue_streams_usable(
+        (IDENTITY, mexc_book),
+        ("bybit", "mexc"),
+        ("BOOK", EventKind.FUNDING_SNAPSHOT.value),
+        now=NOW,
+    )
+
+    assert usable is False
+    assert reasons == (
+        "BYBIT:BOOK:*:UNAVAILABLE",
+        "BYBIT:FUNDING_SNAPSHOT:*:UNAVAILABLE",
+        "MEXC:FUNDING_SNAPSHOT:*:UNAVAILABLE",
+    )
+    assert any(
+        snapshot.identity == StreamIdentity("MEXC", "FUNDING_SNAPSHOT")
+        and snapshot.quality is DataQuality.UNAVAILABLE
+        and snapshot.reason == "required_stream_unusable"
+        for snapshot in metric_snapshots
+    )
+
+    mexc_funding = StreamIdentity(
+        "MEXC", EventKind.FUNDING_SNAPSHOT.value, "MEXC:BTC-USDT:PERPETUAL"
+    )
+    monitor.observe(_funding_event(), identity=mexc_funding)
+    router.venue_streams_usable(
+        (IDENTITY, mexc_book, mexc_funding),
+        ("bybit", "mexc"),
+        ("BOOK", EventKind.FUNDING_SNAPSHOT.value),
+        now=NOW,
+    )
+    mexc_funding_aggregate = [
+        snapshot
+        for snapshot in metric_snapshots
+        if snapshot.identity == StreamIdentity("MEXC", "FUNDING_SNAPSHOT")
+    ]
+    assert mexc_funding_aggregate[-1].quality is DataQuality.VALID
+
 def test_regressed_event_is_invalid_without_rewinding_quality_cursor() -> None:
     monitor = _monitor()
     current = _snapshot(sequence=200).model_copy(

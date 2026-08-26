@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from datetime import datetime
+from collections.abc import Awaitable, Callable, Iterable
+from datetime import UTC, datetime
 from typing import Any
 
 from funding_arbitrage.domain.events import DataQuality, EventEnvelope
@@ -72,6 +72,75 @@ class CanonicalEventRouter:
         for identity in identities:
             self._set_metric(self.quality_monitor.status(identity, now=now))
         return result
+
+    def venue_streams_usable(
+        self,
+        identities: tuple[StreamIdentity, ...],
+        venues: Iterable[str],
+        streams: Iterable[str],
+        *,
+        now: datetime | None = None,
+    ) -> tuple[bool, tuple[str, ...]]:
+        """Require a usable stream of every observed kind on each venue.
+
+        Instrument-level quality remains fail-closed for strategy consumers, while
+        service readiness is not taken down by one optional discovery instrument.
+        """
+
+        current = now or datetime.now(UTC)
+        snapshots = tuple(
+            self.quality_monitor.status(identity, now=current)
+            for identity in identities
+        )
+        for snapshot in snapshots:
+            self._set_metric(snapshot)
+        normalized_venues = tuple(sorted({venue.strip().upper() for venue in venues}))
+        normalized_streams = tuple(
+            sorted({stream.strip().upper() for stream in streams})
+        )
+        reasons: list[str] = []
+        for venue in normalized_venues:
+            venue_snapshots = tuple(
+                snapshot
+                for snapshot in snapshots
+                if snapshot.identity.venue.upper() == venue
+            )
+            for stream in normalized_streams:
+                stream_snapshots = tuple(
+                    snapshot
+                    for snapshot in venue_snapshots
+                    if snapshot.identity.stream.upper() == stream
+                )
+                stream_usable = any(
+                    snapshot.usable for snapshot in stream_snapshots
+                )
+                aggregate = StreamQualitySnapshot(
+                    identity=StreamIdentity(venue, stream),
+                    quality=(
+                        DataQuality.VALID
+                        if stream_usable
+                        else DataQuality.UNAVAILABLE
+                    ),
+                    reason=None if stream_usable else "required_stream_unusable",
+                    last_exchange_timestamp=None,
+                    last_receive_timestamp=None,
+                    last_sequence=None,
+                )
+                self._set_metric(aggregate)
+                if not stream_usable:
+                    if stream_snapshots:
+                        qualities = ",".join(
+                            sorted(
+                                {
+                                    snapshot.quality.value
+                                    for snapshot in stream_snapshots
+                                }
+                            )
+                        )
+                    else:
+                        qualities = DataQuality.UNAVAILABLE.value
+                    reasons.append(f"{venue}:{stream}:*:{qualities}")
+        return not reasons, tuple(reasons)
 
     @staticmethod
     def _set_metric(snapshot: StreamQualitySnapshot) -> None:
