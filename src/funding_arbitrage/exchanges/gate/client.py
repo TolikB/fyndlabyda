@@ -513,7 +513,11 @@ class GatePublicAdapter(ExchangeAdapter):
             )
             timestamp_value = payload.get("current", payload.get("update"))
             timestamp = (
-                _utc_from_seconds(timestamp_value, "orderbook_timestamp")
+                (
+                    _utc_from_milliseconds(timestamp_value, "orderbook_timestamp")
+                    if instrument_type is InstrumentType.SPOT
+                    else _utc_from_seconds(timestamp_value, "orderbook_timestamp")
+                )
                 if timestamp_value is not None
                 else datetime.now(UTC)
             )

@@ -154,7 +154,7 @@ async def test_gate_rest_payloads_are_normalized() -> None:
             InstrumentType.SPOT,
             {
                 "id": 42,
-                "current": 1735689600,
+                "current": 1735689600000,
                 "bids": [["99.8", "0"], ["99.9", "2"]],
                 "asks": [["100.1", "3"]],
             },
@@ -186,6 +186,7 @@ async def test_gate_rest_orderbook_ignores_zero_size_levels(
         )
 
     assert [level.price for level in orderbook.bids] == [Decimal("99.9")]
+    assert orderbook.timestamp == datetime(2025, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
