@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from funding_arbitrage.domain.events import (
+    BookEvent,
+    InstrumentKey,
+)
+from funding_arbitrage.domain.events import (
+    InstrumentType as CanonicalInstrumentType,
+)
+from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
@@ -18,6 +26,7 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBook,
     Ticker,
 )
+from funding_arbitrage.market_data.canonical_snapshot import canonical_snapshot_event
 from funding_arbitrage.market_data.health import CircuitBreaker
 from funding_arbitrage.monitoring.metrics import (
     exchange_stream_last_message_timestamp,
@@ -30,6 +39,12 @@ from funding_arbitrage.monitoring.metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+CanonicalBookEventSink = Callable[[BookEvent], Awaitable[None]]
+
+
+class _CanonicalBookPublicationError(RuntimeError):
+    """A fresh REST order book could not reach the durable canonical boundary."""
 
 
 @dataclass(frozen=True)
@@ -132,6 +147,8 @@ class MarketDataCollector:
         stale_after_seconds: int = 30,
         enable_streams: bool = False,
         rest_validation_seconds: int = 60,
+        *,
+        canonical_book_event_sink: CanonicalBookEventSink | None = None,
     ) -> None:
         self.adapters = tuple(adapters)
         if orderbook_symbol_limit <= 0:
@@ -146,6 +163,7 @@ class MarketDataCollector:
         self.stale_after_seconds = stale_after_seconds
         self.enable_streams = enable_streams
         self.rest_validation_seconds = rest_validation_seconds
+        self.canonical_book_event_sink = canonical_book_event_sink
         self.health = {adapter.name: CircuitBreaker() for adapter in self.adapters}
         self._funding_history_cache: dict[tuple[str, str], list[FundingHistoryPoint]] = {}
         self._instrument_cache: dict[str, list[NormalizedInstrument]] = {}
@@ -592,6 +610,7 @@ class MarketDataCollector:
                 ),
                 return_exceptions=True,
             )
+            accepted_rest_books: list[OrderBook] = []
             for (symbol, instrument_type), book_result in zip(
                 rest_book_requests, book_results, strict=True
             ):
@@ -599,8 +618,22 @@ class MarketDataCollector:
                     key = (adapter.name, symbol, instrument_type)
                     self._last_rest_book_fetch[key] = now
                     current = orderbooks.get(key)
+                    latest_streamed = self._stream_orderbook_cache.get(key)
+                    if (
+                        latest_streamed is not None
+                        and (
+                            current is None
+                            or latest_streamed.timestamp > current.timestamp
+                        )
+                    ):
+                        current = latest_streamed
+                        orderbooks[key] = latest_streamed
                     if current is None or book_result.timestamp >= current.timestamp:
                         orderbooks[key] = book_result
+                        accepted_rest_books.append(book_result)
+            await self._publish_rest_book_events(
+                adapter.name, venue_instruments, accepted_rest_books
+            )
             orderbook_coverage_ratio.labels(adapter.name).set(
                 len(orderbooks) / len(book_requests) if book_requests else 0
             )
@@ -681,6 +714,8 @@ class MarketDataCollector:
                 operationally_complete,
                 funding_history_refreshed,
             )
+        except _CanonicalBookPublicationError:
+            raise
         except Exception:
             breaker.record_failure()
             market_data_age_seconds.labels(adapter.name).set(-1)
@@ -692,6 +727,81 @@ class MarketDataCollector:
                 extra={"exchange": adapter.name, "event": "market_data_collection"},
             )
             return _VenueCollection([], [], [], {}, {}, False)
+
+    async def _publish_rest_book_events(
+        self,
+        exchange: str,
+        instruments: list[NormalizedInstrument],
+        books: list[OrderBook],
+    ) -> None:
+        sink = self.canonical_book_event_sink
+        if sink is None or not books:
+            return
+        instrument_by_market = {
+            (instrument.exchange_symbol, instrument.instrument_type): instrument
+            for instrument in instruments
+        }
+        observed_at = datetime.now(UTC)
+        events: list[BookEvent] = []
+        for book in books:
+            instrument = instrument_by_market.get(
+                (book.symbol, book.instrument_type)
+            )
+            if instrument is None:
+                market_data_dropped_total.labels(
+                    exchange, "incomplete_orderbook_snapshot"
+                ).inc()
+                logger.warning(
+                    "canonical_rest_orderbook_instrument_missing",
+                    extra={
+                        "exchange": exchange,
+                        "symbol": book.symbol,
+                        "instrument_type": book.instrument_type.value,
+                    },
+                )
+                continue
+            canonical_instrument = InstrumentKey(
+                venue=instrument.exchange,
+                exchange_symbol=instrument.exchange_symbol,
+                base_asset=instrument.base_asset,
+                quote_asset=instrument.quote_asset,
+                instrument_type=CanonicalInstrumentType(
+                    instrument.instrument_type.value
+                ),
+                settlement_asset=instrument.settlement_asset or None,
+                expiry=instrument.expiry,
+            )
+            try:
+                events.append(
+                    canonical_snapshot_event(
+                        book,
+                        canonical_instrument,
+                        source=(
+                            f"{exchange.upper()}.PUBLIC.ORDERBOOK.REST_VALIDATION"
+                        ),
+                        receive_timestamp=observed_at,
+                    )
+                )
+            except InvalidResponseError:
+                market_data_dropped_total.labels(
+                    exchange, "uncanonical_orderbook_snapshot"
+                ).inc()
+                logger.warning(
+                    "canonical_rest_orderbook_rejected",
+                    extra={
+                        "exchange": exchange,
+                        "symbol": book.symbol,
+                        "instrument_type": book.instrument_type.value,
+                    },
+                )
+        if not events:
+            return
+        try:
+            await asyncio.gather(*(sink(event) for event in events))
+        except Exception as error:
+            raise _CanonicalBookPublicationError(
+                "fresh REST order-book canonical publication failed"
+            ) from error
 
     async def _load_tickers_with_stream_fallback(
         self,

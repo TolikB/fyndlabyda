@@ -38,7 +38,11 @@ from funding_arbitrage.exchanges.base.models import (
 from funding_arbitrage.exchanges.public_events import PublicEventSupervisor
 from funding_arbitrage.execution.base import PaperFill
 from funding_arbitrage.execution.paper import PaperTradingExecutor
-from funding_arbitrage.market_data.collector import MarketDataCollector, MarketSnapshot
+from funding_arbitrage.market_data.collector import (
+    CanonicalBookEventSink,
+    MarketDataCollector,
+    MarketSnapshot,
+)
 from funding_arbitrage.market_data.orderbook import OrderSide, calculate_execution_price
 from funding_arbitrage.monitoring.metrics import (
     paper_market_cycles_skipped_total,
@@ -155,6 +159,7 @@ class PaperTestRunner:
         session_factory: async_sessionmaker[AsyncSession],
         collector: MarketDataCollector | None = None,
         public_events: PublicEventSupervisor | None = None,
+        canonical_book_event_sink: CanonicalBookEventSink | None = None,
         combined_snapshot_provider: (
             Callable[[datetime], PortfolioSnapshot | None] | None
         ) = None,
@@ -174,6 +179,7 @@ class PaperTestRunner:
             settings.paper_history_symbol_limit,
             settings.market_data_stale_seconds,
             settings.market_data_mode == "live_public",
+            canonical_book_event_sink=canonical_book_event_sink,
         )
         self.executor = PaperTradingExecutor(
             fees={venue: schedule[1] for venue, schedule in settings.fee_schedules.items()},

@@ -445,6 +445,36 @@ def test_source_invalid_snapshot_cannot_poison_runtime_authoritative_book() -> N
     assert state.latest_book_quality is DataQuality.VALID
 
 
+def test_out_of_order_invalid_book_does_not_downgrade_newer_valid_state() -> None:
+    engine = _engine()
+    latest = BookSnapshot(
+        instrument=INSTRUMENT,
+        bids=(BookLevel(price=Decimal("100"), quantity=Decimal("2")),),
+        asks=(BookLevel(price=Decimal("101"), quantity=Decimal("3")),),
+        sequence=101,
+        exchange_timestamp=START + timedelta(seconds=1),
+    )
+    engine.process(_envelope(EventKind.BOOK_SNAPSHOT, latest, 101))
+    older = latest.model_copy(
+        update={"sequence": 100, "exchange_timestamp": START}
+    )
+    invalid_older = _envelope(EventKind.BOOK_SNAPSHOT, older, 100).model_copy(
+        update={
+            "metadata": _envelope(
+                EventKind.BOOK_SNAPSHOT, older, 100
+            ).metadata.model_copy(update={"quality": DataQuality.INVALID})
+        }
+    )
+
+    engine.process(invalid_older)
+    state = engine._states[INSTRUMENT.canonical_id]
+
+    assert state.latest_book == latest
+    assert state.local_book.sequence == 101
+    assert state.latest_book_quality is DataQuality.VALID
+    assert engine.skipped_out_of_order_events == 1
+
+
 def test_runtime_risk_context_uses_canonical_uppercase_venue_exposure() -> None:
     runtime = RuntimeState(
         Settings(

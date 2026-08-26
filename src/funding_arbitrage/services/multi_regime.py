@@ -252,6 +252,13 @@ class MultiRegimeEngine:
         if isinstance(payload, Candle):
             stream_name = f"{stream_name}:{payload.interval_seconds}"
         stream_key = (instrument.canonical_id, stream_name)
+        latest_timestamp = self._latest_stream_timestamp.get(stream_key)
+        if (
+            latest_timestamp is not None
+            and event.metadata.exchange_timestamp < latest_timestamp
+        ):
+            self.skipped_out_of_order_events += 1
+            return None
         state = self._state(instrument)
         if event.metadata.quality is not DataQuality.VALID:
             if isinstance(payload, (BookSnapshot, BookDelta)):
@@ -259,13 +266,6 @@ class MultiRegimeEngine:
             elif isinstance(payload, Candle):
                 state.strategy_candles.reset()
                 state.regime_candles.reset()
-            return None
-        latest_timestamp = self._latest_stream_timestamp.get(stream_key)
-        if (
-            latest_timestamp is not None
-            and event.metadata.exchange_timestamp < latest_timestamp
-        ):
-            self.skipped_out_of_order_events += 1
             return None
         if isinstance(payload, (BookSnapshot, BookDelta)):
             result = (

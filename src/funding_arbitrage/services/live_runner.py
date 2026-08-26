@@ -37,7 +37,11 @@ from funding_arbitrage.execution.trading import (
     VenueBalance,
     VenuePosition,
 )
-from funding_arbitrage.market_data.collector import MarketDataCollector, MarketSnapshot
+from funding_arbitrage.market_data.collector import (
+    CanonicalBookEventSink,
+    MarketDataCollector,
+    MarketSnapshot,
+)
 from funding_arbitrage.monitoring.metrics import (
     live_drawdown_fraction,
     live_drawdown_limit_utilization,
@@ -80,6 +84,7 @@ class LiveTradingRunner:
         trading_adapters: dict[str, TradingAdapter],
         private_streams: PrivateStreamSupervisor | None = None,
         public_events: PublicEventSupervisor | None = None,
+        canonical_book_event_sink: CanonicalBookEventSink | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -98,6 +103,7 @@ class LiveTradingRunner:
             settings.paper_history_symbol_limit,
             settings.market_data_stale_seconds,
             True,
+            canonical_book_event_sink=canonical_book_event_sink,
         )
         self.risk = LiveRiskController(settings)
         self.executor = LiveTradingExecutor(

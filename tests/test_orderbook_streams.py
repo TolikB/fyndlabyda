@@ -5,12 +5,15 @@ from decimal import Decimal
 
 import pytest
 
+from funding_arbitrage.domain.events import BookEvent, EventKind
 from funding_arbitrage.exchanges.base.exceptions import NetworkError
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
     FundingSnapshot,
     InstrumentType,
+    NormalizedInstrument,
     OrderBook,
+    OrderBookLevel,
     Ticker,
 )
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
@@ -195,6 +198,224 @@ async def test_collector_uses_websocket_book_before_rest_revalidation() -> None:
     assert collector._stream_orderbook_cache
     assert initial_rest_books > 0
     assert adapter.rest_books == initial_rest_books
+
+
+@pytest.mark.asyncio
+async def test_collector_publishes_fresh_rest_book_once_without_replaying_cache() -> None:
+    class OneBookStreamMock(MockExchangeAdapter):
+        def stream_orderbooks(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int = 20,
+        ) -> AsyncIterator[OrderBook]:
+            return self._one_book_stream(symbols, depth)
+
+        async def _one_book_stream(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int,
+        ) -> AsyncIterator[OrderBook]:
+            for symbol, instrument_type in symbols:
+                yield await MockExchangeAdapter.get_orderbook(
+                    self, symbol, depth, instrument_type
+                )
+            await asyncio.Event().wait()
+
+    events: list[BookEvent] = []
+
+    async def capture(event: BookEvent) -> None:
+        events.append(event)
+
+    adapter = OneBookStreamMock("bybit", sleep=0)
+    collector = MarketDataCollector(
+        [adapter],
+        orderbook_symbol_limit=1,
+        enable_streams=True,
+        rest_validation_seconds=60,
+        canonical_book_event_sink=capture,
+    )
+    request = {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
+
+    await collector.collect_once(request)
+    first_event_count = len(events)
+    for _ in range(100):
+        if collector._stream_orderbook_cache:
+            break
+        await asyncio.sleep(0)
+    await collector.collect_once(request)
+    await collector.close()
+
+    assert first_event_count == 1
+    assert len(events) == first_event_count
+    assert events[0].kind is EventKind.BOOK_SNAPSHOT
+    assert events[0].metadata.source == "BYBIT.PUBLIC.ORDERBOOK.REST_VALIDATION"
+    assert events[0].payload.sequence >= 0
+
+
+@pytest.mark.asyncio
+async def test_collector_batches_distinct_rest_book_publications_concurrently() -> None:
+    class TwoBookMock(MockExchangeAdapter):
+        async def get_instruments(self) -> list[NormalizedInstrument]:
+            instruments = await super().get_instruments()
+            perpetual = next(
+                item
+                for item in instruments
+                if item.instrument_type is InstrumentType.PERPETUAL
+            )
+            return [
+                perpetual,
+                perpetual.model_copy(
+                    update={"exchange_symbol": "ETHUSDT", "base_asset": "ETH"}
+                ),
+            ]
+
+        async def get_tickers(self) -> list[Ticker]:
+            return [
+                item
+                for item in await super().get_tickers()
+                if item.instrument_type is InstrumentType.PERPETUAL
+            ]
+
+    started: list[str] = []
+    release = asyncio.Event()
+
+    async def blocking_capture(event: BookEvent) -> None:
+        started.append(event.payload.instrument.exchange_symbol)
+        if len(started) >= 2:
+            release.set()
+        await asyncio.wait_for(release.wait(), timeout=1)
+
+    adapter = TwoBookMock("bybit", sleep=0)
+    collector = MarketDataCollector(
+        [adapter],
+        orderbook_symbol_limit=1,
+        enable_streams=False,
+        canonical_book_event_sink=blocking_capture,
+    )
+
+    snapshot = await asyncio.wait_for(
+        collector.collect_once(
+            orderbook_symbols={
+                "bybit": [
+                    ("BTCUSDT", InstrumentType.PERPETUAL),
+                    ("ETHUSDT", InstrumentType.PERPETUAL),
+                ]
+            }
+        ),
+        timeout=2,
+    )
+    await collector.close()
+
+    assert sorted(started) == ["BTCUSDT", "ETHUSDT"]
+    assert len(snapshot.orderbooks) == 2
+
+
+@pytest.mark.asyncio
+async def test_collector_does_not_swallow_canonical_rest_publication_failure() -> None:
+    async def fail_publication(event: BookEvent) -> None:
+        del event
+        raise RuntimeError("synthetic canonical sink failure")
+
+    adapter = MockExchangeAdapter("bybit", sleep=0)
+    collector = MarketDataCollector(
+        [adapter],
+        orderbook_symbol_limit=1,
+        enable_streams=False,
+        canonical_book_event_sink=fail_publication,
+    )
+
+    with pytest.raises(
+        RuntimeError, match="fresh REST order-book canonical publication failed"
+    ):
+        await collector.collect_once(
+            {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
+        )
+
+    await collector.close()
+
+
+@pytest.mark.asyncio
+async def test_collector_rejects_rest_book_overtaken_by_websocket() -> None:
+    class OvertakenRestMock(MockExchangeAdapter):
+        def __init__(self) -> None:
+            super().__init__("bybit", sleep=0)
+            self.stream_emitted = asyncio.Event()
+            now = datetime.now(UTC)
+            self.older = OrderBook(
+                exchange=self.name,
+                symbol="BTCUSDT",
+                instrument_type=InstrumentType.PERPETUAL,
+                bids=(
+                    OrderBookLevel(price=Decimal("99"), quantity=Decimal("2")),
+                ),
+                asks=(
+                    OrderBookLevel(price=Decimal("101"), quantity=Decimal("3")),
+                ),
+                timestamp=now,
+                sequence=1,
+            )
+            self.newer = self.older.model_copy(
+                update={"timestamp": now + timedelta(seconds=1), "sequence": 2}
+            )
+
+        async def get_tickers(self) -> list[Ticker]:
+            return [
+                item
+                for item in await super().get_tickers()
+                if item.instrument_type is InstrumentType.PERPETUAL
+            ]
+
+        async def get_orderbook(
+            self,
+            symbol: str,
+            depth: int,
+            instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+        ) -> OrderBook:
+            del symbol, depth, instrument_type
+            await self.stream_emitted.wait()
+            await asyncio.sleep(0.01)
+            return self.older
+
+        def stream_orderbooks(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int = 20,
+        ) -> AsyncIterator[OrderBook]:
+            del symbols, depth
+            return self._newer_stream()
+
+        async def _newer_stream(self) -> AsyncIterator[OrderBook]:
+            self.stream_emitted.set()
+            yield self.newer
+            await asyncio.Event().wait()
+
+    published: list[BookEvent] = []
+
+    async def capture(event: BookEvent) -> None:
+        published.append(event)
+
+    adapter = OvertakenRestMock()
+    collector = MarketDataCollector(
+        [adapter],
+        orderbook_symbol_limit=1,
+        enable_streams=True,
+        canonical_book_event_sink=capture,
+    )
+
+    snapshot = await asyncio.wait_for(
+        collector.collect_once(
+            {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
+        ),
+        timeout=2,
+    )
+    await collector.close()
+
+    selected = snapshot.orderbook(
+        "bybit", "BTCUSDT", InstrumentType.PERPETUAL
+    )
+    assert selected is not None
+    assert selected.sequence == 2
+    assert published == []
 
 
 @pytest.mark.asyncio
