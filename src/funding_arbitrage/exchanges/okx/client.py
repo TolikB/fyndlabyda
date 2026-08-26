@@ -112,6 +112,7 @@ class OkxPublicAdapter(ExchangeAdapter):
         max_reconnects: int | None = None,
         funding_symbol_limit: int = 30,
         reference_price_stale_seconds: float = 30.0,
+        funding_timestamp_stale_seconds: float = 180.0,
         canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -126,6 +127,9 @@ class OkxPublicAdapter(ExchangeAdapter):
         if reference_price_stale_seconds <= 0:
             raise ValueError("reference_price_stale_seconds must be positive")
         self.reference_price_stale_seconds = reference_price_stale_seconds
+        if funding_timestamp_stale_seconds <= 0:
+            raise ValueError("funding_timestamp_stale_seconds must be positive")
+        self.funding_timestamp_stale_seconds = funding_timestamp_stale_seconds
         self.canonical_book_event_sink = canonical_book_event_sink
         self._canonical_instruments: dict[tuple[str, InstrumentType], DomainInstrumentKey] = {}
 
@@ -380,7 +384,7 @@ class OkxPublicAdapter(ExchangeAdapter):
                 if not (
                     -5
                     <= funding_age_seconds
-                    <= self.reference_price_stale_seconds
+                    <= self.funding_timestamp_stale_seconds
                 ):
                     logger.warning(
                         "okx_funding_timestamp_invalid",

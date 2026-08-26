@@ -167,7 +167,11 @@ async def test_okx_funding_rates_use_public_mark_and_index_prices() -> None:
     )
     adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
     funding = await adapter.get_funding_rates()
+    reference_timestamp_ms = now_ms
+    funding_timestamp_ms = now_ms - 60_000
+    delayed_funding = await adapter.get_funding_rates()
     reference_timestamp_ms = now_ms - 60_000
+    funding_timestamp_ms = now_ms
     stale_reference_funding = await adapter.get_funding_rates()
     reference_timestamp_ms = now_ms
     funding_timestamp_ms = now_ms + 60_000
@@ -180,10 +184,13 @@ async def test_okx_funding_rates_use_public_mark_and_index_prices() -> None:
     assert funding[0].timestamp == datetime.fromtimestamp(
         fresh_reference_timestamp_ms / 1000, tz=UTC
     )
+    assert delayed_funding[0].timestamp == datetime.fromtimestamp(
+        (now_ms - 60_000) / 1000, tz=UTC
+    )
     assert stale_reference_funding[0].mark_price is None
     assert stale_reference_funding[0].index_price is None
     assert future_funding == []
-    assert requested_quotes == ["USDT", "USDT", "USDT"]
+    assert requested_quotes == ["USDT", "USDT", "USDT", "USDT"]
 
 
 def test_binance_perpetual_delivery_sentinel_is_not_an_expiry() -> None:
