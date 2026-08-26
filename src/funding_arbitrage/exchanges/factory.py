@@ -66,6 +66,7 @@ def create_public_adapters(
             requests_per_second=settings.rate_limit_requests_per_second,
             burst=settings.rate_limit_burst,
             funding_symbol_limit=settings.okx_funding_symbol_limit,
+            reference_price_stale_seconds=settings.market_data_stale_seconds,
             canonical_book_event_sink=canonical_book_event_sink,
         ),
         "binance": BinancePublicAdapter(

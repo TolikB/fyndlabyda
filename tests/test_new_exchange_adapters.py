@@ -1,4 +1,4 @@
-from datetime import UTC
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
@@ -12,8 +12,14 @@ from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 
 
 @pytest.mark.asyncio
-async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> None:
+async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     requested_symbols: list[str] = []
+    returned_symbol = "ETH-USDT-SWAP"
+    returned_timestamp: str | None = str(
+        int(datetime.now(UTC).timestamp() * 1000)
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/public/instruments"):
@@ -41,10 +47,11 @@ async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> Non
                     "code": "0",
                     "data": [
                         {
-                            "instId": "ETH-USDT-SWAP",
+                            "instId": returned_symbol,
                             "fundingRate": "0.001",
                             "fundingTime": "1735704000000",
                             "nextFundingTime": "1735718400000",
+                            "ts": returned_timestamp,
                         }
                     ],
                 },
@@ -56,6 +63,11 @@ async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> Non
     )
     adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
     funding = await adapter.get_funding_rates()
+    returned_symbol = "BTC-USDT-SWAP"
+    mismatched = await adapter.get_funding_rates()
+    returned_symbol = "ETH-USDT-SWAP"
+    returned_timestamp = None
+    missing_timestamp = await adapter.get_funding_rates()
     await client.aclose()
 
     assert funding[0].symbol == "ETH-USDT-SWAP"
@@ -63,7 +75,115 @@ async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> Non
     assert funding[0].funding_rate_daily == Decimal("0.006")
     assert funding[0].next_funding_time is not None
     assert funding[0].next_funding_time.hour == 4
-    assert requested_symbols == ["ETH-USDT-SWAP"]
+    assert funding[0].mark_price is None
+    assert funding[0].index_price is None
+    assert mismatched == []
+    assert missing_timestamp == []
+    assert requested_symbols == [
+        "ETH-USDT-SWAP",
+        "ETH-USDT-SWAP",
+        "ETH-USDT-SWAP",
+    ]
+    assert "okx_reference_price_fetch_failed" in caplog.messages
+    assert "okx_funding_symbol_mismatch" in caplog.messages
+    assert "okx_funding_timestamp_invalid" in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_okx_funding_rates_use_public_mark_and_index_prices() -> None:
+    requested_quotes: list[str] = []
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    fresh_reference_timestamp_ms = now_ms - 20_000
+    reference_timestamp_ms = fresh_reference_timestamp_ms
+    funding_timestamp_ms = now_ms
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/public/instruments"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": [
+                        {
+                            "instId": "ETH-USDT-SWAP",
+                            "uly": "ETH-USDT",
+                            "state": "live",
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/public/mark-price"):
+            assert request.url.params["instType"] == "SWAP"
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": [
+                        {
+                            "instId": "ETH-USDT-SWAP",
+                            "markPx": "4512.25",
+                            "ts": str(reference_timestamp_ms),
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/market/index-tickers"):
+            requested_quotes.append(request.url.params["quoteCcy"])
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": [
+                        {
+                            "instId": "ETH-USDT",
+                            "idxPx": "4510.75",
+                            "ts": str(reference_timestamp_ms),
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/public/funding-rate"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": [
+                        {
+                            "instId": "ETH-USDT-SWAP",
+                            "fundingRate": "0.0001",
+                            "fundingTime": "1735704000000",
+                            "nextFundingTime": "1735718400000",
+                            "markPx": "0",
+                            "idxPx": "0",
+                            "ts": str(funding_timestamp_ms),
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    )
+    adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
+    funding = await adapter.get_funding_rates()
+    reference_timestamp_ms = now_ms - 60_000
+    stale_reference_funding = await adapter.get_funding_rates()
+    reference_timestamp_ms = now_ms
+    funding_timestamp_ms = now_ms + 60_000
+    future_funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert len(funding) == 1
+    assert funding[0].mark_price == Decimal("4512.25")
+    assert funding[0].index_price == Decimal("4510.75")
+    assert funding[0].timestamp == datetime.fromtimestamp(
+        fresh_reference_timestamp_ms / 1000, tz=UTC
+    )
+    assert stale_reference_funding[0].mark_price is None
+    assert stale_reference_funding[0].index_price is None
+    assert future_funding == []
+    assert requested_quotes == ["USDT", "USDT", "USDT"]
 
 
 def test_binance_perpetual_delivery_sentinel_is_not_an_expiry() -> None:

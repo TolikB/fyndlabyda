@@ -52,6 +52,51 @@ def _opt(value: object, field: str) -> Decimal | None:
     return None if value in (None, "") else decimal(value, field)
 
 
+def _positive_opt(value: object, field: str) -> Decimal | None:
+    parsed = _opt(value, field)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
+def _okx_index_id(instrument: dict[str, Any], symbol: str) -> str:
+    for field in ("uly", "instFamily"):
+        value = str(instrument.get(field, "")).strip()
+        if value:
+            return value
+    return symbol.removesuffix("-SWAP")
+
+
+def _okx_reference_prices(
+    response: object,
+    identity_field: str,
+    price_field: str,
+    *,
+    observed_at: datetime,
+    stale_after_seconds: float,
+) -> dict[str, tuple[Decimal, datetime]]:
+    if not isinstance(response, list):
+        return {}
+    result: dict[str, tuple[Decimal, datetime]] = {}
+    for row in response:
+        if not isinstance(row, dict):
+            continue
+        identity = str(row.get(identity_field, "")).strip()
+        if not identity:
+            continue
+        try:
+            price = _opt(row.get(price_field), price_field)
+            exchange_timestamp = _ms(row.get("ts"))
+        except InvalidResponseError:
+            continue
+        age_seconds = (observed_at - exchange_timestamp).total_seconds()
+        if (
+            price is not None
+            and price > 0
+            and -5 <= age_seconds <= stale_after_seconds
+        ):
+            result[identity] = (price, exchange_timestamp)
+    return result
+
+
 class OkxPublicAdapter(ExchangeAdapter):
     name = "okx"
 
@@ -66,6 +111,7 @@ class OkxPublicAdapter(ExchangeAdapter):
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
         funding_symbol_limit: int = 30,
+        reference_price_stale_seconds: float = 30.0,
         canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -77,6 +123,9 @@ class OkxPublicAdapter(ExchangeAdapter):
         self._sleep = sleep
         self.max_reconnects = max_reconnects
         self.funding_symbol_limit = funding_symbol_limit
+        if reference_price_stale_seconds <= 0:
+            raise ValueError("reference_price_stale_seconds must be positive")
+        self.reference_price_stale_seconds = reference_price_stale_seconds
         self.canonical_book_event_sink = canonical_book_event_sink
         self._canonical_instruments: dict[tuple[str, InstrumentType], DomainInstrumentKey] = {}
 
@@ -234,6 +283,60 @@ class OkxPublicAdapter(ExchangeAdapter):
             key=lambda item: (0 if item.get("instId") in popular else 1, str(item.get("instId"))),
         )[: self.funding_symbol_limit]
         symbols = [str(item.get("instId", "")) for item in instruments if item.get("instId")]
+        index_id_by_symbol = {
+            symbol: _okx_index_id(item, symbol)
+            for item in instruments
+            if (symbol := str(item.get("instId", "")))
+        }
+        quote_currencies = sorted(
+            {
+                index_id.rsplit("-", 1)[-1]
+                for index_id in index_id_by_symbol.values()
+                if "-" in index_id
+            }
+        )
+        reference_responses = await asyncio.gather(
+            self._request("/api/v5/public/mark-price", {"instType": "SWAP"}),
+            *(
+                self._request(
+                    "/api/v5/market/index-tickers", {"quoteCcy": quote_currency}
+                )
+                for quote_currency in quote_currencies
+            ),
+            return_exceptions=True,
+        )
+        reference_observed_at = datetime.now(UTC)
+        reference_names = ("mark_price", *quote_currencies)
+        for name, response in zip(
+            reference_names, reference_responses, strict=True
+        ):
+            if isinstance(response, BaseException):
+                logger.warning(
+                    "okx_reference_price_fetch_failed",
+                    extra={
+                        "exchange": self.name,
+                        "stream": name,
+                        "error_type": type(response).__name__,
+                    },
+                )
+        mark_by_symbol = _okx_reference_prices(
+            reference_responses[0],
+            "instId",
+            "markPx",
+            observed_at=reference_observed_at,
+            stale_after_seconds=self.reference_price_stale_seconds,
+        )
+        index_by_id: dict[str, tuple[Decimal, datetime]] = {}
+        for response in reference_responses[1:]:
+            index_by_id.update(
+                _okx_reference_prices(
+                    response,
+                    "instId",
+                    "idxPx",
+                    observed_at=reference_observed_at,
+                    stale_after_seconds=self.reference_price_stale_seconds,
+                )
+            )
         responses = await asyncio.gather(
             *(
                 self._request("/api/v5/public/funding-rate", {"instId": symbol})
@@ -241,6 +344,7 @@ class OkxPublicAdapter(ExchangeAdapter):
             ),
             return_exceptions=True,
         )
+        funding_observed_at = datetime.now(UTC)
         for symbol, rows in zip(symbols, responses, strict=True):
             if isinstance(rows, BaseException):
                 logger.warning(
@@ -249,6 +353,44 @@ class OkxPublicAdapter(ExchangeAdapter):
                 )
                 continue
             for row in rows:
+                returned_symbol = str(row.get("instId", ""))
+                if returned_symbol != symbol:
+                    logger.warning(
+                        "okx_funding_symbol_mismatch",
+                        extra={
+                            "exchange": self.name,
+                            "expected_symbol": symbol,
+                            "returned_symbol": returned_symbol,
+                        },
+                    )
+                    continue
+                try:
+                    if not row.get("ts"):
+                        raise InvalidResponseError("OKX funding timestamp is required")
+                    exchange_timestamp = _ms(row["ts"])
+                except InvalidResponseError:
+                    logger.warning(
+                        "okx_funding_timestamp_invalid",
+                        extra={"exchange": self.name, "symbol": symbol},
+                    )
+                    continue
+                funding_age_seconds = (
+                    funding_observed_at - exchange_timestamp
+                ).total_seconds()
+                if not (
+                    -5
+                    <= funding_age_seconds
+                    <= self.reference_price_stale_seconds
+                ):
+                    logger.warning(
+                        "okx_funding_timestamp_invalid",
+                        extra={
+                            "exchange": self.name,
+                            "symbol": symbol,
+                            "age_seconds": round(funding_age_seconds, 3),
+                        },
+                    )
+                    continue
                 funding_time = _ms(row["fundingTime"]) if row.get("fundingTime") else None
                 following_funding_time = (
                     _ms(row["nextFundingTime"]) if row.get("nextFundingTime") else None
@@ -262,6 +404,17 @@ class OkxPublicAdapter(ExchangeAdapter):
                     interval_hours = Decimal(
                         str((following_funding_time - funding_time).total_seconds() / 3600)
                     )
+                inline_mark = _positive_opt(row.get("markPx"), "markPx")
+                inline_index = _positive_opt(row.get("idxPx"), "idxPx")
+                mark_reference = mark_by_symbol.get(symbol)
+                index_reference = index_by_id.get(
+                    index_id_by_symbol.get(symbol, "")
+                )
+                constituent_timestamps = [exchange_timestamp]
+                if inline_mark is None and mark_reference is not None:
+                    constituent_timestamps.append(mark_reference[1])
+                if inline_index is None and index_reference is not None:
+                    constituent_timestamps.append(index_reference[1])
                 result.append(
                     FundingSnapshot(
                         exchange=self.name,
@@ -269,9 +422,13 @@ class OkxPublicAdapter(ExchangeAdapter):
                         funding_rate=decimal(row.get("fundingRate", "0"), "fundingRate"),
                         funding_interval_hours=interval_hours,
                         next_funding_time=funding_time or following_funding_time,
-                        mark_price=_opt(row.get("markPx"), "markPx"),
-                        index_price=_opt(row.get("idxPx"), "idxPx"),
-                        timestamp=datetime.now(UTC),
+                        mark_price=inline_mark or (
+                            mark_reference[0] if mark_reference is not None else None
+                        ),
+                        index_price=inline_index or (
+                            index_reference[0] if index_reference is not None else None
+                        ),
+                        timestamp=min(constituent_timestamps),
                     )
                 )
         return result
