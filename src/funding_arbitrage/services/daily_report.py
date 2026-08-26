@@ -268,36 +268,10 @@ class DailyReportService:
             end=end,
             signal_start=signal_start,
         )
-        reports = [candidate]
-        if self.settings.paper_comparison_enabled:
-            reports.append(
-                await self._load_portfolio_report(
-                    session,
-                    label="baseline",
-                    simulation_version=self.settings.paper_baseline_simulation_version,
-                    start=start,
-                    end=end,
-                    signal_start=signal_start,
-                    signal_counts=(
-                        candidate.eligible_signals,
-                        candidate.confirmed_signals,
-                    ),
-                )
-            )
-        lines = [f"📊 Звіт про торгівлю · {report_date.isoformat()}"]
-        for index, report in enumerate(reports):
-            if index:
-                lines.append("")
-            lines.extend(
-                self._portfolio_lines(report, include_label=len(reports) > 1)
-            )
-        if len(reports) > 1:
-            lines.extend(
-                [
-                    "",
-                    "Портфелі незалежні — їхній PnL не потрібно підсумовувати.",
-                ]
-            )
+        lines = [
+            f"📊 Звіт про торгівлю · {report_date.isoformat()}",
+            *self._portfolio_lines(candidate, include_label=False),
+        ]
         lines.extend(["", "Тестовий режим · реальних ордерів немає"])
         return "\n".join(lines)
 

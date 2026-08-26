@@ -449,7 +449,7 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
 
 
 @pytest.mark.asyncio
-async def test_daily_report_includes_isolated_baseline_results(
+async def test_daily_report_omits_background_baseline_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(
@@ -471,17 +471,6 @@ async def test_daily_report_includes_isolated_baseline_results(
             "total_pnl": Decimal("0"),
             "funding_pnl": Decimal("0"),
             "fees": Decimal("0"),
-            "timestamp": timestamp,
-        },
-    )()
-    baseline = type(
-        "Snapshot",
-        (),
-        {
-            "equity": Decimal("6249.635031950949948783"),
-            "total_pnl": Decimal("-0.364968049050051217"),
-            "funding_pnl": Decimal("0.372430000000000000"),
-            "fees": Decimal("0.262500245296606355"),
             "timestamp": timestamp,
         },
     )()
@@ -509,20 +498,6 @@ async def test_daily_report_includes_isolated_baseline_results(
         100,
         0,
         1,
-        None,
-        baseline,
-        baseline,
-        Decimal("0.372430000000000000"),
-        Decimal("0.262500245296606355"),
-        Decimal("0"),
-        Decimal("0"),
-        2,
-        1,
-        0,
-        1,
-        100,
-        0,
-        1,
     ]
     service = DailyReportService(
         settings,
@@ -536,13 +511,13 @@ async def test_daily_report_includes_isolated_baseline_results(
     monkeypatch.setattr(service.notifier, "send_message", send)
 
     assert await service.check_and_send(datetime(2026, 8, 15, 0, 1, tzinfo=UTC))
-    assert "ОСНОВНА СТРАТЕГІЯ" in sent[0]
-    assert "СТРАТЕГІЯ ДЛЯ ПОРІВНЯННЯ" in sent[0]
-    assert "Баланс: $6249.64" in sent[0]
-    assert "Результат: -$0.36 (-0.0058%)" in sent[0]
-    assert "Funding: +$0.37" in sent[0]
-    assert "Витрати: $0.26" in sent[0]
-    assert "Портфелі незалежні" in sent[0]
+    assert sent[0].count("ЗА ДЕНЬ") == 1
+    assert sent[0].count("ЗАГАЛОМ") == 1
+    assert "ОСНОВНА СТРАТЕГІЯ" not in sent[0]
+    assert "СТРАТЕГІЯ ДЛЯ ПОРІВНЯННЯ" not in sent[0]
+    assert "Баланс: $6250.00" in sent[0]
+    assert "Баланс: $6249.64" not in sent[0]
+    assert "Портфелі незалежні" not in sent[0]
     assert "v29-oos-" not in sent[0]
 
 
