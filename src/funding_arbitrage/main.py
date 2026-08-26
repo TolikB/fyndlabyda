@@ -329,6 +329,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     and multi_regime_runtime is not None
                     else None
                 ),
+                canonical_consumer_barrier=(
+                    multi_regime_runtime.flush
+                    if multi_regime_runtime is not None
+                    else None
+                ),
             )
             if active_settings.paper_comparison_enabled:
                 baseline_settings = active_settings.model_copy(
@@ -390,6 +395,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             task = asyncio.create_task(runner.run(), name="live-trading-runner")
         primary_error: BaseException | None = None
         try:
+            if multi_regime_runtime is not None:
+                multi_regime_runtime.start()
             yield
         except BaseException as error:
             primary_error = error
@@ -444,6 +451,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
             if runner is not None:
                 await _attempt_shutdown("runner_close", runner.close, shutdown_failures)
+            if multi_regime_runtime is not None:
+                await _attempt_shutdown(
+                    "multi_regime_runtime",
+                    multi_regime_runtime.stop,
+                    shutdown_failures,
+                )
             for venue, adapter in adapters.items():
                 await _attempt_shutdown(
                     f"public_adapter:{venue}",

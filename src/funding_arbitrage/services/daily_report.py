@@ -740,11 +740,11 @@ class DailyReportService:
             *([label] if include_label else []),
             "ЗА ДЕНЬ",
             f"Результат: {_signed_usd(equity_delta)}",
-            f"Funding: {_signed_usd(report.day_funding)}",
+            f"Фандінг: {_signed_usd(report.day_funding)}",
             (
                 f"Витрати: ${day_costs:.2f} "
                 f"(комісії ${report.day_fees:.2f}, "
-                f"slippage ${report.day_slippage:.2f})"
+                f"прослизання ${report.day_slippage:.2f})"
             ),
             f"Угоди: відкрито {report.opened} · закрито {report.closed}",
             *([no_trades_note] if no_trades_note is not None else []),
@@ -755,7 +755,7 @@ class DailyReportService:
                 f"Результат: {_signed_usd(report.total_pnl)} "
                 f"({total_return_percent:+.4f}%)"
             ),
-            f"Funding: {_signed_usd(report.total_funding)}",
+            f"Фандінг: {_signed_usd(report.total_funding)}",
             f"Витрати: ${total_costs:.2f}",
             f"Відкриті позиції: {report.open_positions}",
         ]

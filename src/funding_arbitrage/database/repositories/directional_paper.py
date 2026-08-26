@@ -41,6 +41,14 @@ class DirectionalPaperCheckpoint:
     event_timestamp: datetime
 
 
+@dataclass(frozen=True)
+class DirectionalPaperEventProjection:
+    event: EventEnvelope[Any]
+    updates: Sequence[DirectionalPaperUpdate]
+    event_row_id: int
+    portfolio_snapshot: PortfolioSnapshot | None = None
+
+
 async def save_directional_paper_event(
     session: AsyncSession,
     event: EventEnvelope[Any],
@@ -50,45 +58,85 @@ async def save_directional_paper_event(
     portfolio_snapshot: PortfolioSnapshot | None = None,
     consumer_name: str = "multi_regime_paper_v1",
 ) -> None:
-    if event_row_id <= 0:
-        raise ValueError("paper checkpoint event row ID must be positive")
-    try:
-        for update in updates:
-            await _save_position(session, update.position)
-            await _save_order(
-                session,
-                update.position,
-                update.position.entry_order,
-                reduce_only=False,
+    await save_directional_paper_page(
+        session,
+        (
+            DirectionalPaperEventProjection(
+                event=event,
+                updates=updates,
+                event_row_id=event_row_id,
+                portfolio_snapshot=portfolio_snapshot,
+            ),
+        ),
+        consumer_name=consumer_name,
+    )
+
+
+async def save_directional_paper_page(
+    session: AsyncSession,
+    projections: Sequence[DirectionalPaperEventProjection],
+    *,
+    consumer_name: str = "multi_regime_paper_v1",
+) -> None:
+    """Persist one ordered replay page and advance its checkpoint atomically."""
+
+    if not projections:
+        raise ValueError("paper projection page cannot be empty")
+    previous_row_id = 0
+    for projection in projections:
+        if projection.event_row_id <= previous_row_id:
+            raise ValueError(
+                "paper projection row IDs must be positive and strictly increasing"
             )
-            await _save_fills(session, update.position, update.position.entry_order)
-            for exit_order in update.position.exit_orders:
+        previous_row_id = projection.event_row_id
+    try:
+        for projection in projections:
+            for update in projection.updates:
+                await _save_position(session, update.position)
                 await _save_order(
                     session,
                     update.position,
-                    exit_order,
-                    reduce_only=True,
+                    update.position.entry_order,
+                    reduce_only=False,
                 )
-                await _save_fills(session, update.position, exit_order)
-        if portfolio_snapshot is not None:
-            session.add(
-                PortfolioSnapshotRecord(
-                    timestamp=portfolio_snapshot.timestamp,
-                    simulation_version=portfolio_snapshot.simulation_version,
-                    snapshot_scope="combined",
-                    equity=portfolio_snapshot.equity,
-                    cash=portfolio_snapshot.cash,
-                    locked_capital=portfolio_snapshot.locked_capital,
-                    total_pnl=portfolio_snapshot.total_pnl,
-                    funding_pnl=portfolio_snapshot.funding_pnl,
-                    fees=portfolio_snapshot.fees,
-                    balances={
-                        key: str(value)
-                        for key, value in portfolio_snapshot.balances.items()
-                    },
+                await _save_fills(
+                    session,
+                    update.position,
+                    update.position.entry_order,
                 )
-            )
-        await _save_checkpoint(session, event, event_row_id, consumer_name)
+                for exit_order in update.position.exit_orders:
+                    await _save_order(
+                        session,
+                        update.position,
+                        exit_order,
+                        reduce_only=True,
+                    )
+                    await _save_fills(session, update.position, exit_order)
+            if projection.portfolio_snapshot is not None:
+                snapshot = projection.portfolio_snapshot
+                session.add(
+                    PortfolioSnapshotRecord(
+                        timestamp=snapshot.timestamp,
+                        simulation_version=snapshot.simulation_version,
+                        snapshot_scope="combined",
+                        equity=snapshot.equity,
+                        cash=snapshot.cash,
+                        locked_capital=snapshot.locked_capital,
+                        total_pnl=snapshot.total_pnl,
+                        funding_pnl=snapshot.funding_pnl,
+                        fees=snapshot.fees,
+                        balances={
+                            key: str(value) for key, value in snapshot.balances.items()
+                        },
+                    )
+                )
+        final = projections[-1]
+        await _save_checkpoint(
+            session,
+            final.event,
+            final.event_row_id,
+            consumer_name,
+        )
         await session.commit()
     except Exception:
         await session.rollback()

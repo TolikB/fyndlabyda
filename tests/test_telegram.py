@@ -236,8 +236,8 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     assert "📊 Звіт про торгівлю · 2026-08-09" in sent[0]
     assert "ЗА ДЕНЬ" in sent[0]
     assert "Результат: +$12.00" in sent[0]
-    assert "Funding: +$8.00" in sent[0]
-    assert "Витрати: $1.45 (комісії $1.25, slippage $0.20)" in sent[0]
+    assert "Фандінг: +$8.00" in sent[0]
+    assert "Витрати: $1.45 (комісії $1.25, прослизання $0.20)" in sent[0]
     assert "Угоди: відкрито 2 · закрито 2" in sent[0]
     assert sent[0].count("Відкриті позиції: 2") == 1
     assert "ЗАГАЛОМ" in sent[0]

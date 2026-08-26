@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -28,9 +29,10 @@ if TYPE_CHECKING:
     from funding_arbitrage.services.runtime import RuntimeState
 
 from funding_arbitrage.database.repositories.directional_paper import (
+    DirectionalPaperEventProjection,
     load_directional_paper_checkpoint,
     load_directional_paper_positions,
-    save_directional_paper_event,
+    save_directional_paper_page,
 )
 from funding_arbitrage.database.repositories.events import (
     latest_event_row_id,
@@ -46,6 +48,8 @@ from funding_arbitrage.services.multi_regime import (
     MultiRegimeDecisionBatch,
     MultiRegimeEngine,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimePortfolioRiskContextProvider:
@@ -269,6 +273,9 @@ class DurableMultiRegimeRuntime:
             else "multi_regime_paper_disabled"
         )
         self._lock = asyncio.Lock()
+        self._wake_event = asyncio.Event()
+        self._worker_task: asyncio.Task[None] | None = None
+        self._stop_requested = False
 
     async def restore_features(self, *, start: datetime) -> int:
         """Restore features and paper state with bounded keyset replay."""
@@ -390,16 +397,16 @@ class DurableMultiRegimeRuntime:
         batches_by_event: dict[str, list[MultiRegimeDecisionBatch]] = {}
         for batch in batches:
             batches_by_event.setdefault(batch.source_event_id, []).append(batch)
+        projections: list[DirectionalPaperEventProjection] = []
         for row_id, event in events:
             updates = list(self.paper_broker.advance(event))
             for batch in batches_by_event.get(event.metadata.event_id, ()):
                 updates.extend(self.paper_broker.submit(batch))
                 self.latest_by_instrument[batch.instrument.canonical_id] = batch
-            async with self.session_factory() as session:
-                await save_directional_paper_event(
-                    session,
-                    event,
-                    updates,
+            projections.append(
+                DirectionalPaperEventProjection(
+                    event=event,
+                    updates=tuple(updates),
                     event_row_id=row_id,
                     portfolio_snapshot=(
                         self.combined_portfolio_snapshot(
@@ -408,19 +415,29 @@ class DurableMultiRegimeRuntime:
                         if updates
                         else None
                     ),
-                    consumer_name=self._paper_consumer_name,
                 )
-            self.paper_replayed_events += 1
+            )
+        async with self.session_factory() as session:
+            await save_directional_paper_page(
+                session,
+                projections,
+                consumer_name=self._paper_consumer_name,
+            )
+        self.paper_replayed_events += len(events)
 
     async def _catch_up(self) -> None:
-        while True:
+        async with self.session_factory() as session:
+            journal_tip = await latest_event_row_id(session)
+        while self._processed_event_row_id < journal_tip:
             async with self.session_factory() as session:
                 pending = await load_ingestion_events(
                     session,
                     after_row_id=self._processed_event_row_id,
+                    up_to_row_id=journal_tip,
                 )
             if not pending:
                 return
+            projections: list[DirectionalPaperEventProjection] = []
             for row_id, event in pending:
                 batch = self.engine.process(event)
                 if batch is not None:
@@ -432,11 +449,10 @@ class DurableMultiRegimeRuntime:
                     updates = list(self.paper_broker.advance(event))
                     if batch is not None:
                         updates.extend(self.paper_broker.submit(batch))
-                    async with self.session_factory() as session:
-                        await save_directional_paper_event(
-                            session,
-                            event,
-                            updates,
+                    projections.append(
+                        DirectionalPaperEventProjection(
+                            event=event,
+                            updates=tuple(updates),
                             event_row_id=row_id,
                             portfolio_snapshot=(
                                 self.combined_portfolio_snapshot(
@@ -445,9 +461,17 @@ class DurableMultiRegimeRuntime:
                                 if updates
                                 else None
                             ),
-                            consumer_name=self._paper_consumer_name,
                         )
-                self._processed_event_row_id = row_id
+                    )
+            if projections:
+                async with self.session_factory() as session:
+                    await save_directional_paper_page(
+                        session,
+                        projections,
+                        consumer_name=self._paper_consumer_name,
+                    )
+            self._processed_event_row_id = pending[-1][0]
+
     def combined_portfolio_snapshot(
         self,
         timestamp: datetime,
@@ -490,10 +514,90 @@ class DurableMultiRegimeRuntime:
     def healthy(self) -> bool:
         return self.failure_reason is None
 
-    async def publish(self, _event: EventEnvelope[Any]) -> None:
+    def start(self) -> None:
+        """Start a coalescing worker after startup replay is complete."""
+
+        if self.failure_reason is not None:
+            raise RuntimeError("multi-regime runtime is failed")
+        if self._worker_task is not None:
+            raise RuntimeError("multi-regime runtime worker already started")
+        self._stop_requested = False
+        self._worker_task = asyncio.create_task(
+            self._run_worker(),
+            name="multi-regime-canonical-consumer",
+        )
+
+    async def stop(self, *, timeout_seconds: float = 10.0) -> None:
+        """Drain the durable journal and stop the background worker."""
+
+        if timeout_seconds <= 0:
+            raise ValueError("multi-regime shutdown timeout must be positive")
+        task = self._worker_task
+        if task is None:
+            return
+        self._stop_requested = True
+        self._wake_event.set()
+        done, pending = await asyncio.wait((task,), timeout=timeout_seconds)
+        if pending:
+            task.cancel()
+            await asyncio.wait((task,), timeout=min(timeout_seconds, 1.0))
+            self.failure_reason = "ShutdownTimeout"
+            raise TimeoutError("multi-regime runtime worker shutdown timed out")
+        if self.failure_reason is not None:
+            raise RuntimeError("multi-regime runtime is failed")
+        assert done
+        drain_task = asyncio.create_task(
+            self.flush(),
+            name="multi-regime-canonical-consumer-final-drain",
+        )
+        _, pending = await asyncio.wait((drain_task,), timeout=timeout_seconds)
+        if pending:
+            drain_task.cancel()
+            await asyncio.wait(
+                (drain_task,),
+                timeout=min(timeout_seconds, 1.0),
+            )
+            self.failure_reason = "ShutdownTimeout"
+            raise TimeoutError("multi-regime runtime final drain timed out")
+        await drain_task
+
+    async def flush(self) -> None:
+        """Process the durable journal through a stable barrier for this cycle."""
+
+        if self.failure_reason is not None:
+            raise RuntimeError("multi-regime runtime is failed")
         async with self._lock:
-            if self.failure_reason is not None:
-                raise RuntimeError("multi-regime runtime is failed")
+            try:
+                await self._catch_up()
+            except Exception as error:
+                self.failure_reason = type(error).__name__
+                raise
+
+    async def _run_worker(self) -> None:
+        while True:
+            await self._wake_event.wait()
+            self._wake_event.clear()
+            async with self._lock:
+                if self.failure_reason is not None:
+                    return
+                try:
+                    await self._catch_up()
+                except Exception as error:
+                    self.failure_reason = type(error).__name__
+                    logger.exception("multi_regime_runtime_failed")
+                    return
+            if self._stop_requested:
+                return
+
+    async def publish(self, _event: EventEnvelope[Any]) -> None:
+        if self.failure_reason is not None:
+            raise RuntimeError("multi-regime runtime is failed")
+        if self._worker_task is not None:
+            if self._worker_task.done():
+                raise RuntimeError("multi-regime runtime worker is stopped")
+            self._wake_event.set()
+            return
+        async with self._lock:
             try:
                 await self._catch_up()
             except Exception as error:

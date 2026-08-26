@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import funding_arbitrage.database.repositories.directional_paper as directional_repository
 from funding_arbitrage.backtest.fills import (
     SimulatedFill,
     SimulatedOrderState,
@@ -22,10 +23,12 @@ from funding_arbitrage.database.models import (
 )
 from funding_arbitrage.database.repositories.directional_paper import (
     DirectionalPaperCheckpoint,
+    DirectionalPaperEventProjection,
     DirectionalPaperIntegrityError,
     load_directional_paper_checkpoint,
     load_directional_paper_positions,
     save_directional_paper_event,
+    save_directional_paper_page,
 )
 from funding_arbitrage.database.repositories.market_data import save_portfolio_snapshot
 from funding_arbitrage.domain.events import (
@@ -164,6 +167,112 @@ async def test_paper_projection_fills_and_checkpoint_are_exactly_once() -> None:
         event_id="book-1",
         event_timestamp=NOW + timedelta(seconds=1),
     )
+
+
+async def test_projection_page_persists_updates_and_final_checkpoint_atomically() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _event()
+    second_time = NOW + timedelta(seconds=2)
+    second = first.model_copy(
+        update={
+            "metadata": first.metadata.model_copy(
+                update={
+                    "event_id": "book-2",
+                    "exchange_timestamp": second_time,
+                    "receive_timestamp": second_time,
+                    "monotonic_ns": 2,
+                    "sequence_id": "2",
+                    "native_sequence": 2,
+                }
+            ),
+            "payload": first.payload.model_copy(
+                update={"sequence": 2, "exchange_timestamp": second_time}
+            ),
+        }
+    )
+    update = DirectionalPaperUpdate(position=_position())
+
+    async with factory() as session:
+        await save_directional_paper_page(
+            session,
+            (
+                DirectionalPaperEventProjection(first, (update,), 1),
+                DirectionalPaperEventProjection(second, (), 2),
+            ),
+        )
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+        positions = await load_directional_paper_positions(session)
+
+    await engine.dispose()
+    assert positions == (_position(),)
+    assert checkpoint == DirectionalPaperCheckpoint(
+        event_row_id=2,
+        event_id="book-2",
+        event_timestamp=second_time,
+    )
+
+
+async def test_projection_page_rejects_non_monotonic_row_ids() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    event = _event()
+
+    async with factory() as session:
+        with pytest.raises(ValueError, match="strictly increasing"):
+            await save_directional_paper_page(
+                session,
+                (
+                    DirectionalPaperEventProjection(event, (), 2),
+                    DirectionalPaperEventProjection(event, (), 1),
+                ),
+            )
+
+    await engine.dispose()
+
+
+async def test_projection_page_rolls_back_updates_when_checkpoint_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def fail_checkpoint(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("synthetic checkpoint failure")
+
+    monkeypatch.setattr(
+        directional_repository,
+        "_save_checkpoint",
+        fail_checkpoint,
+    )
+    async with factory() as session:
+        with pytest.raises(RuntimeError, match="synthetic checkpoint failure"):
+            await save_directional_paper_page(
+                session,
+                (
+                    DirectionalPaperEventProjection(
+                        _event(),
+                        (DirectionalPaperUpdate(position=_position()),),
+                        1,
+                    ),
+                ),
+            )
+    async with factory() as session:
+        position_count = await session.scalar(
+            select(func.count()).select_from(PositionStateRecord)
+        )
+        checkpoint_count = await session.scalar(
+            select(func.count()).select_from(MultiRegimePaperCheckpointRecord)
+        )
+
+    await engine.dispose()
+    assert position_count == 0
+    assert checkpoint_count == 0
 
 
 async def test_same_oms_version_with_changed_content_fails_closed() -> None:

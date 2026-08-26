@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -158,12 +158,14 @@ class PaperTestRunner:
         combined_snapshot_provider: (
             Callable[[datetime], PortfolioSnapshot | None] | None
         ) = None,
+        canonical_consumer_barrier: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
         self.session_factory = session_factory
         self.public_events = public_events
         self.combined_snapshot_provider = combined_snapshot_provider
+        self.canonical_consumer_barrier = canonical_consumer_barrier
         self._owns_collector = collector is None
         self.collector = collector or MarketDataCollector(
             runtime.adapters.values(),
@@ -383,6 +385,8 @@ class PaperTestRunner:
             raise IncompleteMarketSnapshotError(tuple(sorted(missing_mark_venues)))
         if self.public_events is not None:
             await self.public_events.observe_snapshot(snapshot)
+        if self.canonical_consumer_barrier is not None:
+            await self.canonical_consumer_barrier()
         if periodic_history_refresh:
             self._last_history_refresh = snapshot.captured_at
         if refresh_history:

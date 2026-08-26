@@ -168,6 +168,41 @@ def test_paper_runner_accrues_spot_borrow_by_actual_holding_time() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collect_snapshot_waits_for_canonical_consumer_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(run_mode="paper_test", market_data_mode="mock")
+    runtime = RuntimeState(settings, create_public_adapters(settings))
+    barrier_calls = 0
+
+    async def barrier() -> None:
+        nonlocal barrier_calls
+        barrier_calls += 1
+
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+        canonical_consumer_barrier=barrier,
+    )
+    snapshot = MarketSnapshot(
+        instruments=[],
+        tickers=[],
+        funding=[],
+        orderbooks={},
+        captured_at=datetime(2026, 8, 26, tzinfo=UTC),
+    )
+
+    async def collect_once(**_kwargs: object) -> MarketSnapshot:
+        return snapshot
+
+    monkeypatch.setattr(runner.collector, "collect_once", collect_once)
+
+    assert await runner.collect_snapshot() is snapshot
+    assert barrier_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_paper_runner_opens_mock_position_without_live_orders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

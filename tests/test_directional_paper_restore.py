@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from funding_arbitrage.backtest.fills import (
@@ -172,6 +174,131 @@ async def test_out_of_order_callback_catches_up_in_canonical_row_order() -> None
     assert checkpoint is not None
     assert checkpoint.event_row_id == 2
     assert checkpoint.event_id == "book-2"
+
+
+async def test_started_worker_does_not_block_canonical_event_publication(
+    monkeypatch,
+) -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    first, second = _event(1), _event(2)
+    broker = DirectionalPaperBroker(
+        {"BYBIT": FillModelPolicy(order_latency_ms=0)}
+    )
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+    )
+    await runtime.restore_features(start=NOW)
+    async with factory() as session:
+        await append_events(session, (first, second))
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_save = runtime_module.save_directional_paper_page
+
+    async def blocking_save(*args, **kwargs) -> None:
+        entered.set()
+        await release.wait()
+        await original_save(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "save_directional_paper_page", blocking_save)
+    runtime.start()
+
+    await asyncio.wait_for(runtime.publish(second), timeout=0.1)
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await asyncio.wait_for(runtime.publish(first), timeout=0.1)
+    release.set()
+    await asyncio.wait_for(runtime.stop(), timeout=2)
+
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+    await database.dispose()
+    assert checkpoint is not None
+    assert checkpoint.event_row_id == 2
+    assert checkpoint.event_id == "book-2"
+
+
+async def test_flush_barrier_processes_every_durable_row() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    broker = DirectionalPaperBroker(
+        {"BYBIT": FillModelPolicy(order_latency_ms=0)}
+    )
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+    )
+    await runtime.restore_features(start=NOW)
+    runtime.start()
+    async with factory() as session:
+        await append_events(session, (_event(1), _event(2)))
+
+    await asyncio.wait_for(runtime.flush(), timeout=2)
+
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+    await runtime.stop()
+    await database.dispose()
+    assert checkpoint is not None
+    assert checkpoint.event_row_id == 2
+
+
+async def test_background_failure_marks_runtime_unhealthy(monkeypatch) -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+    )
+
+    async def fail_catch_up() -> None:
+        raise RuntimeError("synthetic database failure")
+
+    monkeypatch.setattr(runtime, "_catch_up", fail_catch_up)
+    runtime.start()
+    await runtime.publish(_event(1))
+    assert runtime._worker_task is not None
+    await asyncio.wait_for(runtime._worker_task, timeout=1)
+
+    assert runtime.healthy is False
+    assert runtime.failure_reason == "RuntimeError"
+    with pytest.raises(RuntimeError, match="runtime is failed"):
+        await runtime.stop()
+    await database.dispose()
+
+
+async def test_stop_cancels_worker_after_bounded_timeout(monkeypatch) -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+    )
+    entered = asyncio.Event()
+
+    async def blocked_catch_up() -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime, "_catch_up", blocked_catch_up)
+    runtime.start()
+    await runtime.publish(_event(1))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    with pytest.raises(TimeoutError, match="shutdown timed out"):
+        await runtime.stop(timeout_seconds=0.01)
+
+    assert runtime.failure_reason == "ShutdownTimeout"
+    assert runtime._worker_task is not None
+    assert runtime._worker_task.cancelled()
+    await database.dispose()
 
 def test_combined_snapshot_preserves_equity_invariant_and_reserves_cash() -> None:
     state = RuntimeState(
