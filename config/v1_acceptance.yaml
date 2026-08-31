@@ -678,6 +678,7 @@ requirements:
     status: partial
     evidence:
       - docker-compose.yml
+      - docker-compose.acceptance.yml
       - infra/terraform
       - infra/vault
       - scripts/host_preflight.sh
@@ -732,12 +733,18 @@ requirements:
       - src/funding_arbitrage/qa/acceptance_window.py
       - src/funding_arbitrage/qa/acceptance_artifacts.py
       - src/funding_arbitrage/qa/acceptance_provenance.py
+      - src/funding_arbitrage/qa/runtime_acceptance.py
+      - src/funding_arbitrage/services/paper_runner.py
       - scripts/acceptance_window.py
+      - scripts/runtime_acceptance.py
       - scripts/export_acceptance_schema.py
       - config/schemas/acceptance-window-seal-input-v1.json
       - tests/test_acceptance_window.py
       - tests/test_acceptance_artifacts.py
+      - tests/test_runtime_acceptance.py
       - docs/V1_ACCEPTANCE_WINDOWS.md
+      - ops/ACCEPTANCE_RUNTIME_RUNBOOK.md
+      - docker-compose.acceptance.yml
   - id: GATE-002
     category: delivery
     title: Paper acceptance window proves realistic fills, costs, failure behavior, and deterministic reports
@@ -746,12 +753,18 @@ requirements:
       - src/funding_arbitrage/qa/acceptance_window.py
       - src/funding_arbitrage/qa/acceptance_artifacts.py
       - src/funding_arbitrage/qa/acceptance_provenance.py
+      - src/funding_arbitrage/qa/runtime_acceptance.py
+      - src/funding_arbitrage/services/paper_runner.py
       - scripts/acceptance_window.py
+      - scripts/runtime_acceptance.py
       - scripts/export_acceptance_schema.py
       - config/schemas/acceptance-window-seal-input-v1.json
       - tests/test_acceptance_window.py
       - tests/test_acceptance_artifacts.py
+      - tests/test_runtime_acceptance.py
       - docs/V1_ACCEPTANCE_WINDOWS.md
+      - ops/ACCEPTANCE_RUNTIME_RUNBOOK.md
+      - docker-compose.acceptance.yml
   - id: GATE-003
     category: delivery
     title: Limited Live is formally approved only after technical, research, shadow, paper, failure, and security gates

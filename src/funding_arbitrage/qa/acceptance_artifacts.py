@@ -247,6 +247,14 @@ def acceptance_replay_runner_sha256() -> str:
     implementation_files["acceptance_cli"] = (
         _sha256(cli_path.read_bytes()) if cli_path.is_file() else "not-packaged"
     )
+    runtime_cli_path = (
+        Path(__file__).resolve().parents[3] / "scripts" / "runtime_acceptance.py"
+    )
+    implementation_files["runtime_acceptance_cli"] = (
+        _sha256(runtime_cli_path.read_bytes())
+        if runtime_cli_path.is_file()
+        else "not-packaged"
+    )
     repository_root = Path(__file__).resolve().parents[3]
     application_files = sorted(
         path

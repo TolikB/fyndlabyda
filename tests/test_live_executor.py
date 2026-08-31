@@ -466,6 +466,140 @@ def balances() -> dict[str, VenueBalance]:
     }
 
 
+def _helper_executor(tmp_path: Path) -> LiveTradingExecutor:
+    executor = LiveTradingExecutor.__new__(LiveTradingExecutor)
+    executor.settings = live_settings(tmp_path)
+    executor.adapters = {"bybit": FakeTradingAdapter("bybit", [])}
+    return executor
+
+
+def test_venue_balance_collateral_prefers_wallet_specific_values() -> None:
+    derivative_specific = VenueBalance(
+        exchange="bybit",
+        free={"USDT": Decimal("10")},
+        free_collateral_usd=Decimal("20"),
+        derivative_free_collateral_usd=Decimal("30"),
+    )
+    aggregate_collateral = VenueBalance(
+        exchange="bybit",
+        free={"USDT": Decimal("10")},
+        free_collateral_usd=Decimal("20"),
+    )
+
+    assert derivative_specific.collateral_available(InstrumentType.PERPETUAL) == 30
+    assert aggregate_collateral.collateral_available(InstrumentType.PERPETUAL) == 20
+
+
+def test_live_executor_helper_boundaries_fail_closed(tmp_path: Path) -> None:
+    executor = _helper_executor(tmp_path)
+    with pytest.raises(LiveExecutionError, match="bounded limit"):
+        executor._assert_planned_price(None, "BUY", Decimal("100"))
+    with pytest.raises(LiveExecutionError, match="buy limit"):
+        executor._assert_planned_price(Decimal("100"), "BUY", Decimal("100.1"))
+    with pytest.raises(LiveExecutionError, match="sell limit"):
+        executor._assert_planned_price(Decimal("100"), "SELL", Decimal("99.9"))
+    with pytest.raises(LiveExecutionError, match="not enabled"):
+        executor._adapter("mexc")
+    assert executor._client_order_id("hyperliquid", "intent-1", "open_a").startswith(
+        "0x"
+    )
+
+    empty_fill = TradingOrderResult(
+        exchange="bybit",
+        exchange_order_id="empty",
+        client_order_id="empty",
+        exchange_symbol="BTCUSDT",
+        instrument_type=InstrumentType.PERPETUAL,
+        side="BUY",
+        requested_base_quantity=Decimal("1"),
+        filled_base_quantity=Decimal("0"),
+        status=LiveOrderStatus.REJECTED,
+    )
+    with pytest.raises(LiveExecutionError, match="empty fill"):
+        executor._to_leg(empty_fill, Decimal("100"), "BTC")
+    consumed_by_fee = empty_fill.model_copy(
+        update={
+            "instrument_type": InstrumentType.SPOT,
+            "filled_base_quantity": Decimal("0.001"),
+            "average_price": Decimal("100"),
+            "status": LiveOrderStatus.FILLED,
+            "fee": Decimal("0.001"),
+            "fee_currency": "BTC",
+        }
+    )
+    with pytest.raises(LiveExecutionError, match="fee consumed"):
+        executor._to_leg(consumed_by_fee, Decimal("100"), "BTC")
+    with pytest.raises(LiveExecutionError, match="spot base inventory"):
+        executor._validate_spot_inventory(
+            VenueBalance(exchange="bybit"),
+            "BTC_USDT",
+            InstrumentType.SPOT,
+            "SELL",
+            Decimal("1"),
+            Decimal("100"),
+        )
+
+    now = datetime.now(UTC)
+    empty_snapshot = MarketSnapshot(
+        instruments=[],
+        tickers=[],
+        funding=[],
+        orderbooks={},
+        captured_at=now,
+    )
+    with pytest.raises(LiveExecutionError, match="ticker and orderbook"):
+        executor._fresh_book(
+            empty_snapshot,
+            "bybit",
+            "BTCUSDT",
+            InstrumentType.PERPETUAL,
+        )
+    shallow_book = OrderBook(
+        exchange="bybit",
+        symbol="BTCUSDT",
+        instrument_type=InstrumentType.PERPETUAL,
+        bids=(OrderBookLevel(price=Decimal("99.9"), quantity=Decimal("0.1")),),
+        asks=(OrderBookLevel(price=Decimal("100"), quantity=Decimal("0.1")),),
+        timestamp=now,
+    )
+    with pytest.raises(LiveExecutionError, match="insufficient orderbook depth"):
+        executor._ioc_limit_price(shallow_book, "BUY", Decimal("1"))
+    high_slippage_book = shallow_book.model_copy(
+        update={
+            "asks": (
+                OrderBookLevel(price=Decimal("100"), quantity=Decimal("0.5")),
+                OrderBookLevel(price=Decimal("102"), quantity=Decimal("0.5")),
+            )
+        }
+    )
+    with pytest.raises(LiveExecutionError, match="slippage exceeds"):
+        executor._ioc_limit_price(high_slippage_book, "BUY", Decimal("1"))
+
+
+def test_live_approval_validation_rejects_expired_asset_and_strategy(
+    tmp_path: Path,
+) -> None:
+    executor = _helper_executor(tmp_path)
+    settings = executor.settings
+    snapshot = market_snapshot()
+    approval = live_approval(settings, opportunity(), snapshot, "approval-boundaries")
+    expired = approval.model_copy(
+        update={
+            "plan": approval.plan.model_copy(
+                update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+            )
+        }
+    )
+    with pytest.raises(LiveExecutionError, match="approval expired"):
+        executor._validate_approval(expired)
+    with pytest.raises(LiveExecutionError, match="asset is not"):
+        executor._validate_approval(approval.model_copy(update={"asset": "ETH"}))
+    with pytest.raises(LiveExecutionError, match="strategy is not"):
+        executor._validate_approval(
+            approval.model_copy(update={"strategy": "unknown-strategy"})
+        )
+
+
 @pytest.mark.asyncio
 async def test_live_open_and_close_use_exact_filled_base_quantities(
     database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]], tmp_path: Path

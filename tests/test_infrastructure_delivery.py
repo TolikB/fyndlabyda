@@ -92,6 +92,27 @@ def test_compose_uses_optional_secret_overlays_and_live_requires_them() -> None:
     assert "./secrets/exchange/telegram-chat-id" in live
 
 
+def test_acceptance_compose_overlay_pins_measured_image_and_evidence_paths() -> None:
+    compose = yaml.safe_load(_read("docker-compose.acceptance.yml"))
+    app = compose["services"]["app"]
+
+    assert app["image"] == (
+        "${ACCEPTANCE_IMAGE:?ACCEPTANCE_IMAGE must be the measured sha256 image ID}"
+    )
+    assert app["pull_policy"] == "never"
+    assert app["volumes"] == [
+        (
+            "${ACCEPTANCE_EVIDENCE_DIR:?ACCEPTANCE_EVIDENCE_DIR must be set}:"
+            "/var/lib/funding-arbitrage/acceptance"
+        ),
+        (
+            "${ACCEPTANCE_RELEASE_IDENTITY_FILE:?ACCEPTANCE_RELEASE_IDENTITY_FILE "
+            "must be set}:/run/funding-arbitrage/release-identity.json:ro"
+        ),
+    ]
+    assert "privileged" not in app
+
+
 def test_backup_is_stream_encrypted_atomic_and_scoped() -> None:
     backup = _read("scripts/backup_state.sh")
 

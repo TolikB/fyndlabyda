@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -342,6 +343,19 @@ class Settings(BaseSettings):
         gt=0,
         lt=300,
         alias="FUNDING_SNAPSHOT_STALE_SECONDS",
+    )
+    acceptance_collector_enabled: bool = Field(
+        default=False, alias="ACCEPTANCE_COLLECTOR_ENABLED"
+    )
+    acceptance_window_id: str = Field(default="", alias="ACCEPTANCE_WINDOW_ID")
+    acceptance_journal_path: str = Field(
+        default="", alias="ACCEPTANCE_JOURNAL_PATH"
+    )
+    acceptance_sample_interval_seconds: int = Field(
+        default=240,
+        ge=1,
+        le=240,
+        alias="ACCEPTANCE_SAMPLE_INTERVAL_SECONDS",
     )
     paper_initial_balance_usd: Decimal = Field(
         default=Decimal("15000"), gt=0, alias="PAPER_INITIAL_BALANCE_USD"
@@ -1419,6 +1433,64 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError("SCANNER_MAXIMUM_SLIPPAGE_PERCENT must be a decimal ratio")
     if not Decimal("0") <= settings.scanner_maximum_spread_percent <= Decimal("0.05"):
         raise ValueError("SCANNER_MAXIMUM_SPREAD_PERCENT must be a decimal ratio")
+    if settings.acceptance_collector_enabled:
+        acceptance_venues = (
+            "binance",
+            "bybit",
+            "gate",
+            "htx",
+            "hyperliquid",
+            "kucoin",
+            "mexc",
+            "okx",
+        )
+        if settings.run_mode != "paper_test":
+            raise ValueError("ACCEPTANCE_COLLECTOR_ENABLED requires RUN_MODE=paper_test")
+        if mode not in {TradingMode.SHADOW, TradingMode.PAPER}:
+            raise ValueError("acceptance collection requires SHADOW or PAPER mode")
+        if settings.market_data_mode != "live_public":
+            raise ValueError("acceptance collection requires live_public market data")
+        if settings.execution_mode != "paper":
+            raise ValueError("acceptance collection forbids live execution")
+        if tuple(sorted(settings.paper_venue_values)) != acceptance_venues:
+            raise ValueError("acceptance collection requires the exact eight-venue set")
+        if settings.paper_loop_interval_seconds > 10:
+            raise ValueError("acceptance collection requires a cycle interval of at most 10s")
+        if settings.paper_comparison_enabled:
+            raise ValueError("acceptance collection requires one isolated paper namespace")
+        if settings.paper_auto_init_database:
+            raise ValueError("acceptance collection requires a migrated dedicated database")
+        if not settings.acceptance_window_id.strip():
+            raise ValueError("ACCEPTANCE_WINDOW_ID is required for acceptance collection")
+        if re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            settings.acceptance_window_id,
+        ) is None:
+            raise ValueError("ACCEPTANCE_WINDOW_ID has an invalid format")
+        if not settings.acceptance_journal_path.strip() or not Path(
+            settings.acceptance_journal_path
+        ).is_absolute():
+            raise ValueError("ACCEPTANCE_JOURNAL_PATH must be an absolute path")
+        if mode is TradingMode.PAPER and not settings.paper_autotrade:
+            raise ValueError("PAPER acceptance collection requires PAPER_AUTOTRADE=true")
+        if mode is TradingMode.PAPER and (
+            not settings.telegram_enabled
+            or not settings.telegram_bot_token.get_secret_value()
+            or not settings.telegram_chat_id.strip()
+        ):
+            raise ValueError("PAPER acceptance collection requires daily Telegram reporting")
+        if any(
+            value
+            for venue in acceptance_venues
+            for value in settings.live_credentials(venue).values()
+        ):
+            raise ValueError("acceptance collection forbids private exchange credentials")
+        if (
+            settings.live_armed
+            or settings.live_autotrade
+            or settings.live_trading_confirm.strip()
+        ):
+            raise ValueError("acceptance collection forbids live-trading authorization")
     if not 0 <= settings.telegram_report_hour <= 23:
         raise ValueError("TELEGRAM_REPORT_HOUR must be between 0 and 23")
     if not 0 <= settings.telegram_report_minute <= 59:

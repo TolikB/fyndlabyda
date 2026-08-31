@@ -62,10 +62,14 @@ silently changing its result under new thresholds.
 
 ## Operator workflow
 
-A deployment-specific collector must write a raw `AcceptanceWindowSealInput` JSON
-document. It must not contain secrets or private exchange payloads. This change
-adds the contract, sealer, and verifier; wiring the collector to an exact runtime
-namespace is still required before an elapsed gate can begin. Raw input must use
+A deployment-specific collector now writes a durable append-only JSONL journal
+from the exact paper runner. It blocks entries until a clean eight-venue first
+checkpoint, refuses private exchange credentials and reused namespaces, and
+permanently blocks entries after any acceptance violation. The collector never
+stores secrets or private exchange payloads. `scripts/runtime_acceptance.py`
+binds it to the root-owned release identity and assembles the journal plus
+independent failure/replay attachments into `AcceptanceWindowSealInput` JSON.
+The full operator procedure is `ops/ACCEPTANCE_RUNTIME_RUNBOOK.md`. Raw input uses
 `document_kind: acceptance-window-seal-input` and `schema_version: 1`; the
 loader dispatches on both values. The checked-in schema is
 `config/schemas/acceptance-window-seal-input-v1.json` and its drift check is:
@@ -165,9 +169,10 @@ immutable bundle even when `accepted` is false. Existing evidence paths are neve
 overwritten.
 
 The SHA-256 chain alone is not an operator identity or CI signature. The code now
-contains independent artifact, collector-signature, and anchor-receipt verification,
-but both gates intentionally remain `partial` until a deployment collector and
-separate external anchor produce real elapsed evidence for one exact release.
+contains the runtime collector plus independent artifact, collector-signature,
+and anchor-receipt verification, but both gates intentionally remain `partial`
+until the required real elapsed windows and separate external anchor produce
+accepted evidence for one exact release.
 
 This contract only makes evidence machine-verifiable. It does not grant order or
 withdrawal authority and it does not make Limited Live eligible by itself.

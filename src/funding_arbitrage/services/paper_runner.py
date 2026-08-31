@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import and_, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -71,6 +72,9 @@ from funding_arbitrage.portfolio.position import PaperPosition, PositionState
 from funding_arbitrage.risk.engine import RiskEngine, RiskLimits
 from funding_arbitrage.services.daily_report import DailyReportService
 from funding_arbitrage.services.runtime import RuntimeState
+
+if TYPE_CHECKING:
+    from funding_arbitrage.qa.runtime_acceptance import RuntimeAcceptanceCollector
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +168,7 @@ class PaperTestRunner:
             Callable[[datetime], PortfolioSnapshot | None] | None
         ) = None,
         canonical_consumer_barrier: Callable[[], Awaitable[None]] | None = None,
+        acceptance_collector: RuntimeAcceptanceCollector | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -227,13 +232,22 @@ class PaperTestRunner:
         self.daily_report = DailyReportService(settings, session_factory)
         self._restore_lock = asyncio.Lock()
         self._restored = False
+        self._prepare_lock = asyncio.Lock()
+        self._run_prepared = False
+        self.acceptance_collector = acceptance_collector
+        if self.acceptance_collector is None and settings.acceptance_collector_enabled:
+            from funding_arbitrage.qa.runtime_acceptance import (
+                RuntimeAcceptanceCollector,
+            )
+
+            self.acceptance_collector = RuntimeAcceptanceCollector.from_settings(
+                settings,
+                runtime,
+                session_factory,
+            )
 
     async def run(self) -> None:
-        await self.restore(restore_history=True)
-        await _persist_runner_start(
-            self.session_factory,
-            (self.settings.paper_simulation_version,),
-        )
+        await self.prepare_run()
         while not self.stop_event.is_set():
             started = time.monotonic()
             try:
@@ -257,6 +271,11 @@ class PaperTestRunner:
             except Exception as error:
                 paper_runner_errors_total.inc()
                 logger.exception("paper_test_cycle_failed")
+                if self.acceptance_collector is not None:
+                    try:
+                        await self.acceptance_collector.record_runner_failure()
+                    except Exception:
+                        logger.exception("acceptance_runtime_failure_record_failed")
                 await _persist_runtime_incident(
                     self.session_factory,
                     (self.settings.paper_simulation_version,),
@@ -268,6 +287,21 @@ class PaperTestRunner:
                 started,
                 self.settings.paper_loop_interval_seconds,
             )
+
+    async def prepare_run(self) -> None:
+        """Prepare restart evidence and acceptance state before the runner task starts."""
+
+        async with self._prepare_lock:
+            if self._run_prepared:
+                return
+            await self.restore(restore_history=True)
+            await _persist_runner_start(
+                self.session_factory,
+                (self.settings.paper_simulation_version,),
+            )
+            if self.acceptance_collector is not None:
+                await self.acceptance_collector.start()
+            self._run_prepared = True
 
     async def stop(self) -> None:
         self.stop_event.set()
@@ -295,6 +329,16 @@ class PaperTestRunner:
                 logger.exception(
                     "paper_shutdown_component_failed",
                     extra={"component": "public_event_supervisor"},
+                )
+        if self.acceptance_collector is not None:
+            try:
+                await self.acceptance_collector.close()
+            except Exception as error:
+                resources_closed_cleanly = False
+                errors.append(error)
+                logger.exception(
+                    "paper_shutdown_component_failed",
+                    extra={"component": "acceptance_collector"},
                 )
         if send_stopped and resources_closed_cleanly:
             try:
@@ -377,6 +421,8 @@ class PaperTestRunner:
                 venue: sorted(symbols) for venue, symbols in forced_history.items()
             },
         )
+        if self.acceptance_collector is not None:
+            await self.acceptance_collector.observe_market_snapshot(snapshot)
         paper_runner_stage_duration_seconds.labels("collect").observe(
             time.monotonic() - stage_started
         )
@@ -388,6 +434,10 @@ class PaperTestRunner:
             for venue in runner._missing_mark_venues(snapshot)
         }
         if missing_mark_venues:
+            if self.acceptance_collector is not None:
+                await self.acceptance_collector.record_market_gap(
+                    tuple(sorted(missing_mark_venues))
+                )
             raise IncompleteMarketSnapshotError(tuple(sorted(missing_mark_venues)))
         if self.public_events is not None:
             await self.public_events.observe_snapshot(snapshot)
@@ -411,6 +461,8 @@ class PaperTestRunner:
             self.runtime.update_market,
             snapshot,
         )
+        if self.acceptance_collector is not None:
+            self.acceptance_collector.record_strategy_evaluation(opportunities)
         paper_runner_stage_duration_seconds.labels("scan").observe(
             time.monotonic() - stage_started
         )
@@ -448,8 +500,15 @@ class PaperTestRunner:
         self.runtime.refresh_portfolio_metrics()
         stage_started = time.monotonic()
         await self._persist_portfolio(snapshot.captured_at)
-        await self.daily_report.check_and_send(snapshot.captured_at)
+        daily_report_sent = await self.daily_report.check_and_send(
+            snapshot.captured_at
+        )
         self.runtime.last_completed_snapshot = snapshot
+        if self.acceptance_collector is not None:
+            self.acceptance_collector.record_successful_cycle(
+                snapshot,
+                daily_report_sent=daily_report_sent,
+            )
         paper_runner_stage_duration_seconds.labels("portfolio_persist").observe(
             time.monotonic() - stage_started
         )
@@ -880,6 +939,8 @@ class PaperTestRunner:
         *,
         risk_reasons: tuple[str, ...] = (),
     ) -> None:
+        if self.acceptance_collector is not None:
+            self.acceptance_collector.record_risk_rejection()
         profile = self.settings.paper_strategy_profile
         paper_trade_rejections_total.labels(profile, reason).inc()
         logger.info(

@@ -103,6 +103,7 @@ async def save_directional_paper_page(
                     session,
                     update.position,
                     update.position.entry_order,
+                    projection.event,
                 )
                 for exit_order in update.position.exit_orders:
                     await _save_order(
@@ -111,7 +112,12 @@ async def save_directional_paper_page(
                         exit_order,
                         reduce_only=True,
                     )
-                    await _save_fills(session, update.position, exit_order)
+                    await _save_fills(
+                        session,
+                        update.position,
+                        exit_order,
+                        projection.event,
+                    )
             if projection.portfolio_snapshot is not None:
                 snapshot = projection.portfolio_snapshot
                 session.add(
@@ -283,6 +289,7 @@ async def _save_fills(
     session: AsyncSession,
     position: DirectionalPaperPosition,
     order: DirectionalPaperOrder,
+    source_event: EventEnvelope[Any],
 ) -> None:
     for index, fill in enumerate(order.fills):
         fill_id = _stable_id(
@@ -293,7 +300,21 @@ async def _save_fills(
             str(fill.quantity),
             str(fill.price),
         )
-        payload = fill.model_dump(mode="json")
+        legacy_payload = fill.model_dump(mode="json")
+        payload = {
+            "fill": legacy_payload,
+            "source_event_id": source_event.metadata.event_id,
+            "source_event_kind": source_event.kind.value,
+            "source_event_source": source_event.metadata.source,
+            "source_event_quality": source_event.metadata.quality.value,
+            "source_exchange_timestamp": (
+                source_event.metadata.exchange_timestamp.isoformat()
+            ),
+            "source_receive_timestamp": (
+                source_event.metadata.receive_timestamp.isoformat()
+            ),
+            "source_instrument": position.instrument.model_dump(mode="json"),
+        }
         record = await session.scalar(
             select(ExecutionFillRecord).where(
                 ExecutionFillRecord.venue == position.instrument.venue,
@@ -301,7 +322,8 @@ async def _save_fills(
             )
         )
         if record is not None:
-            if _hash(record.payload) != _hash(payload):
+            stored_fill = _stored_fill_payload(record.payload)
+            if stored_fill is None or _hash(stored_fill) != _hash(legacy_payload):
                 raise DirectionalPaperIntegrityError("paper fill identity collision")
             continue
         session.add(
@@ -372,6 +394,13 @@ def _hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _stored_fill_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    nested = payload.get("fill")
+    if nested is None:
+        return payload
+    return nested if isinstance(nested, dict) else None
 
 
 def _stable_id(prefix: str, *parts: str) -> str:

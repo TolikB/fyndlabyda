@@ -33,10 +33,20 @@ from funding_arbitrage.qa.acceptance_window import (
     AcceptanceWindowSealInput,
 )
 from funding_arbitrage.qa.load_slo import LoadSLOConfig, LoadSLOReport, run_load_slo
+from funding_arbitrage.qa.runtime_acceptance import (
+    AcceptanceRuntimeAttachments,
+    AcceptanceRuntimeJournalHeader,
+    RuntimeAcceptanceCollector,
+    acceptance_config_sha256,
+    build_acceptance_seal_input,
+    load_runtime_acceptance_journal,
+)
 
 __all__ = [
     "AcceptanceGate",
     "AcceptanceReplayCostPolicy",
+    "AcceptanceRuntimeAttachments",
+    "AcceptanceRuntimeJournalHeader",
     "AcceptanceWindowBundle",
     "AcceptanceWindowEvaluation",
     "AcceptanceWindowSealInput",
@@ -47,6 +57,7 @@ __all__ = [
     "ExternalAnchorReceipt",
     "LocalAcceptanceProvenanceVerifier",
     "RuntimeReleaseIdentity",
+    "RuntimeAcceptanceCollector",
     "TrustedKeyring",
     "TrustedPublicKey",
     "audit_acceptance_replay_rows",
@@ -57,10 +68,13 @@ __all__ = [
     "acceptance_replay_cost_policy_sha256",
     "acceptance_replay_runner_sha256",
     "acceptance_replay_schema",
+    "acceptance_config_sha256",
     "anchor_receipt_sha256",
     "anchor_signature_payload",
     "collector_signature_payload",
+    "build_acceptance_seal_input",
     "load_acceptance_trust_policy",
+    "load_runtime_acceptance_journal",
     "load_runtime_release_identity",
     "provenance_envelope_sha256",
     "trusted_keyring_sha256",

@@ -148,6 +148,7 @@ async def test_paper_projection_fills_and_checkpoint_are_exactly_once() -> None:
         await save_directional_paper_event(session, _event(), (update,), event_row_id=1)
         positions = await load_directional_paper_positions(session)
         checkpoint = await load_directional_paper_checkpoint(session)
+        stored_fill = await session.scalar(select(ExecutionFillRecord))
         counts = []
         for model in (
             PositionStateRecord,
@@ -162,11 +163,63 @@ async def test_paper_projection_fills_and_checkpoint_are_exactly_once() -> None:
     await engine.dispose()
     assert counts == [1, 1, 1, 1]
     assert positions == (_position(),)
+    assert stored_fill is not None
+    assert stored_fill.payload["source_event_id"] == "book-1"
+    assert stored_fill.payload["source_event_kind"] == "BOOK_SNAPSHOT"
+    assert stored_fill.payload["source_event_quality"] == "VALID"
+    assert stored_fill.payload["fill"] == _position().entry_order.fills[0].model_dump(
+        mode="json"
+    )
     assert checkpoint == DirectionalPaperCheckpoint(
         event_row_id=1,
         event_id="book-1",
         event_timestamp=NOW + timedelta(seconds=1),
     )
+
+
+async def test_reprojection_keeps_original_fill_book_provenance() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _event()
+    second_time = NOW + timedelta(seconds=2)
+    second = first.model_copy(
+        update={
+            "metadata": first.metadata.model_copy(
+                update={
+                    "event_id": "book-2",
+                    "exchange_timestamp": second_time,
+                    "receive_timestamp": second_time,
+                    "monotonic_ns": 2,
+                    "sequence_id": "2",
+                    "native_sequence": 2,
+                }
+            ),
+            "payload": first.payload.model_copy(
+                update={"sequence": 2, "exchange_timestamp": second_time}
+            ),
+        }
+    )
+    update = DirectionalPaperUpdate(position=_position())
+
+    async with factory() as session:
+        await save_directional_paper_event(session, first, (update,), event_row_id=1)
+    async with factory() as session:
+        await save_directional_paper_event(session, second, (update,), event_row_id=2)
+    async with factory() as session:
+        stored_fill = await session.scalar(select(ExecutionFillRecord))
+        fill_count = await session.scalar(
+            select(func.count()).select_from(ExecutionFillRecord)
+        )
+
+    await engine.dispose()
+    assert fill_count == 1
+    assert stored_fill is not None
+    assert stored_fill.payload["source_event_id"] == "book-1"
+    assert stored_fill.payload["source_exchange_timestamp"] == (
+        NOW + timedelta(seconds=1)
+    ).isoformat()
 
 
 async def test_projection_page_persists_updates_and_final_checkpoint_atomically() -> None:

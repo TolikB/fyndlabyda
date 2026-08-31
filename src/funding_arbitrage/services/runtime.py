@@ -91,6 +91,8 @@ class RuntimeState:
         self.backtests: dict[str, BacktestResult] = {}
         self.market_replay_jobs: dict[str, dict[str, object]] = {}
         self.background_tasks: set[asyncio.Task[None]] = set()
+        self._acceptance_entries_enabled = True
+        self._acceptance_entries_permanently_disabled = False
 
     def update_market(self, snapshot: MarketSnapshot) -> list[Opportunity]:
         self.latest_snapshot = snapshot
@@ -193,13 +195,31 @@ class RuntimeState:
         return self.portfolio.snapshot().equity
 
     def entries_allowed(self) -> bool:
-        if not self.mode_contract.new_positions_enabled:
+        if (
+            not self.mode_contract.new_positions_enabled
+            or not self._acceptance_entries_enabled
+        ):
             return False
         return self.entry_health is None or self.entry_health()[0]
+
+    def set_acceptance_entries_enabled(self, enabled: bool) -> None:
+        """Apply the collector's temporary pre-window entry boundary."""
+
+        if enabled and self._acceptance_entries_permanently_disabled:
+            raise RuntimeError("acceptance entry boundary is permanently disabled")
+        self._acceptance_entries_enabled = enabled
+
+    def permanently_disable_acceptance_entries(self) -> None:
+        """Prevent any later code path from reopening a failed acceptance window."""
+
+        self._acceptance_entries_enabled = False
+        self._acceptance_entries_permanently_disabled = True
 
     def entry_block_reason(self) -> str | None:
         if not self.mode_contract.new_positions_enabled:
             return f"trading_mode_{self.trading_mode.value.lower()}_blocks_entries"
+        if not self._acceptance_entries_enabled:
+            return "acceptance_window_not_ready"
         if self.entry_health is None:
             return None
         healthy, reason = self.entry_health()

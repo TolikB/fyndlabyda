@@ -380,6 +380,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     start=datetime.now(UTC)
                     - timedelta(hours=active_settings.multi_regime_restore_hours)
                 )
+            if (
+                isinstance(runner, PaperTestRunner)
+                and runner.acceptance_collector is not None
+            ):
+                await runner.prepare_run()
             task = asyncio.create_task(runner.run(), name="paper-test-runner")
         elif active_settings.run_mode == "live":
             if multi_regime_runtime is not None:

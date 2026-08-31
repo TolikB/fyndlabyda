@@ -1,0 +1,7 @@
+services:
+  app:
+    image: ${ACCEPTANCE_IMAGE:?ACCEPTANCE_IMAGE must be the measured sha256 image ID}
+    pull_policy: never
+    volumes:
+      - ${ACCEPTANCE_EVIDENCE_DIR:?ACCEPTANCE_EVIDENCE_DIR must be set}:/var/lib/funding-arbitrage/acceptance
+      - ${ACCEPTANCE_RELEASE_IDENTITY_FILE:?ACCEPTANCE_RELEASE_IDENTITY_FILE must be set}:/run/funding-arbitrage/release-identity.json:ro
