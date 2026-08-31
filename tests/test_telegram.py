@@ -15,6 +15,7 @@ from funding_arbitrage.config import Settings
 from funding_arbitrage.database.models import (
     ExecutionFillRecord,
     PortfolioSnapshotRecord,
+    PositionStateRecord,
     TelegramDailyReportRecord,
 )
 from funding_arbitrage.notifications.telegram import (
@@ -334,6 +335,82 @@ async def test_daily_report_includes_directional_spread_and_impact_costs(
                 payload={"spread_cost": "99", "impact_cost": "99"},
             )
         )
+        session.add_all(
+            [
+                PositionStateRecord(
+                    position_id="mrp_open",
+                    simulation_version=version,
+                    strategy_id="directional",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:BTC/USDT",
+                    status="OPEN",
+                    signed_quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("101"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("1"),
+                    collateral=Decimal("20"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=None,
+                    updated_at=start + timedelta(hours=3),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="mrp_closed",
+                    simulation_version=version,
+                    strategy_id="directional",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:ETH/USDT",
+                    status="CLOSED",
+                    signed_quantity=Decimal("0"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("101"),
+                    realized_pnl=Decimal("1"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("0"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=start + timedelta(hours=4),
+                    updated_at=start + timedelta(hours=4),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="mrpX_not_directional_open",
+                    simulation_version=version,
+                    strategy_id="other",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:SOL/USDT",
+                    status="OPEN",
+                    signed_quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("100"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("20"),
+                    opened_at=start + timedelta(hours=5),
+                    closed_at=None,
+                    updated_at=start + timedelta(hours=5),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="mrpX_not_directional_closed",
+                    simulation_version=version,
+                    strategy_id="other",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:XRP/USDT",
+                    status="CLOSED",
+                    signed_quantity=Decimal("0"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("100"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("0"),
+                    opened_at=start + timedelta(hours=5),
+                    closed_at=start + timedelta(hours=6),
+                    updated_at=start + timedelta(hours=6),
+                    payload={},
+                ),
+            ]
+        )
         await session.commit()
 
     service = DailyReportService(settings, factory)
@@ -352,6 +429,9 @@ async def test_daily_report_includes_directional_spread_and_impact_costs(
     assert report.day_fees == Decimal("0.25")
     assert report.day_slippage == Decimal("0.50")
     assert report.total_slippage == Decimal("0.50")
+    assert report.opened == 2
+    assert report.closed == 1
+    assert report.open_positions == 1
 
 
 @pytest.mark.asyncio

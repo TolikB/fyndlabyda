@@ -399,6 +399,9 @@ class DailyReportService:
             directional_order = ExecutionFillRecord.client_order_id.like(
                 r"mro\_%", escape="\\"
             )
+            directional_position = PositionStateRecord.position_id.like(
+                r"mrp\_%", escape="\\"
+            )
             directional_spread_cost = func.coalesce(
                 cast(
                     ExecutionFillRecord.payload["spread_cost"].as_string(),
@@ -449,7 +452,7 @@ class DailyReportService:
             )
             directional_opened = await session.scalar(
                 select(func.count(PositionStateRecord.id)).where(
-                    PositionStateRecord.position_id.like("mrp_%"),
+                    directional_position,
                     PositionStateRecord.simulation_version == simulation_version,
                     PositionStateRecord.opened_at >= start,
                     PositionStateRecord.opened_at < end,
@@ -457,7 +460,7 @@ class DailyReportService:
             )
             directional_closed = await session.scalar(
                 select(func.count(PositionStateRecord.id)).where(
-                    PositionStateRecord.position_id.like("mrp_%"),
+                    directional_position,
                     PositionStateRecord.simulation_version == simulation_version,
                     PositionStateRecord.closed_at >= start,
                     PositionStateRecord.closed_at < end,
@@ -465,7 +468,7 @@ class DailyReportService:
             )
             directional_open_positions = await session.scalar(
                 select(func.count(PositionStateRecord.id)).where(
-                    PositionStateRecord.position_id.like("mrp_%"),
+                    directional_position,
                     PositionStateRecord.simulation_version == simulation_version,
                     PositionStateRecord.status.in_(("OPENING", "OPEN", "CLOSING")),
                 )

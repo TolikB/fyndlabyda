@@ -12,6 +12,7 @@ from funding_arbitrage.database.models import (
     Base,
     ExecutionFillRecord,
     PortfolioSnapshotRecord,
+    PositionStateRecord,
 )
 from funding_arbitrage.services.daily_report import DailyReportService
 
@@ -45,6 +46,35 @@ def _fill(
         exchange_timestamp=timestamp,
         receive_timestamp=timestamp,
         payload=payload,
+    )
+
+
+def _position(
+    *,
+    position_id: str,
+    version: str,
+    status: str,
+    opened_at: datetime,
+    closed_at: datetime | None,
+) -> PositionStateRecord:
+    is_open = status == "OPEN"
+    return PositionStateRecord(
+        position_id=position_id,
+        simulation_version=version,
+        strategy_id="directional" if position_id.startswith("mrp_") else "other",
+        venue="BYBIT",
+        instrument_id=f"BYBIT:PERP:{position_id}/USDT",
+        status=status,
+        signed_quantity=Decimal("1") if is_open else Decimal("0"),
+        entry_price=Decimal("100"),
+        mark_price=Decimal("101"),
+        realized_pnl=Decimal("0") if is_open else Decimal("1"),
+        unrealized_pnl=Decimal("1") if is_open else Decimal("0"),
+        collateral=Decimal("20") if is_open else Decimal("0"),
+        opened_at=opened_at,
+        closed_at=closed_at,
+        updated_at=closed_at or opened_at,
+        payload={},
     )
 
 
@@ -118,6 +148,34 @@ async def test_postgres_directional_cost_json_and_literal_prefix_contract() -> N
                         timestamp=start + timedelta(hours=6),
                         payload={"spread_cost": "99", "impact_cost": "99"},
                     ),
+                    _position(
+                        position_id="mrp_open",
+                        version=version,
+                        status="OPEN",
+                        opened_at=start + timedelta(hours=7),
+                        closed_at=None,
+                    ),
+                    _position(
+                        position_id="mrp_closed",
+                        version=version,
+                        status="CLOSED",
+                        opened_at=start + timedelta(hours=7),
+                        closed_at=start + timedelta(hours=8),
+                    ),
+                    _position(
+                        position_id="mrpX_not_directional_open",
+                        version=version,
+                        status="OPEN",
+                        opened_at=start + timedelta(hours=9),
+                        closed_at=None,
+                    ),
+                    _position(
+                        position_id="mrpX_not_directional_closed",
+                        version=version,
+                        status="CLOSED",
+                        opened_at=start + timedelta(hours=9),
+                        closed_at=start + timedelta(hours=10),
+                    ),
                 ]
             )
             await session.commit()
@@ -137,6 +195,9 @@ async def test_postgres_directional_cost_json_and_literal_prefix_contract() -> N
         assert report.day_fees == Decimal("0.40")
         assert report.day_slippage == Decimal("0.80")
         assert report.total_slippage == Decimal("0.80")
+        assert report.opened == 2
+        assert report.closed == 1
+        assert report.open_positions == 1
     finally:
         await service.close()
         async with engine.begin() as connection:
