@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from funding_arbitrage.ai import RLAction, RLDecision
 from funding_arbitrage.config import Settings
+from funding_arbitrage.database.models import Base
+from funding_arbitrage.database.repositories.events import append_events
+from funding_arbitrage.database.repositories.multi_regime import save_multi_regime_batch
 from funding_arbitrage.domain.decisions import (
     MarketRegime,
     SignalIntent,
@@ -35,27 +44,46 @@ from funding_arbitrage.exchanges.base.models import (
     NormalizedInstrument,
 )
 from funding_arbitrage.features.orderflow import OrderFlowFeatureSnapshot
+from funding_arbitrage.features.structure import (
+    MarketStructureSnapshot,
+    StructureDirection,
+)
 from funding_arbitrage.features.technical import TechnicalFeatureSnapshot
 from funding_arbitrage.market_data.collector import MarketSnapshot
-from funding_arbitrage.regime import RegimeThresholds
+from funding_arbitrage.regime import RegimeSnapshot, RegimeThresholds
 from funding_arbitrage.risk.margin import PortfolioMarginAssessment
 from funding_arbitrage.risk.portfolio import (
     PortfolioRiskAuthority,
     RiskAuthorizationContext,
 )
+from funding_arbitrage.services.decision_support import (
+    BoundDecisionSupport,
+    DecisionSupportGate,
+)
 from funding_arbitrage.services.multi_regime import (
     MultiRegimeDecisionBatch,
     MultiRegimeEngine,
     MultiRegimeEngineConfig,
+    MultiRegimeStrategySnapshot,
 )
 from funding_arbitrage.services.multi_regime_runtime import (
+    DurableMultiRegimeRuntime,
     RuntimePortfolioRiskContextProvider,
+    RuntimeSupplementalStrategyContextProvider,
 )
 from funding_arbitrage.services.runtime import RuntimeState
+from funding_arbitrage.services.strategy_suite import (
+    LeadLagStrategyContext,
+    StrategyFamily,
+    StrategySuiteResult,
+    SupplementalStrategyContexts,
+)
 from funding_arbitrage.signals import SignalDecisionStatus
 from funding_arbitrage.strategies import (
     DirectionalStrategyContext,
     DirectionalStrategyEvaluation,
+    LeadLagCostModel,
+    VenueFairValueInput,
 )
 
 START = datetime(2026, 8, 20, 12, tzinfo=UTC)
@@ -130,6 +158,8 @@ def _risk_context(
     technical: TechnicalFeatureSnapshot,
     book: BookSnapshot,
     timestamp: datetime,
+    *,
+    decision_support_multiplier: Decimal = Decimal("1"),
 ) -> RiskAuthorizationContext:
     price = technical.close
     assert intent.structural_stop is not None
@@ -155,6 +185,7 @@ def _risk_context(
         correlation_multiplier=Decimal("1"),
         drawdown_multiplier=Decimal("1"),
         regime_multiplier=Decimal("1"),
+        decision_support_multiplier=decision_support_multiplier,
         equity_usd=Decimal("10000"),
         cash_usd=Decimal("10000"),
         portfolio_gross_notional_usd=Decimal("0"),
@@ -175,7 +206,19 @@ def _risk_context(
     )
 
 
-def _engine() -> MultiRegimeEngine:
+def _engine(
+    *,
+    supplemental_context_provider: Callable[
+        [MultiRegimeStrategySnapshot], SupplementalStrategyContexts | None
+    ]
+    | None = None,
+    decision_support_provider: Callable[
+        [MultiRegimeStrategySnapshot, StrategySuiteResult],
+        tuple[BoundDecisionSupport, ...],
+    ]
+    | None = None,
+    risk_context_decision_support_multiplier: Decimal = Decimal("1"),
+) -> MultiRegimeEngine:
     config = MultiRegimeEngineConfig(
         mode=TradingMode.REPLAY,
         stale_after_seconds=120,
@@ -195,13 +238,21 @@ def _engine() -> MultiRegimeEngine:
         timestamp: datetime,
     ) -> RiskAuthorizationContext:
         del orderflow
-        return _risk_context(intent, technical, book, timestamp)
+        return _risk_context(
+            intent,
+            technical,
+            book,
+            timestamp,
+            decision_support_multiplier=risk_context_decision_support_multiplier,
+        )
 
     engine = MultiRegimeEngine(
         config,
         risk_context_provider=risk_provider,
         breakout_strategy=DeterministicIntentStrategy(),
         sweep_strategy=RejectingStrategy(),
+        supplemental_context_provider=supplemental_context_provider,
+        decision_support_provider=decision_support_provider,
         regime_thresholds=RegimeThresholds(
             trend_adx_min=Decimal("100"),
             trend_efficiency_min=Decimal("1"),
@@ -217,6 +268,85 @@ def _engine() -> MultiRegimeEngine:
         ),
     )
     return engine
+
+
+def _reducing_decision_support(
+    snapshot: MultiRegimeStrategySnapshot,
+    suite: StrategySuiteResult,
+) -> tuple[BoundDecisionSupport, ...]:
+    intent = next(
+        item
+        for item in suite.intents
+        if item.signal_type is SignalType.ORDERFLOW_BREAKOUT
+    )
+    decision = RLDecision(
+        decision_id=f"rl-reduce-{intent.signal_id}",
+        action=RLAction.REDUCE_50,
+        requested_position_fraction_change=Decimal("-0.50"),
+        used_fallback=False,
+        reason="rl_policy_action",
+        policy_version="rl-runtime-test-v1",
+    )
+    return (
+        BoundDecisionSupport.bind(
+            intent,
+            snapshot.timestamp,
+            rl=decision,
+        ),
+    )
+
+
+def _lead_lag_contexts(
+    snapshot: MultiRegimeStrategySnapshot,
+) -> SupplementalStrategyContexts:
+    reference_price = snapshot.technical.close
+
+    def instrument(venue: str) -> InstrumentKey:
+        return snapshot.instrument.model_copy(
+            update={"venue": venue, "exchange_symbol": f"BTCUSDT-{venue}"}
+        )
+
+    def venue_input(
+        venue: str,
+        price: Decimal,
+        *,
+        primary: bool = False,
+    ) -> VenueFairValueInput:
+        return VenueFairValueInput(
+            instrument=snapshot.instrument if primary else instrument(venue),
+            timestamp=snapshot.timestamp,
+            data_quality=DataQuality.VALID,
+            mid_price=price,
+            microprice=price,
+            liquidity_score=Decimal("1"),
+        )
+
+    return SupplementalStrategyContexts(
+        lead_lag=(
+            LeadLagStrategyContext(
+                primary=venue_input(
+                    snapshot.instrument.venue,
+                    reference_price * Decimal("1.01"),
+                    primary=True,
+                ),
+                references=(
+                    venue_input("GATE", reference_price),
+                    venue_input("OKX", reference_price),
+                ),
+                timestamp=snapshot.timestamp,
+                mode=snapshot.mode,
+                regime=snapshot.regime.regime,
+                costs=LeadLagCostModel(
+                    fees_bps=Decimal("1"),
+                    spread_bps=Decimal("1"),
+                    slippage_bps=Decimal("1"),
+                    adverse_selection_bps=Decimal("1"),
+                ),
+                inventory_available=True,
+                transfer_ready=True,
+            ),
+        )
+    )
 
 
 def _envelope(
@@ -323,6 +453,241 @@ def test_canonical_event_replay_drives_features_regime_signal_risk_and_plan() ->
     assert result.execution_plans[0].signal_id == intent.signal_id
     assert result.execution_plans[0].instructions[0].quantity > 0
     assert result.risk_context_missing_signal_ids == ()
+
+
+def test_supplemental_strategy_shares_orchestration_but_cannot_bypass_planner() -> None:
+    batches = _replay(
+        _engine(supplemental_context_provider=_lead_lag_contexts),
+        _events(),
+    )
+
+    result = next(
+        batch
+        for batch in batches
+        if batch.execution_plans and batch.execution_blocks
+    )
+    suite = result.strategy_suite
+    assert suite is not None
+    lead_lag = next(
+        evaluation
+        for evaluation in suite.evaluations
+        if evaluation.family is StrategyFamily.CROSS_EXCHANGE_LEAD_LAG
+    )
+    assert lead_lag.intent is not None
+    assert len(result.execution_blocks) == 1
+    assert result.execution_blocks[0].signal_id == lead_lag.intent.signal_id
+    assert result.execution_blocks[0].reason == "execution_planner_unavailable"
+    assert len(result.execution_plans) == 1
+    assert len(result.risk_authorizations) == 1
+    assert result.execution_plans[0].signal_id != lead_lag.intent.signal_id
+    assert lead_lag.intent.signal_id not in result.risk_context_missing_signal_ids
+    restored = MultiRegimeDecisionBatch.model_validate(result.model_dump(mode="json"))
+    assert restored.model_dump(mode="json") == result.model_dump(mode="json")
+
+
+def test_ai_decision_support_can_only_reduce_portfolio_risk_size() -> None:
+    events = _events()
+    baseline = next(
+        batch
+        for batch in _replay(_engine(), events)
+        if batch.execution_plans
+    )
+    reduced = next(
+        batch
+        for batch in _replay(
+            _engine(decision_support_provider=_reducing_decision_support),
+            events,
+        )
+        if batch.execution_plans
+    )
+
+    assert len(reduced.decision_support_assessments) == 1
+    assessment = reduced.decision_support_assessments[0]
+    assert assessment.accepted is True
+    assert assessment.risk_multiplier == Decimal("0.50")
+    baseline_risk = baseline.risk_authorizations[0]
+    reduced_risk = reduced.risk_authorizations[0]
+    assert reduced_risk.hierarchy.combined_multiplier == Decimal("0.50")
+    assert reduced_risk.decision.decision_support_multiplier == Decimal("0.50")
+    assert reduced_risk.decision.approved_notional < baseline_risk.decision.approved_notional
+    assert reduced.execution_plans[0].instructions[0].quantity == (
+        reduced_risk.decision.approved_quantity
+    )
+
+
+def test_ai_decision_support_cannot_relax_an_existing_risk_reduction() -> None:
+    reduced = next(
+        batch
+        for batch in _replay(
+            _engine(
+                decision_support_provider=_reducing_decision_support,
+                risk_context_decision_support_multiplier=Decimal("0.25"),
+            ),
+            _events(),
+        )
+        if batch.execution_plans
+    )
+
+    authorization = reduced.risk_authorizations[0]
+    assert authorization.decision.decision_support_multiplier == Decimal("0.25")
+    assert authorization.hierarchy.combined_multiplier == Decimal("0.25")
+
+
+async def test_restart_restores_persisted_ai_outcome_without_reinvoking_provider() -> None:
+    source_calls = 0
+
+    def source_provider(
+        snapshot: MultiRegimeStrategySnapshot,
+        suite: StrategySuiteResult,
+    ) -> tuple[BoundDecisionSupport, ...]:
+        nonlocal source_calls
+        source_calls += 1
+        return _reducing_decision_support(snapshot, suite)
+
+    events = _events()
+    persisted = _replay(
+        _engine(decision_support_provider=source_provider),
+        events,
+    )
+    assert persisted
+    assert source_calls > 0
+
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    async with factory() as session:
+        await append_events(session, tuple(events))
+    for batch in persisted:
+        async with factory() as session:
+            await save_multi_regime_batch(session, batch)
+
+    restored_calls = 0
+
+    def forbidden_provider(
+        snapshot: MultiRegimeStrategySnapshot,
+        suite: StrategySuiteResult,
+    ) -> tuple[BoundDecisionSupport, ...]:
+        del snapshot, suite
+        nonlocal restored_calls
+        restored_calls += 1
+        raise AssertionError("historical AI provider must not be re-invoked")
+
+    restored_engine = _engine(decision_support_provider=forbidden_provider)
+    runtime = DurableMultiRegimeRuntime(restored_engine, factory)
+
+    restored_count = await runtime.restore_features(start=START)
+
+    final_batch = persisted[-1]
+    restored_state = restored_engine.orchestrator.orchestrate(
+        (), final_batch.timestamp
+    )
+    await database.dispose()
+    assert restored_count == len(events)
+    assert restored_calls == 0
+    assert restored_state.active == final_batch.orchestration.active
+    assert (
+        runtime.latest_by_instrument[final_batch.instrument.canonical_id]
+        == final_batch
+    )
+
+
+def test_directional_planner_binds_approved_risk_and_exact_exposure() -> None:
+    batch = next(
+        batch for batch in _replay(_engine(), _events()) if batch.execution_plans
+    )
+    intent = next(
+        evaluation.intent
+        for evaluation in batch.evaluations
+        if evaluation.intent is not None
+    )
+    decision = batch.risk_authorizations[0].decision
+
+    assert MultiRegimeEngine._plan(intent, decision, batch.timestamp).signal_id == (
+        intent.signal_id
+    )
+    with pytest.raises(ValueError, match="requires approved risk"):
+        MultiRegimeEngine._plan(
+            intent,
+            decision.model_copy(
+                update={
+                    "approved": False,
+                    "rejection_reason": "test",
+                    "approved_risk_usdt": Decimal("0"),
+                    "approved_quantity": Decimal("0"),
+                    "approved_notional": Decimal("0"),
+                }
+            ),
+            batch.timestamp,
+        )
+    with pytest.raises(ValueError, match="risk signal identity mismatch"):
+        MultiRegimeEngine._plan(
+            intent,
+            decision.model_copy(update={"signal_id": "another-signal"}),
+            batch.timestamp,
+        )
+    with pytest.raises(ValueError, match="does not match exposure"):
+        MultiRegimeEngine._plan(
+            intent.model_copy(
+                update={
+                    "legs": (
+                        SignalLeg(
+                            instrument=intent.primary_instrument,
+                            side=Side.SELL,
+                        ),
+                    )
+                }
+            ),
+            decision,
+            batch.timestamp,
+        )
+
+
+def test_batch_validation_rejects_ai_veto_and_cross_signal_risk_bypass() -> None:
+    batch = next(
+        batch
+        for batch in _replay(
+            _engine(decision_support_provider=_reducing_decision_support),
+            _events(),
+        )
+        if batch.execution_plans
+    )
+    payload = batch.model_dump(mode="json")
+    payload["risk_authorizations"][0]["decision"]["signal_id"] = "another-signal"
+    with pytest.raises(ValidationError, match="routed exactly once|identity mismatch"):
+        MultiRegimeDecisionBatch.model_validate(payload)
+
+    relaxed_payload = batch.model_dump(mode="json")
+    relaxed_payload["risk_authorizations"][0]["decision"][
+        "decision_support_multiplier"
+    ] = "0.75"
+    with pytest.raises(ValidationError, match="bypasses decision-support reduction"):
+        MultiRegimeDecisionBatch.model_validate(relaxed_payload)
+
+    intent = batch.strategy_suite.intents[0] if batch.strategy_suite else None
+    assert intent is not None
+    veto_support = BoundDecisionSupport.bind(
+        intent,
+        batch.timestamp,
+        rl=RLDecision(
+            decision_id="rl-close-batch-validation",
+            action=RLAction.CLOSE,
+            requested_position_fraction_change=Decimal("-1"),
+            used_fallback=False,
+            reason="rl_policy_action",
+            policy_version="rl-runtime-test-v1",
+        ),
+    )
+    veto = DecisionSupportGate().assess(intent, veto_support, batch.timestamp)
+    veto_payload = batch.model_dump(mode="json")
+    veto_payload["decision_support_assessments"] = [
+        veto.model_dump(mode="json")
+    ]
+    with pytest.raises(
+        ValidationError,
+        match="decision-support-gated suite|AI-rejected",
+    ):
+        MultiRegimeDecisionBatch.model_validate(veto_payload)
 
 
 def test_multi_regime_replay_is_deterministic_and_idempotent() -> None:
@@ -582,3 +947,84 @@ def test_runtime_risk_context_uses_canonical_uppercase_venue_exposure() -> None:
     assert context.venue_exposures_usd == {"BYBIT": Decimal("3900")}
     authorization = PortfolioRiskAuthority().authorize(context)
     assert authorization.hierarchy.caps_usd["venue:BYBIT"] == Decimal("100")
+
+
+def test_runtime_projects_conservative_market_making_context_without_authority() -> None:
+    settings = Settings(
+        run_mode="paper_test",
+        paper_initial_balance_usd=Decimal("1000"),
+        paper_position_size_usd=Decimal("100"),
+        multi_regime_estimated_cost_bps=Decimal("7"),
+    )
+    runtime = RuntimeState(settings, {}, emit_metrics=False)
+    technical = TechnicalFeatureSnapshot(
+        instrument=INSTRUMENT,
+        timestamp=START,
+        data_quality=DataQuality.VALID,
+        sample_count=100,
+        close=Decimal("100"),
+        ema_fast=Decimal("101"),
+        ema_slow=Decimal("99"),
+        atr=Decimal("2"),
+    )
+    orderflow = OrderFlowFeatureSnapshot(
+        instrument=INSTRUMENT,
+        timestamp=START,
+        data_quality=DataQuality.VALID,
+        mid_price=Decimal("100"),
+        microprice=Decimal("100"),
+        spread_bps=Decimal("2"),
+        cvd=Decimal("0"),
+    )
+    book = BookSnapshot(
+        instrument=INSTRUMENT,
+        bids=(BookLevel(price=Decimal("99.99"), quantity=Decimal("100")),),
+        asks=(BookLevel(price=Decimal("100.01"), quantity=Decimal("100")),),
+        sequence=1,
+        exchange_timestamp=START,
+    )
+    regime = RegimeSnapshot(
+        instrument=INSTRUMENT,
+        timestamp=START,
+        regime=MarketRegime.RANGE,
+        candidate=MarketRegime.RANGE,
+        confidence=Decimal("0.9"),
+        regime_since=START - timedelta(hours=1),
+        dwell_seconds=Decimal("3600"),
+        pending_confirmations=0,
+        data_quality=DataQuality.VALID,
+    )
+    snapshot = MultiRegimeStrategySnapshot(
+        source_event_id="supplemental-event",
+        mode=TradingMode.PAPER,
+        timestamp=START,
+        instrument=INSTRUMENT,
+        book=book,
+        technical=technical,
+        orderflow=orderflow,
+        structure=MarketStructureSnapshot(
+            instrument=INSTRUMENT,
+            timestamp=START,
+            data_quality=DataQuality.VALID,
+            trend=StructureDirection.NEUTRAL,
+        ),
+        regime=regime,
+    )
+    provider = RuntimeSupplementalStrategyContextProvider(runtime)
+
+    contexts = provider(snapshot)
+
+    assert len(contexts.passive_market_making) == 1
+    context = contexts.passive_market_making[0]
+    assert context.inventory.signed_quantity == 0
+    assert context.inventory.maximum_abs_quantity == Decimal("1")
+    assert context.costs.maker_fee_bps_per_fill == settings.bybit_maker_fee * 10_000
+    assert context.costs.expected_hedging_bps == Decimal("7")
+    assert context.short_horizon_volatility_bps == Decimal("200")
+    assert context.live_operator_authorized is False
+    missing_atr = provider(
+        snapshot.model_copy(
+            update={"technical": technical.model_copy(update={"atr": None})}
+        )
+    )
+    assert missing_atr == SupplementalStrategyContexts()

@@ -343,6 +343,14 @@ def _decision_payload() -> dict[str, object]:
             "data_quality": "VALID",
         },
         "evaluations": [],
+        "strategy_suite": {
+            "evaluations": [
+                {
+                    "family": "DIRECTIONAL",
+                    "strategy_id": "orderflow-breakout-v1",
+                }
+            ]
+        },
         "orchestration": {
             "timestamp": NOW.isoformat(),
             "active": [{"intent": {"signal_id": "signal-1"}}],
@@ -350,6 +358,8 @@ def _decision_payload() -> dict[str, object]:
         },
         "risk_authorizations": [{"decision": {"approved": True}}],
         "execution_plans": [{"plan_id": "plan-1"}],
+        "execution_blocks": [{"signal_id": "signal-2"}],
+        "decision_support_assessments": [{"signal_id": "signal-1"}],
         "risk_context_missing_signal_ids": [],
     }
 
@@ -431,6 +441,61 @@ async def test_clickhouse_writer_projects_durable_decision_batch_to_all_domains(
     strategy = json.loads(requests[2].content)
     assert strategy["approved_risk_count"] == 1
     assert strategy["execution_plan_count"] == 1
+    telemetry = json.loads(requests[3].content)
+    telemetry_payload = json.loads(telemetry["payload"])
+    assert telemetry_payload["strategy_evaluation_count"] == 1
+    assert telemetry_payload["execution_block_count"] == 1
+    assert telemetry_payload["decision_support_assessment_count"] == 1
+
+
+async def test_clickhouse_legacy_batch_retains_strategy_evaluation_count() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text="")
+
+    payload = _decision_payload()
+    payload.pop("strategy_suite")
+    payload["batch_id"] = "batch-analytics-legacy"
+    payload["source_event_id"] = "event-legacy"
+    payload["evaluations"] = [
+        {
+            "strategy_id": "legacy-directional-v1",
+            "intent": None,
+            "rejection_reason": "legacy_rejection",
+            "score": "0",
+        }
+    ]
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    batch = DecisionAnalyticsBatch(
+        row_id=2,
+        batch_id="batch-analytics-legacy",
+        source_event_id="event-legacy",
+        instrument_id=_instrument().canonical_id,
+        mode="PAPER",
+        regime="RANGE",
+        event_time=NOW,
+        payload_hash=digest,
+        payload=payload,
+    )
+    client = httpx.AsyncClient(
+        base_url="http://clickhouse:8123",
+        transport=httpx.MockTransport(handler),
+    )
+    writer = ClickHouseHttpWriter(
+        ClickHouseStoragePolicy(username="analytics", password="secret-password"),
+        client,
+    )
+
+    assert await writer.write_decision_batches((batch,)) == 1
+    await client.aclose()
+
+    telemetry = json.loads(requests[-1].content)
+    telemetry_payload = json.loads(telemetry["payload"])
+    assert telemetry_payload["strategy_evaluation_count"] == 1
 
 
 async def test_clickhouse_decision_projection_chunks_expanded_feature_rows() -> None:

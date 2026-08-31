@@ -387,5 +387,5 @@ async def test_delayed_journal_event_loads_batch_by_source_id_not_exchange_time(
     await runtime.restore_features(start=delayed_time)
 
     await database.dispose()
-    assert requested_source_ids == [("delayed-book",)]
+    assert requested_source_ids == [(), ("delayed-book",)]
     assert runtime.paper_replayed_events == 1

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 from funding_arbitrage.backtest.fills import FillModelPolicy, SimulatedOrderState
@@ -58,6 +60,7 @@ class BatchStub(BaseModel):
     evaluations: tuple[DirectionalStrategyEvaluation, ...]
     risk_authorizations: tuple[PortfolioRiskAuthorization, ...]
     execution_plans: tuple[ExecutionPlan, ...]
+    decision_support_assessments: tuple[Any, ...] = ()
 
 
 def _batch(*, quantity: Decimal = Decimal("1"), ttl_seconds: int = 15) -> BatchStub:
@@ -217,6 +220,47 @@ def test_simulation_versions_produce_isolated_position_and_order_ids() -> None:
         candidate_position.entry_order.client_order_id
         != baseline_position.entry_order.client_order_id
     )
+
+
+def test_paper_broker_revalidates_risk_leg_and_ai_veto_boundaries() -> None:
+    batch = _batch()
+    authorization = batch.risk_authorizations[0]
+    wrong_risk = authorization.model_copy(
+        update={
+            "decision": authorization.decision.model_copy(
+                update={"signal_id": "another-signal"}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="risk signal identity mismatch"):
+        _broker().submit(
+            cast(Any, batch.model_copy(update={"risk_authorizations": (wrong_risk,)}))
+        )
+
+    plan = batch.execution_plans[0]
+    wrong_leg = plan.instructions[0].model_copy(update={"side": Side.SELL})
+    with pytest.raises(ValueError, match="approved signal exposure"):
+        _broker().submit(
+            cast(
+                Any,
+                batch.model_copy(
+                    update={
+                        "execution_plans": (
+                            plan.model_copy(update={"instructions": (wrong_leg,)}),
+                        )
+                    }
+                ),
+            )
+        )
+
+    veto = SimpleNamespace(signal_id=plan.signal_id, accepted=False)
+    with pytest.raises(ValueError, match="decision-support veto"):
+        _broker().submit(
+            cast(
+                Any,
+                batch.model_copy(update={"decision_support_assessments": (veto,)}),
+            )
+        )
 
 
 def test_paper_broker_opens_targets_and_closes_with_net_pnl() -> None:

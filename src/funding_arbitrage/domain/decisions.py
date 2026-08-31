@@ -147,6 +147,7 @@ class RiskDecision(BaseModel):
     correlation_multiplier: Decimal = Field(ge=0, le=1)
     drawdown_multiplier: Decimal = Field(ge=0, le=1)
     regime_multiplier: Decimal = Field(ge=0, le=1)
+    decision_support_multiplier: Decimal = Field(default=Decimal("1"), ge=0, le=1)
 
     @field_validator("decided_at")
     @classmethod

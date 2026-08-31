@@ -1,21 +1,54 @@
 # Multi-regime runtime
 
 The application consumes the same durable canonical market events in live-public,
-paper, and replay flows. The directional path is:
+paper, and replay flows. The decision path is:
 
     canonical event commit
       -> exact PostgreSQL journal-row catch-up
       -> 1m to completed 15m/1h candle aggregation
       -> technical/order-flow/structure/derivatives features
       -> hysteretic regime classification
-      -> breakout and sweep/reversion evaluations
-      -> TTL/deduplication/conflict orchestration
+      -> one typed StrategySuiteRequest
+      -> breakout/sweep plus available supplemental strategy evaluations
+      -> normalized, deterministic strategy records with raw audit payloads
+      -> optional intent-bound ML/RL/LLM veto or risk reduction
+      -> TTL/deduplication/conflict orchestration across emitted intents
+      -> execution-capability gate
       -> portfolio risk authorization
       -> expiring execution plan
       -> multi_regime_decision_batches + risk_decisions
       -> PAPER-only deterministic order-book fills
       -> OMS/fill/position projections + paper checkpoint
       -> stop, target, time-stop, or partial-entry flatten
+
+`StrategySuite` is declarative and has no order or sizing authority. It normalizes
+directional, funding/basis, lead-lag/stat-arb, dated-futures basis, options,
+passive-market-making, Martingale, grid, and loss-averaging evaluations. Context
+mode/timestamp mismatches, duplicate contexts, duplicate signal identities, and
+future inputs fail closed. The complete normalized suite is embedded in the durable
+decision batch, so PostgreSQL replay and the read-only `/strategies` endpoint expose
+the same evaluation evidence.
+
+AI support is a separate immutable boundary. A meta-label, RL decision, or audited
+LLM result must be fingerprint-bound to the exact `SignalIntent`. It may veto the
+intent or lower a dedicated portfolio-risk multiplier. Positive RL sizing actions
+are explicitly ignored, and every AI model says `execution_authorized=false` by
+schema. Malformed identity, future/stale timing, duplicate support, or support for a
+non-actionable signal fails the canonical consumer closed.
+
+Historical startup replay never calls an AI provider. Feature state is rebuilt
+without evaluating strategies, then persisted source-event-bound decision batches
+restore signal deduplication and active allocation state. A mismatch in mode,
+signal identity, priority, correlation group, or allocation fails startup. The main
+application currently leaves model providers unwired until versioned artifact
+loading and synchronized inference features are available.
+
+The active runtime currently projects a conservative passive-market-making context
+from the canonical L2 book, order-flow snapshot, ATR, configured venue maker fee,
+paper position-size cap, and directional paper inventory. It never grants live
+operator authority. Other advanced contexts require their dedicated synchronized
+multi-instrument projections; absence means no evaluation rather than invented
+zero-cost data.
 
 The consumer is downstream of the raw-event commit. Parallel WebSocket callbacks do
 not define execution order: the runtime catches up by the canonical event table row
@@ -28,9 +61,10 @@ A database failure, identity collision, cursor regression, invalid ordering, or
 consumer failure marks the runtime unhealthy and blocks new entries.
 
 At process start, MULTI_REGIME_RESTORE_HOURS bounds feature warm-up. Historical risk
-is not recomputed because portfolio state is time-dependent; persisted decision
-batches remain authoritative. PAPER positions are restored from their latest durable
-projection, and only canonical rows after the paper checkpoint are replayed.
+and strategy/AI decisions are not recomputed because portfolio/model state is
+time-dependent; persisted decision batches remain authoritative. PAPER positions
+are restored from their latest durable projection, and only canonical rows after
+the paper checkpoint are replayed.
 
 Directional PAPER execution is enabled only when all of these conditions hold:
 
@@ -54,6 +88,15 @@ authenticated funding execution is a separate path. Directional live execution
 remains unavailable until paper/shadow acceptance evidence and an explicit later
 authorization exist.
 
+Only one-leg breakout and sweep/reversion intents currently have a verified planner
+and directional PAPER broker in this runtime. In PAPER, LIMITED_LIVE, and LIVE,
+accepted raw outcomes from every other strategy family are normalized as
+`execution_planner_unavailable` and cannot enter orchestration. In SHADOW/BACKTEST/
+REPLAY they may enter orchestration for measurement, but the decision batch records
+an explicit execution block before risk or planning. SAFE_MODE suppresses every
+intent. This separation prevents an implemented research strategy from being
+mistaken for an executable venue path.
+
 Read-only inspection endpoints:
 
 - GET /multi-regime/status
@@ -63,6 +106,10 @@ Read-only inspection endpoints:
 - GET /strategies
 - GET /signals
 - GET /risk
+
+`GET /strategies` retains the original top-level directional fields and ordering
+(including `score`) and appends advanced suite rows with family/context/evaluation
+identity and raw audit payload. This is additive for existing readers.
 
 Candidate output uses simulator version v32-multi-regime-candidate so its totals do
 not mix with v31 data. Directional positions, OMS orders, fills, and checkpoints are

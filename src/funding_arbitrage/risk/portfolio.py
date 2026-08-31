@@ -64,6 +64,7 @@ class RiskAuthorizationContext(BaseModel):
     correlation_multiplier: Decimal = Field(gt=0, le=1)
     drawdown_multiplier: Decimal = Field(gt=0, le=1)
     regime_multiplier: Decimal = Field(gt=0, le=1)
+    decision_support_multiplier: Decimal = Field(default=ONE, gt=0, le=1)
     equity_usd: Decimal = Field(gt=0)
     cash_usd: Decimal = Field(ge=0)
     portfolio_gross_notional_usd: Decimal = Field(ge=0)
@@ -224,6 +225,7 @@ class PortfolioRiskAuthority:
             context.correlation_multiplier
             * context.drawdown_multiplier
             * context.regime_multiplier
+            * context.decision_support_multiplier
         )
         unrounded = max(ZERO, pre_multiplier * combined_multiplier)
         quantity = (
@@ -266,6 +268,7 @@ class PortfolioRiskAuthority:
             correlation_multiplier=context.correlation_multiplier,
             drawdown_multiplier=context.drawdown_multiplier,
             regime_multiplier=context.regime_multiplier,
+            decision_support_multiplier=context.decision_support_multiplier,
         )
         return PortfolioRiskAuthorization(decision=decision, hierarchy=hierarchy)
 
@@ -305,6 +308,7 @@ class PortfolioRiskAuthority:
             correlation_multiplier=context.correlation_multiplier,
             drawdown_multiplier=context.drawdown_multiplier,
             regime_multiplier=context.regime_multiplier,
+            decision_support_multiplier=context.decision_support_multiplier,
         )
 
 

@@ -167,6 +167,15 @@ class DecisionAnalyticsBatch(BaseModel):
         ):
             if not isinstance(payload.get(key), list):
                 raise ValueError(f"decision analytics {key} payload is invalid")
+        for key in ("execution_blocks", "decision_support_assessments"):
+            if key in payload and not isinstance(payload.get(key), list):
+                raise ValueError(f"decision analytics {key} payload is invalid")
+        if "strategy_suite" in payload and payload.get("strategy_suite") is not None:
+            suite = payload.get("strategy_suite")
+            if not isinstance(suite, dict) or not isinstance(
+                suite.get("evaluations"), list
+            ):
+                raise ValueError("decision analytics strategy_suite payload is invalid")
         return self
 
 
@@ -502,12 +511,23 @@ def _decision_execution_row(batch: DecisionAnalyticsBatch) -> dict[str, Any]:
     payload = batch.payload
     risk = _sequence(payload.get("risk_authorizations"))
     plans = _sequence(payload.get("execution_plans"))
+    blocks = _sequence(payload.get("execution_blocks"))
+    support = _sequence(payload.get("decision_support_assessments"))
+    suite = _mapping(payload.get("strategy_suite"))
+    strategy_evaluations = (
+        _sequence(suite.get("evaluations"))
+        if payload.get("strategy_suite") is not None
+        else _sequence(payload.get("evaluations"))
+    )
     instrument = _mapping(payload.get("instrument"))
     telemetry_payload = {
         "batch_id": batch.batch_id,
+        "strategy_evaluation_count": len(strategy_evaluations),
         "risk_authorization_count": len(risk),
         "approved_risk_count": _approved_risk_count(risk),
         "execution_plan_count": len(plans),
+        "execution_block_count": len(blocks),
+        "decision_support_assessment_count": len(support),
         "risk_context_missing_signal_ids": _sequence(
             payload.get("risk_context_missing_signal_ids")
         ),

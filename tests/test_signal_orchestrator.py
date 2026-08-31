@@ -97,6 +97,16 @@ def test_ttl_mode_edge_and_regime_validation_fail_closed() -> None:
     assert not result.active
 
 
+def test_safe_mode_rejects_every_intent_before_allocation() -> None:
+    intent = _intent("safe", mode=TradingMode.SAFE_MODE)
+
+    result = SignalOrchestrator(TradingMode.SAFE_MODE).orchestrate((intent,), NOW)
+
+    assert result.decisions[0].status is SignalDecisionStatus.REJECTED
+    assert result.decisions[0].reason == "safe_mode_suppressed"
+    assert result.active == ()
+
+
 def test_signal_ids_are_idempotent_and_collisions_are_rejected() -> None:
     orchestrator = SignalOrchestrator(TradingMode.PAPER)
     intent = _intent("same")
@@ -202,3 +212,29 @@ def test_orchestration_clock_cannot_move_backwards() -> None:
 
     with pytest.raises(ValueError, match="cannot move backwards"):
         orchestrator.orchestrate((), NOW - timedelta(seconds=1))
+
+
+def test_persisted_orchestration_restores_active_and_seen_state() -> None:
+    intent = _intent("persisted")
+    persisted = SignalOrchestrator(TradingMode.PAPER).orchestrate((intent,), NOW)
+    restored = SignalOrchestrator(TradingMode.PAPER)
+
+    restored.restore(persisted, (intent,))
+    snapshot = restored.orchestrate((), NOW)
+    duplicate = restored.orchestrate((intent,), NOW)
+
+    assert snapshot.active == persisted.active
+    assert duplicate.decisions[0].status is SignalDecisionStatus.DUPLICATE
+    assert duplicate.decisions[0].reason == "idempotent_replay"
+
+    tampered = persisted.model_copy(
+        update={
+            "active": (
+                persisted.active[0].model_copy(
+                    update={"allocation_weight": Decimal("0.1")}
+                ),
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="allocation mismatch"):
+        SignalOrchestrator(TradingMode.PAPER).restore(tampered, (intent,))

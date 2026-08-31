@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 
 from funding_arbitrage.services.multi_regime_runtime import DurableMultiRegimeRuntime
+from funding_arbitrage.services.strategy_suite import StrategyFamily
 
 router = APIRouter(tags=["multi-regime"])
 
@@ -53,14 +54,7 @@ async def regimes(request: Request) -> list[dict[str, Any]]:
 async def strategies(request: Request) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for batch in _latest(request):
-        rows.extend(
-            {
-                "instrument_id": batch.instrument.canonical_id,
-                "timestamp": batch.timestamp.isoformat(),
-                **evaluation.model_dump(mode="json"),
-            }
-            for evaluation in batch.evaluations
-        )
+        rows.extend(_strategy_rows(batch))
     return rows
 
 
@@ -139,3 +133,42 @@ def _latest(request: Request) -> tuple[Any, ...]:
         runtime.latest_by_instrument[key]
         for key in sorted(runtime.latest_by_instrument)
     )
+
+
+def _strategy_rows(batch: Any) -> list[dict[str, Any]]:
+    """Preserve legacy directional rows and append normalized advanced rows."""
+
+    rows = [
+        {
+            "instrument_id": batch.instrument.canonical_id,
+            "timestamp": batch.timestamp.isoformat(),
+            "family": StrategyFamily.DIRECTIONAL.value,
+            **evaluation.model_dump(mode="json"),
+        }
+        for evaluation in batch.evaluations
+    ]
+    if batch.strategy_suite is None:
+        return rows
+    for evaluation in batch.strategy_suite.evaluations:
+        if evaluation.family is StrategyFamily.DIRECTIONAL:
+            continue
+        rows.append(
+            {
+                "instrument_id": batch.instrument.canonical_id,
+                "timestamp": batch.timestamp.isoformat(),
+                **evaluation.evaluation_payload,
+                "evaluation_id": evaluation.evaluation_id,
+                "context_id": evaluation.context_id,
+                "family": evaluation.family.value,
+                "strategy_id": evaluation.strategy_id,
+                "mode": evaluation.mode.value,
+                "intent": (
+                    evaluation.intent.model_dump(mode="json")
+                    if evaluation.intent is not None
+                    else None
+                ),
+                "rejection_reason": evaluation.rejection_reason,
+                "evaluation_payload": evaluation.evaluation_payload,
+            }
+        )
+    return rows

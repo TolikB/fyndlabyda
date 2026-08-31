@@ -315,15 +315,28 @@ class DirectionalPaperBroker:
     def submit(self, batch: MultiRegimeDecisionBatch) -> tuple[DirectionalPaperUpdate, ...]:
         if batch.mode is not TradingMode.PAPER:
             return ()
-        intents = {
-            evaluation.intent.signal_id: evaluation.intent
+        actionable_intents = tuple(
+            evaluation.intent
             for evaluation in batch.evaluations
             if evaluation.intent is not None
-        }
-        decisions = {
-            authorization.decision.decision_id: authorization.decision
+        )
+        intents = {intent.signal_id: intent for intent in actionable_intents}
+        if len(intents) != len(actionable_intents):
+            raise ValueError("paper batch has duplicate directional signal identities")
+        approved_decisions = tuple(
+            authorization.decision
             for authorization in batch.risk_authorizations
             if authorization.decision.approved
+        )
+        decisions = {
+            decision.decision_id: decision for decision in approved_decisions
+        }
+        if len(decisions) != len(approved_decisions):
+            raise ValueError("paper batch has duplicate approved risk identities")
+        ai_rejected_signal_ids = {
+            assessment.signal_id
+            for assessment in getattr(batch, "decision_support_assessments", ())
+            if not assessment.accepted
         }
         updates: list[DirectionalPaperUpdate] = []
         for plan in batch.execution_plans:
@@ -334,8 +347,24 @@ class DirectionalPaperBroker:
             decision = decisions.get(plan.risk_decision_id)
             if intent is None or decision is None:
                 raise ValueError("paper plan is missing its intent or approved risk decision")
+            if plan.signal_id in ai_rejected_signal_ids:
+                raise ValueError("paper plan bypasses a decision-support veto")
+            if decision.signal_id != plan.signal_id:
+                raise ValueError("paper plan and risk signal identity mismatch")
+            if plan.mode is not batch.mode or intent.mode is not batch.mode:
+                raise ValueError("paper plan trading mode mismatch")
             if len(plan.instructions) != 1 or len(intent.legs) != 1:
                 raise ValueError("directional paper execution requires exactly one leg")
+            instruction = plan.instructions[0]
+            leg = intent.legs[0]
+            if (
+                instruction.leg_index != 0
+                or instruction.instrument != leg.instrument
+                or instruction.side is not leg.side
+                or instruction.quantity
+                > decision.approved_quantity * leg.hedge_ratio
+            ):
+                raise ValueError("paper instruction exceeds approved signal exposure")
             position = self._new_position(
                 position_id,
                 plan,

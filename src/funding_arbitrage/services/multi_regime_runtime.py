@@ -47,9 +47,83 @@ from funding_arbitrage.execution.directional_paper import DirectionalPaperBroker
 from funding_arbitrage.services.multi_regime import (
     MultiRegimeDecisionBatch,
     MultiRegimeEngine,
+    MultiRegimeStrategySnapshot,
+)
+from funding_arbitrage.services.strategy_suite import SupplementalStrategyContexts
+from funding_arbitrage.strategies import (
+    MarketMakingContext,
+    MarketMakingCosts,
+    MarketMakingInventory,
 )
 
 logger = logging.getLogger(__name__)
+
+BPS = Decimal("10000")
+
+
+class RuntimeSupplementalStrategyContextProvider:
+    """Project canonical state into conservative, non-executable strategy inputs."""
+
+    def __init__(
+        self,
+        runtime: RuntimeState,
+        paper_broker: DirectionalPaperBroker | None = None,
+    ) -> None:
+        self.runtime = runtime
+        self.paper_broker = paper_broker
+
+    def __call__(
+        self, snapshot: MultiRegimeStrategySnapshot
+    ) -> SupplementalStrategyContexts:
+        atr = snapshot.technical.atr
+        price = snapshot.technical.close
+        fee_schedule = self.runtime.settings.fee_schedules.get(
+            snapshot.instrument.venue.lower()
+        )
+        if atr is None or atr <= 0 or price <= 0 or fee_schedule is None:
+            return SupplementalStrategyContexts()
+        maker_fee, _ = fee_schedule
+        maximum_abs_quantity = (
+            self.runtime.settings.paper_position_size_usd / price
+        )
+        if maximum_abs_quantity <= 0:
+            return SupplementalStrategyContexts()
+        broker = self.paper_broker
+        signed_quantity = (
+            sum(
+                (
+                    position.signed_quantity
+                    for position in broker.active_positions
+                    if position.instrument == snapshot.instrument
+                ),
+                Decimal("0"),
+            )
+            if broker is not None
+            else Decimal("0")
+        )
+        context = MarketMakingContext(
+            instrument=snapshot.instrument,
+            book=snapshot.book,
+            book_quality=snapshot.orderflow.data_quality,
+            orderflow=snapshot.orderflow,
+            inventory=MarketMakingInventory(
+                signed_quantity=signed_quantity,
+                maximum_abs_quantity=maximum_abs_quantity,
+            ),
+            costs=MarketMakingCosts(
+                maker_fee_bps_per_fill=maker_fee * BPS,
+                expected_adverse_selection_bps=Decimal("0"),
+                expected_hedging_bps=(
+                    self.runtime.settings.multi_regime_estimated_cost_bps
+                ),
+            ),
+            short_horizon_volatility_bps=atr / price * BPS,
+            timestamp=snapshot.timestamp,
+            mode=snapshot.mode,
+            regime=snapshot.regime.regime,
+            live_operator_authorized=False,
+        )
+        return SupplementalStrategyContexts(passive_market_making=(context,))
 
 
 class RuntimePortfolioRiskContextProvider:
@@ -313,6 +387,18 @@ class DurableMultiRegimeRuntime:
                     start=start,
                     journal_tip=journal_tip,
                 )
+                if isinstance(self.engine, MultiRegimeEngine):
+                    async with self.session_factory() as session:
+                        persisted_batches = await load_multi_regime_batches(
+                            session,
+                            start=start,
+                            mode=self.engine.config.mode,
+                        )
+                    self.engine.restore_orchestration(persisted_batches)
+                    for batch in persisted_batches:
+                        self.latest_by_instrument[
+                            batch.instrument.canonical_id
+                        ] = batch
                 if self.paper_broker is not None:
                     self.paper_broker.restore(positions)
                     await self._restore_paper_pages(
@@ -352,7 +438,10 @@ class DurableMultiRegimeRuntime:
             if not page:
                 return restored
             for row_id, event in page:
-                self.engine.process(event)
+                if isinstance(self.engine, MultiRegimeEngine):
+                    self.engine.restore_event(event)
+                else:
+                    self.engine.process(event)
                 cursor = row_id
                 restored += 1
 

@@ -66,6 +66,7 @@ from funding_arbitrage.services.multi_regime import (
 from funding_arbitrage.services.multi_regime_runtime import (
     DurableMultiRegimeRuntime,
     RuntimePortfolioRiskContextProvider,
+    RuntimeSupplementalStrategyContextProvider,
 )
 from funding_arbitrage.services.paper_runner import (
     PaperTestRunner,
@@ -248,6 +249,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else None
         )
         risk_provider = RuntimePortfolioRiskContextProvider(runtime, paper_broker)
+        supplemental_provider = RuntimeSupplementalStrategyContextProvider(
+            runtime,
+            paper_broker,
+        )
         multi_regime_engine = MultiRegimeEngine(
             MultiRegimeEngineConfig(
                 mode=runtime_mode,
@@ -267,6 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 estimated_cost_bps=active_settings.multi_regime_estimated_cost_bps,
             ),
             risk_context_provider=risk_provider,
+            supplemental_context_provider=supplemental_provider,
         )
         multi_regime_runtime = DurableMultiRegimeRuntime(
             multi_regime_engine,

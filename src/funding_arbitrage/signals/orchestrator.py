@@ -226,10 +226,75 @@ class SignalOrchestrator:
     def cancel(self, signal_id: str) -> bool:
         return self._active.pop(signal_id, None) is not None
 
+    def restore(
+        self,
+        result: SignalOrchestrationResult,
+        submitted_intents: tuple[SignalIntent, ...],
+    ) -> None:
+        """Restore persisted orchestration state without re-running policy inputs."""
+
+        now = _utc(result.timestamp)
+        if self._last_timestamp is not None and now < self._last_timestamp:
+            raise ValueError("persisted signal orchestration time moved backwards")
+        submitted = {intent.signal_id: intent for intent in submitted_intents}
+        if len(submitted) != len(submitted_intents):
+            raise ValueError("persisted orchestration has duplicate submitted signals")
+        decision_ids = tuple(decision.signal_id for decision in result.decisions)
+        if len(decision_ids) != len(set(decision_ids)):
+            raise ValueError("persisted orchestration has duplicate decisions")
+        if set(decision_ids) != set(submitted):
+            raise ValueError("persisted orchestration decisions do not match inputs")
+
+        restored_active: dict[str, _Candidate] = {}
+        for active in result.active:
+            intent = active.intent
+            if intent.signal_id in restored_active:
+                raise ValueError("persisted orchestration has duplicate active signals")
+            if intent.mode is not self.mode:
+                raise ValueError("persisted orchestration trading mode mismatch")
+            if intent.expires_at <= now:
+                raise ValueError("persisted orchestration contains an expired signal")
+            priority = self._priority(intent)
+            correlation_group = self._correlation_group(
+                intent.primary_instrument.base_asset
+            )
+            if (
+                priority != active.priority_score
+                or correlation_group != active.correlation_group
+            ):
+                raise ValueError("persisted orchestration policy projection mismatch")
+            restored_active[intent.signal_id] = _Candidate(
+                intent=intent,
+                priority_score=priority,
+                correlation_group=correlation_group,
+            )
+
+        previous_active = self._active
+        previous_seen = self._seen.copy()
+        previous_timestamp = self._last_timestamp
+        try:
+            for intent in submitted_intents:
+                fingerprint = _fingerprint(intent)
+                previous = self._seen.get(intent.signal_id)
+                if previous is not None and previous != fingerprint:
+                    raise ValueError("persisted orchestration signal ID collision")
+                self._remember(intent.signal_id, fingerprint)
+            self._active = restored_active
+            self._last_timestamp = now
+            if self._weighted_active() != result.active:
+                raise ValueError("persisted orchestration allocation mismatch")
+        except Exception:
+            self._active = previous_active
+            self._seen = previous_seen
+            self._last_timestamp = previous_timestamp
+            raise
+
     def _validate(self, intent: SignalIntent, now: datetime) -> str | None:
         config = self.config
         if intent.mode is not self.mode:
             return "trading_mode_mismatch"
+        if self.mode is TradingMode.SAFE_MODE:
+            return "safe_mode_suppressed"
         if intent.created_at > now + timedelta(seconds=config.future_clock_skew_seconds):
             return "created_in_future"
         if intent.expires_at <= now:

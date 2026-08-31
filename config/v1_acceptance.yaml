@@ -263,8 +263,10 @@ requirements:
     evidence:
       - src/funding_arbitrage/strategies/directional.py
       - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_multi_regime_runtime.py
       - tests/test_directional_strategies.py
+      - tests/test_strategy_suite.py
   - id: STRAT-002
     category: strategies
     title: Liquidity-sweep and failed-breakout reversion implements score, entry, stop, target, and time stop
@@ -272,44 +274,58 @@ requirements:
     evidence:
       - src/funding_arbitrage/strategies/directional.py
       - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_multi_regime_runtime.py
       - tests/test_directional_strategies.py
+      - tests/test_strategy_suite.py
   - id: STRAT-003
     category: strategies
     title: Funding and basis harvest uses exact settlements, forecast, borrow, fees, basis, and leg state machine
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/funding_basis.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_funding_basis_strategy.py
       - tests/test_funding_harvest_state_machine.py
+      - tests/test_strategy_suite.py
   - id: STRAT-004
     category: strategies
     title: Cross-exchange lead-lag fair value is a meta-filter and executable statistical-arbitrage strategy
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/lead_lag.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_lead_lag_strategy.py
+      - tests/test_strategy_suite.py
   - id: STRAT-005
     category: strategies
     title: Perpetual versus dated-futures basis strategy is implemented
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/dated_basis.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_dated_basis_strategy.py
+      - tests/test_strategy_suite.py
   - id: STRAT-006
     category: strategies
     title: Options volatility strategies and options risk models are implemented
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/options_volatility.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_options_volatility.py
+      - tests/test_strategy_suite.py
   - id: STRAT-007
     category: strategies
     title: Passive market making is inventory-, adverse-selection-, and fee-aware
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/market_making.py
+      - src/funding_arbitrage/services/multi_regime_runtime.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_market_making_strategy.py
+      - tests/test_multi_regime_runtime.py
+      - tests/test_strategy_suite.py
   - id: STRAT-008
     category: strategies
     title: Liquid-altcoin universe selection is dynamic, quality-gated, and survivorship-safe
@@ -323,42 +339,64 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/dangerous_research.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_dangerous_research_strategies.py
+      - tests/test_strategy_suite.py
   - id: AI-001
     category: strategies
     title: ML meta-labeling has versioned datasets, leakage controls, calibration, drift, and fallback
     status: implemented
     evidence:
       - src/funding_arbitrage/ai/meta_labeling.py
+      - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/multi_regime.py
       - tests/test_meta_labeling.py
+      - tests/test_decision_support.py
+      - tests/test_multi_regime_runtime.py
   - id: AI-002
     category: strategies
     title: RL decisions have constrained action space, offline evaluation, guardrails, and deterministic fallback
     status: implemented
     evidence:
       - src/funding_arbitrage/ai/rl_policy.py
+      - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/multi_regime.py
       - tests/test_rl_policy.py
+      - tests/test_decision_support.py
+      - tests/test_multi_regime_runtime.py
   - id: AI-003
     category: strategies
     title: LLM decisions use versioned schemas, bounded latency and spend, audit, and deterministic fallback
     status: implemented
     evidence:
       - src/funding_arbitrage/ai/llm_gateway.py
+      - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/multi_regime.py
       - tests/test_llm_gateway.py
+      - tests/test_decision_support.py
+      - tests/test_multi_regime_runtime.py
   - id: SIG-001
     category: strategies
     title: Signal orchestrator enforces schema, TTL, deduplication, conflicts, correlation, and allocation policy
     status: implemented
     evidence:
       - src/funding_arbitrage/signals/orchestrator.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/strategy_suite.py
       - tests/test_signal_orchestrator.py
+      - tests/test_multi_regime_runtime.py
+      - tests/test_strategy_suite.py
   - id: RISK-001
     category: risk
     title: Portfolio risk is the sole authority that approves, resizes, or rejects intents
     status: implemented
     evidence:
       - src/funding_arbitrage/risk/portfolio.py
+      - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/multi_regime.py
       - tests/test_portfolio_risk_authority.py
+      - tests/test_decision_support.py
+      - tests/test_multi_regime_runtime.py
   - id: RISK-002
     category: risk
     title: Risk hierarchy covers order, position, asset, strategy, venue, correlation group, and portfolio
