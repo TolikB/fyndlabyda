@@ -15,7 +15,6 @@ from funding_arbitrage.database.models import (
     LiveAccountSnapshotRecord,
     LiveDailyReportRecord,
     LiveFundingPaymentRecord,
-    LiveOrderRecord,
     LivePositionRecord,
 )
 from funding_arbitrage.notifications.telegram import TelegramNotifier
@@ -140,25 +139,6 @@ class LiveDailyReportService:
         start_equity = await self._equity_at_start(session, start, end)
         end_equity = await self._equity_before(session, end)
         first_equity = await self._first_equity(session)
-        day_fees = Decimal(
-            str(
-                await session.scalar(
-                    select(func.coalesce(func.sum(LiveOrderRecord.fee), 0)).where(
-                        LiveOrderRecord.updated_at >= start,
-                        LiveOrderRecord.updated_at < end,
-                    )
-                )
-                or 0
-            )
-        )
-        total_fees = Decimal(
-            str(
-                await session.scalar(
-                    select(func.coalesce(func.sum(LiveOrderRecord.fee), 0))
-                )
-                or 0
-            )
-        )
         opened = int(
             await session.scalar(
                 select(func.count(LivePositionRecord.id)).where(
@@ -223,14 +203,12 @@ class LiveDailyReportService:
                 "ЗА ДЕНЬ",
                 f"Результат: {_signed_usd(day_pnl)}",
                 f"Фандінг: {_signed_usd(day_funding)}",
-                f"Комісії: ${day_fees:.2f}",
                 f"Угоди: відкрито {opened} · закрито {closed}",
                 "",
                 "ЗАГАЛОМ",
                 f"Баланс: ${end_equity:.2f}",
                 f"Результат: {_signed_usd(total_pnl)} ({total_return_percent:+.4f}%)",
                 f"Фандінг: {_signed_usd(total_funding)}",
-                f"Комісії: ${total_fees:.2f}",
                 f"Відкриті позиції: {active}",
             ]
         )

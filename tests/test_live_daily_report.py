@@ -92,6 +92,7 @@ async def test_live_daily_report_shows_day_and_total_actual_equity(
     assert "PnL source" not in message
     assert "Last reconciliation" not in message
     assert "Mode:" not in message
+    assert "Комісії:" not in message
 
 
 @pytest.mark.asyncio

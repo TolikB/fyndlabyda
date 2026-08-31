@@ -396,6 +396,9 @@ class DailyReportService:
             )
         )
         if includes_directional:
+            directional_order = ExecutionFillRecord.client_order_id.like(
+                r"mro\_%", escape="\\"
+            )
             directional_spread_cost = func.coalesce(
                 cast(
                     ExecutionFillRecord.payload["spread_cost"].as_string(),
@@ -416,7 +419,7 @@ class DailyReportService:
             directional_fees = await session.scalar(
                 select(func.coalesce(func.sum(ExecutionFillRecord.fee_amount), 0))
                 .where(
-                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    directional_order,
                     ExecutionFillRecord.simulation_version == simulation_version,
                     ExecutionFillRecord.exchange_timestamp >= start,
                     ExecutionFillRecord.exchange_timestamp < end,
@@ -424,7 +427,7 @@ class DailyReportService:
             )
             directional_slippage = await session.scalar(
                 select(func.coalesce(func.sum(directional_execution_cost), 0)).where(
-                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    directional_order,
                     ExecutionFillRecord.simulation_version == simulation_version,
                     ExecutionFillRecord.exchange_timestamp >= start,
                     ExecutionFillRecord.exchange_timestamp < end,
@@ -432,13 +435,13 @@ class DailyReportService:
             )
             directional_total_slippage = await session.scalar(
                 select(func.coalesce(func.sum(directional_execution_cost), 0)).where(
-                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    directional_order,
                     ExecutionFillRecord.simulation_version == simulation_version,
                 )
             )
             directional_fills = await session.scalar(
                 select(func.count(ExecutionFillRecord.id)).where(
-                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    directional_order,
                     ExecutionFillRecord.simulation_version == simulation_version,
                     ExecutionFillRecord.exchange_timestamp >= start,
                     ExecutionFillRecord.exchange_timestamp < end,

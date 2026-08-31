@@ -118,6 +118,7 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://funding:funding@127.0.0.1:5432/funding
       PYTHONPATH: src
+      RUN_POSTGRES_REPORT_CONTRACT: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -145,6 +146,7 @@ jobs:
           tests/test_durable_oms.py
           tests/test_continuous_reconciliation.py
           tests/test_live_runner_lifecycle.py
+          tests/test_daily_report_postgres.py
 
   load-slo:
     name: Representative critical-path load and reliability SLO

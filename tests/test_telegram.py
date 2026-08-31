@@ -315,6 +315,25 @@ async def test_daily_report_includes_directional_spread_and_impact_costs(
                 payload={"spread_cost": "0.40", "impact_cost": "0.10"},
             )
         )
+        session.add(
+            ExecutionFillRecord(
+                fill_id="non-directional-prefix-fill",
+                simulation_version=version,
+                client_order_id="mroX_not_directional",
+                exchange_order_id="paper:mroX_not_directional",
+                venue="bybit",
+                instrument_id="BYBIT:PERP:BTC/USDT",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("1"),
+                fee_amount=Decimal("99"),
+                fee_asset="USDT",
+                liquidity_role="TAKER",
+                exchange_timestamp=start + timedelta(hours=2),
+                receive_timestamp=start + timedelta(hours=2),
+                payload={"spread_cost": "99", "impact_cost": "99"},
+            )
+        )
         await session.commit()
 
     service = DailyReportService(settings, factory)
