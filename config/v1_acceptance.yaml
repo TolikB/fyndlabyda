@@ -285,8 +285,10 @@ requirements:
     evidence:
       - src/funding_arbitrage/strategies/funding_basis.py
       - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/services/runtime_strategy_contexts.py
       - tests/test_funding_basis_strategy.py
       - tests/test_funding_harvest_state_machine.py
+      - tests/test_runtime_strategy_contexts.py
       - tests/test_strategy_suite.py
   - id: STRAT-004
     category: strategies
@@ -295,7 +297,9 @@ requirements:
     evidence:
       - src/funding_arbitrage/strategies/lead_lag.py
       - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/services/runtime_strategy_contexts.py
       - tests/test_lead_lag_strategy.py
+      - tests/test_runtime_strategy_contexts.py
       - tests/test_strategy_suite.py
   - id: STRAT-005
     category: strategies
@@ -304,7 +308,9 @@ requirements:
     evidence:
       - src/funding_arbitrage/strategies/dated_basis.py
       - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/services/runtime_strategy_contexts.py
       - tests/test_dated_basis_strategy.py
+      - tests/test_runtime_strategy_contexts.py
       - tests/test_strategy_suite.py
   - id: STRAT-006
     category: strategies
@@ -743,6 +749,7 @@ requirements:
     evidence:
       - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/services/multi_regime_runtime.py
+      - src/funding_arbitrage/services/runtime_strategy_contexts.py
       - src/funding_arbitrage/execution/directional_paper.py
       - src/funding_arbitrage/execution/advanced_paper.py
       - src/funding_arbitrage/services/strategy_execution.py
@@ -760,6 +767,7 @@ requirements:
       - tests/test_directional_paper_restore.py
       - tests/test_advanced_paper.py
       - tests/test_strategy_execution.py
+      - tests/test_runtime_strategy_contexts.py
       - src/funding_arbitrage/qa/multi_regime_paper.py
       - scripts/multi_regime_paper_probe.py
       - tests/test_multi_regime_paper_probe.py

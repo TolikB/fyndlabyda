@@ -52,6 +52,9 @@ from funding_arbitrage.services.multi_regime import (
     MultiRegimeEngine,
     MultiRegimeStrategySnapshot,
 )
+from funding_arbitrage.services.runtime_strategy_contexts import (
+    RuntimeSynchronizedContextBuilder,
+)
 from funding_arbitrage.services.strategy_execution import (
     InstrumentExecutionQuote,
     StrategyExecutionSnapshot,
@@ -82,23 +85,25 @@ class RuntimeSupplementalStrategyContextProvider:
         self.runtime = runtime
         self.paper_broker = paper_broker
         self.advanced_paper_broker = advanced_paper_broker
+        self.synchronized = RuntimeSynchronizedContextBuilder(runtime)
 
     def __call__(
         self, snapshot: MultiRegimeStrategySnapshot
     ) -> SupplementalStrategyContexts:
+        supplemental = self.synchronized.build(snapshot)
         atr = snapshot.technical.atr
         price = snapshot.technical.close
         fee_schedule = self.runtime.settings.fee_schedules.get(
             snapshot.instrument.venue.lower()
         )
         if atr is None or atr <= 0 or price <= 0 or fee_schedule is None:
-            return SupplementalStrategyContexts()
+            return supplemental
         maker_fee, _ = fee_schedule
         maximum_abs_quantity = (
             self.runtime.settings.paper_position_size_usd / price
         )
         if maximum_abs_quantity <= 0:
-            return SupplementalStrategyContexts()
+            return supplemental
         broker = self.paper_broker
         directional_quantity = (
             sum(
@@ -141,7 +146,9 @@ class RuntimeSupplementalStrategyContextProvider:
             regime=snapshot.regime.regime,
             live_operator_authorized=False,
         )
-        return SupplementalStrategyContexts(passive_market_making=(context,))
+        return supplemental.model_copy(
+            update={"passive_market_making": (context,)},
+        )
 
 
 class RuntimeStrategyExecutionSnapshotProvider:
@@ -351,9 +358,14 @@ class RuntimeAdvancedRiskContextProvider:
         }
         requested_notional = self.runtime.settings.paper_position_size_usd
         if intent.signal_type is SignalType.FUNDING_BASIS:
+            gross_hedge_ratio = sum(
+                (leg.hedge_ratio for leg in intent.legs),
+                ZERO,
+            )
             requested_notional = min(
                 requested_notional,
-                self.runtime.settings.paper_max_funding_capital_usd,
+                self.runtime.settings.paper_max_funding_capital_usd
+                / gross_hedge_ratio,
             )
         operator_entries_enabled = (
             intent.mode

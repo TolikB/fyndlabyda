@@ -79,8 +79,10 @@ paths, and SAFE_MODE suppresses all intents. Adding a signal type to an allowlis
 alone therefore cannot make it executable.
 
 Funding execution remains on its existing, independently guarded two-leg funding
-pipeline until its opportunity projection is migrated to this contract without
-losing exact settlement, borrow, fee, reconciliation, or compensation semantics.
+pipeline as the single settlement owner. The canonical suite evaluates the same
+as-of funding evidence but suppresses its runtime intent, preventing duplicate
+exposure and funding attribution while exact legacy settlement and reconciliation
+remain authoritative.
 
 Startup rebuilds market/features without invoking strategy or AI providers for
 historical events. Persisted source-event-bound batches restore the orchestrator's
@@ -96,16 +98,16 @@ empty rather than fabricated, and no AI claim is made for deployed behavior.
 
 ## Runtime projection
 
-The production application supplies passive-market-making evaluation inputs from
-the same canonical L2/order-flow state used by replay. Position limits use the paper
-size cap and current directional plus advanced inventory; maker fees come from the selected venue;
-ATR and the configured cost floor are conservative adverse/hedging inputs. Missing
-ATR, venue fee metadata, or positive sizing produces no context. Live operator
-authorization is always false in this projection.
+The production application supplies funding, cross-venue lead-lag, dated-basis, and
+passive-market-making evaluation inputs from one strict as-of projection. Funding
+uses robust history and exact per-venue settlement timestamps; lead-lag requires two
+independent fresh reference venues; dated basis requires an actual future expiry and
+same-venue perpetual; market making uses canonical L2/order flow, ATR, inventory, and
+venue fees. Missing evidence produces no context. A missing ATR disables only market
+making, not unrelated synchronized strategies.
 
-The remaining families require synchronized cross-instrument providers (funding
-forecast pairs, multi-venue fair value, dated contracts, and options chains). Those
-providers are intentionally not fabricated from a single-instrument snapshot.
-When a dedicated provider supplies one of those contexts, execution still requires
-the independent synchronized per-leg snapshot and multi-leg portfolio-risk boundary
-described above.
+Every executable advanced intent still requires an independent content-addressed
+per-leg snapshot and the multi-leg portfolio-risk boundary. Runtime funding intents
+are intentionally execution-suppressed while the legacy funding pipeline is the sole
+position/settlement owner. Options contexts remain empty until a real synchronized
+public options chain is integrated. Live operator authorization is always false.

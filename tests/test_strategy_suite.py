@@ -30,6 +30,7 @@ from funding_arbitrage.features.structure import (
 from funding_arbitrage.features.technical import TechnicalFeatureSnapshot
 from funding_arbitrage.regime import RegimeSnapshot
 from funding_arbitrage.services.strategy_suite import (
+    PAPER_EXECUTABLE_SIGNAL_TYPES,
     LeadLagStrategyContext,
     StrategyFamily,
     StrategySuite,
@@ -528,6 +529,29 @@ def test_paper_keeps_plannable_advanced_intents_and_safe_mode_suppresses_all() -
         if item.strategy_id == "suite-directional-accepted"
     )
     assert accepted_directional.rejection_reason == "safe_mode_suppressed"
+
+
+def test_runtime_can_retain_funding_evidence_without_duplicate_execution() -> None:
+    suite = StrategySuite(
+        directional_strategies=(AcceptDirectional(), RejectDirectional()),
+        executable_signal_types=(
+            PAPER_EXECUTABLE_SIGNAL_TYPES - {SignalType.FUNDING_BASIS}
+        ),
+    )
+
+    result = suite.evaluate(_request(TradingMode.PAPER))
+
+    assert SignalType.FUNDING_BASIS not in {
+        intent.signal_type for intent in result.intents
+    }
+    funding = next(
+        item
+        for item in result.evaluations
+        if item.family is StrategyFamily.FUNDING_BASIS
+    )
+    assert funding.intent is None
+    assert funding.rejection_reason == "execution_planner_unavailable"
+    assert funding.evaluation_payload["intent"] is not None
 
 
 def test_strategy_suite_request_rejects_empty_mismatched_future_and_duplicate_contexts() -> None:

@@ -16,6 +16,7 @@ from funding_arbitrage.domain.decisions import (
     ExecutionPlan,
     RiskDecision,
     SignalIntent,
+    SignalType,
 )
 from funding_arbitrage.domain.events import (
     BookDelta,
@@ -74,6 +75,7 @@ from funding_arbitrage.services.strategy_execution import (
 )
 from funding_arbitrage.services.strategy_suite import (
     DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES,
+    PAPER_EXECUTABLE_SIGNAL_TYPES,
     DirectionalStrategy,
     StrategySuite,
     StrategySuiteRequest,
@@ -545,6 +547,7 @@ class MultiRegimeEngine:
         breakout_strategy: DirectionalStrategy | None = None,
         sweep_strategy: DirectionalStrategy | None = None,
         strategy_suite: StrategySuite | None = None,
+        executable_signal_types: frozenset[SignalType] | None = None,
         supplemental_context_provider: SupplementalStrategyContextProvider
         | None = None,
         decision_support_provider: DecisionSupportProvider | None = None,
@@ -555,10 +558,12 @@ class MultiRegimeEngine:
         regime_thresholds: RegimeThresholds | None = None,
     ) -> None:
         if strategy_suite is not None and (
-            breakout_strategy is not None or sweep_strategy is not None
+            breakout_strategy is not None
+            or sweep_strategy is not None
+            or executable_signal_types is not None
         ):
             raise ValueError(
-                "strategy_suite cannot be combined with directional strategy overrides"
+                "strategy_suite cannot be combined with strategy policy overrides"
             )
         self.config = config or MultiRegimeEngineConfig()
         self.risk_context_provider = risk_context_provider
@@ -569,7 +574,12 @@ class MultiRegimeEngine:
             directional_strategies=(
                 self.breakout_strategy,
                 self.sweep_strategy,
-            )
+            ),
+            executable_signal_types=(
+                executable_signal_types
+                if executable_signal_types is not None
+                else PAPER_EXECUTABLE_SIGNAL_TYPES
+            ),
         )
         self.supplemental_context_provider = supplemental_context_provider
         self.decision_support_provider = decision_support_provider

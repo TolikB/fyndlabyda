@@ -43,12 +43,22 @@ signal identity, priority, correlation group, or allocation fails startup. The m
 application currently leaves model providers unwired until versioned artifact
 loading and synchronized inference features are available.
 
-The active runtime currently projects a conservative passive-market-making context
-from the canonical L2 book, order-flow snapshot, ATR, configured venue maker fee,
-paper position-size cap, and directional paper inventory. It never grants live
-operator authority. Other advanced contexts require their dedicated synchronized
-multi-instrument projections; absence means no evaluation rather than invented
-zero-cost data.
+The active runtime rebuilds a strict as-of multi-instrument view for every canonical
+decision. Rows newer than the source event, stale/crossed books, incomplete venues,
+funding history fetched after decision time, missing settlement timestamps, missing
+depth, and insufficient virtual venue balances fail closed. That view supplies exact
+funding schedules, two-independent-venue lead-lag fair value, perpetual-versus-dated
+future carry, and passive market-making inputs. Options remain absent from the runtime
+until an actual synchronized public options-chain source exists; no option quote is
+fabricated from perpetual data.
+
+The mature legacy paper pipeline remains the sole funding execution and settlement
+owner. Canonical funding contexts are evaluated and retained as evidence, but their
+normalized runtime intent is suppressed so the same opportunity cannot create a
+second position or count one funding payment twice. Funding capital is capped across
+both legs: a `$100` limit means at most `$50 + $50`, not `$100` per venue. Lead-lag,
+dated-basis, and market-making intents continue through the advanced PAPER boundary.
+No projection grants live operator authority.
 
 The consumer is downstream of the raw-event commit. Parallel WebSocket callbacks do
 not define execution order: the runtime catches up by the canonical event table row
@@ -100,15 +110,16 @@ remains unavailable until paper/shadow acceptance evidence and an explicit later
 authorization exist.
 
 One-leg breakout and sweep/reversion intents use the directional planner and broker.
-The five safe advanced signal types listed above use the synchronized multi-leg
-planner and broker only in PAPER. An advanced intent cannot reach planning without
+The synchronized advanced signal types use the multi-leg planner and broker only in
+PAPER. Runtime funding execution is additionally suppressed while the legacy funding
+pipeline owns settlement. An advanced intent cannot reach planning without
 an exact execution snapshot and an approved multi-leg portfolio-risk decision; a
 post-risk planning failure is stored as an explicit execution block. The default
-runtime currently projects passive-market-making contexts, while other advanced
-families remain absent unless a dedicated synchronized context provider supplies
-their inputs. LIMITED_LIVE and LIVE continue to suppress advanced execution, and
-SAFE_MODE suppresses every intent. Research-only Martingale, grid, and loss-
-averaging strategies remain non-executable in every mode.
+runtime projects funding, lead-lag, dated-basis, and passive-market-making contexts
+from synchronized evidence; options remain absent without a real chain. LIMITED_LIVE
+and LIVE continue to suppress advanced execution, and SAFE_MODE suppresses every
+intent. Research-only Martingale, grid, and loss-averaging strategies remain
+non-executable in every mode.
 
 Read-only inspection endpoints:
 

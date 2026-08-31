@@ -39,6 +39,7 @@ from funding_arbitrage.database.repositories.control_plane import (
     DatabaseControlPlaneIdempotencyStore,
 )
 from funding_arbitrage.database.session import create_database, init_database
+from funding_arbitrage.domain.decisions import SignalType
 from funding_arbitrage.domain.events import EventKind, TradingMode
 from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.exchanges.private_streams import create_private_stream_supervisor
@@ -76,6 +77,7 @@ from funding_arbitrage.services.paper_runner import (
     SharedMarketPaperComparisonRunner,
 )
 from funding_arbitrage.services.runtime import RuntimeState
+from funding_arbitrage.services.strategy_suite import PAPER_EXECUTABLE_SIGNAL_TYPES
 from funding_arbitrage.storage.clickhouse import (
     ClickHouseHttpWriter,
     ClickHouseStoragePolicy,
@@ -301,6 +303,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 estimated_cost_bps=active_settings.multi_regime_estimated_cost_bps,
             ),
             risk_context_provider=risk_provider,
+            # The mature legacy paper pipeline remains the sole funding execution
+            # owner. The canonical suite still evaluates funding contexts, but it
+            # cannot open a duplicate position or double-count a settlement.
+            executable_signal_types=(
+                PAPER_EXECUTABLE_SIGNAL_TYPES - {SignalType.FUNDING_BASIS}
+            ),
             supplemental_context_provider=supplemental_provider,
             execution_snapshot_provider=execution_snapshot_provider,
             advanced_risk_context_provider=advanced_risk_provider,
