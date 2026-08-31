@@ -1,6 +1,10 @@
 FROM python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31 AS native-builder
 
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache \
+    gcc \
+    libcrypto3=3.5.8-r0 \
+    libssl3=3.5.8-r0 \
+    musl-dev
 WORKDIR /native
 COPY native/low_latency/native_low_latency.c ./
 RUN gcc -O3 -std=c11 -Wall -Wextra -Werror native_low_latency.c \
@@ -13,7 +17,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
 WORKDIR /app
 
 COPY requirements-linux.lock ./
-RUN pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock
+RUN apk add --no-cache \
+      libcrypto3=3.5.8-r0 \
+      libssl3=3.5.8-r0 \
+    && pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock
 
 COPY src ./src
 COPY config ./config
