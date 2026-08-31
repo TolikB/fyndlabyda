@@ -12,7 +12,7 @@ from decimal import Decimal
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, Literal, Never
+from typing import Any, Literal, Never, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -425,11 +425,12 @@ class DeterministicReplayEvidence(BaseModel):
     dataset_manifest_sha256: str
     replay_runner_sha256: str
     replay_command_sha256: str
+    cost_policy_sha256: str
     dataset_artifact_ref: str
     replay_runner_artifact_ref: str
     first_result_sha256: str
     second_result_sha256: str
-    event_count: int = Field(gt=0, le=1_000_000_000_000)
+    event_count: int = Field(gt=0, le=25_000)
     source_start: datetime
     source_end: datetime
     venue_coverage: tuple[str, ...] = Field(min_length=1, max_length=32)
@@ -463,6 +464,7 @@ class DeterministicReplayEvidence(BaseModel):
         "dataset_manifest_sha256",
         "replay_runner_sha256",
         "replay_command_sha256",
+        "cost_policy_sha256",
         "first_result_sha256",
         "second_result_sha256",
         "config_sha256",
@@ -533,8 +535,12 @@ class AcceptanceWindowEvaluation(BaseModel):
     window_id: str
     evidence_summary_satisfied: bool
     independent_replay_verified: bool
+    independent_replay_checks: dict[str, bool]
+    independent_replay_error_code: str | None
     policy_satisfied: bool
     trusted_provenance: bool
+    trusted_provenance_checks: dict[str, bool]
+    trusted_provenance_error_code: str | None
     accepted: bool
     acceptance_blockers: tuple[str, ...]
     checks: dict[str, bool]
@@ -543,6 +549,86 @@ class AcceptanceWindowEvaluation(BaseModel):
     maximum_observed_gap_seconds: Decimal
     counter_deltas: dict[str, int]
     cost_delta_usd: Decimal
+
+    @model_validator(mode="after")
+    def validate_acceptance_invariants(self) -> AcceptanceWindowEvaluation:
+        replay_checks_pass = (
+            bool(self.independent_replay_checks)
+            and all(self.independent_replay_checks.values())
+            and self.independent_replay_error_code is None
+        )
+        provenance_checks_pass = (
+            bool(self.trusted_provenance_checks)
+            and all(self.trusted_provenance_checks.values())
+            and self.trusted_provenance_error_code is None
+        )
+        if self.independent_replay_verified != replay_checks_pass:
+            raise ValueError("independent replay verification state is inconsistent")
+        if self.trusted_provenance != provenance_checks_pass:
+            raise ValueError("trusted provenance verification state is inconsistent")
+        if self.policy_satisfied != (
+            self.evidence_summary_satisfied and self.independent_replay_verified
+        ):
+            raise ValueError("acceptance policy state is inconsistent")
+        if self.accepted != (self.policy_satisfied and self.trusted_provenance):
+            raise ValueError("final acceptance state is inconsistent")
+        return self
+
+
+class IndependentReplayVerification(BaseModel):
+    """Sanitized result returned by a trusted local replay verifier."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    verified: bool
+    checks: dict[str, bool]
+    result_sha256: str | None = None
+    error_code: str | None = None
+
+    @field_validator("result_sha256")
+    @classmethod
+    def validate_result_digest(cls, value: str | None) -> str | None:
+        if value is not None and not _DIGEST.fullmatch(value):
+            raise ValueError("independent replay result digest is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def validate_verification_state(self) -> IndependentReplayVerification:
+        checks_pass = bool(self.checks) and all(self.checks.values())
+        if self.verified != (
+            checks_pass and self.error_code is None and self.result_sha256 is not None
+        ):
+            raise ValueError("independent replay verification state is inconsistent")
+        if not self.verified and self.error_code is None:
+            raise ValueError("failed independent replay requires an error code")
+        return self
+
+
+class AcceptanceReplayVerifier(Protocol):
+    def verify(self, bundle: AcceptanceWindowBundle) -> IndependentReplayVerification: ...
+
+
+class TrustedProvenanceVerification(BaseModel):
+    """Sanitized result returned by a trusted signature and anchor verifier."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    verified: bool
+    checks: dict[str, bool]
+    error_code: str | None = None
+
+    @model_validator(mode="after")
+    def validate_verification_state(self) -> TrustedProvenanceVerification:
+        checks_pass = bool(self.checks) and all(self.checks.values())
+        if self.verified != (checks_pass and self.error_code is None):
+            raise ValueError("trusted provenance verification state is inconsistent")
+        if not self.verified and self.error_code is None:
+            raise ValueError("failed trusted provenance requires an error code")
+        return self
+
+
+class AcceptanceProvenanceVerifier(Protocol):
+    def verify(self, bundle: AcceptanceWindowBundle) -> TrustedProvenanceVerification: ...
 
 
 class AcceptanceWindowBundle(BaseModel):
@@ -715,7 +801,13 @@ class AcceptanceWindowBundle(BaseModel):
         if self.bundle_sha256 != _hash(payload):
             raise AcceptanceEvidenceIntegrityError("acceptance bundle checksum mismatch")
 
-    def evaluate(self, *, now: datetime | None = None) -> AcceptanceWindowEvaluation:
+    def evaluate(
+        self,
+        *,
+        now: datetime | None = None,
+        replay_verifier: AcceptanceReplayVerifier | None = None,
+        provenance_verifier: AcceptanceProvenanceVerifier | None = None,
+    ) -> AcceptanceWindowEvaluation:
         self.verify_integrity()
         policy = acceptance_policy(self.gate_id)
         evaluated_at = _utc(now or datetime.now(UTC))
@@ -936,9 +1028,93 @@ class AcceptanceWindowBundle(BaseModel):
             ),
         }
         evidence_summary_satisfied = all(checks.values())
-        independent_replay_verified = False
+        try:
+            if replay_verifier is not None:
+                from funding_arbitrage.qa.acceptance_artifacts import (
+                    REPLAY_REQUIRED_CHECKS,
+                    LocalAcceptanceReplayVerifier,
+                )
+
+                if type(replay_verifier) is not LocalAcceptanceReplayVerifier:
+                    raise TypeError("untrusted independent replay verifier type")
+            untrusted_replay = (
+                LocalAcceptanceReplayVerifier.verify(replay_verifier, self)
+                if replay_verifier is not None
+                else IndependentReplayVerification(
+                    verified=False,
+                    checks={},
+                    error_code="independent_replay_verifier_unavailable",
+                )
+            )
+            if type(untrusted_replay) is not IndependentReplayVerification:
+                raise TypeError("unexpected independent replay verifier result")
+            independent_replay = IndependentReplayVerification.model_validate(
+                untrusted_replay.model_dump(mode="python")
+            )
+            if independent_replay.verified and (
+                set(independent_replay.checks) != REPLAY_REQUIRED_CHECKS
+            ):
+                independent_replay = IndependentReplayVerification(
+                    verified=False,
+                    checks={**independent_replay.checks, "required_check_contract": False},
+                    result_sha256=independent_replay.result_sha256,
+                    error_code="independent_replay_check_contract_mismatch",
+                )
+        except Exception:
+            independent_replay = IndependentReplayVerification(
+                verified=False,
+                checks={},
+                error_code="independent_replay_verifier_failed",
+            )
+        independent_replay_verified = (
+            independent_replay.verified
+            and bool(independent_replay.checks)
+            and all(independent_replay.checks.values())
+            and independent_replay.error_code is None
+            and independent_replay.result_sha256 is not None
+        )
         policy_satisfied = evidence_summary_satisfied and independent_replay_verified
-        trusted_provenance = False
+        try:
+            if provenance_verifier is not None:
+                from funding_arbitrage.qa.acceptance_provenance import (
+                    PROVENANCE_REQUIRED_CHECKS,
+                    LocalAcceptanceProvenanceVerifier,
+                )
+
+                if type(provenance_verifier) is not LocalAcceptanceProvenanceVerifier:
+                    raise TypeError("untrusted provenance verifier type")
+            untrusted_provenance = (
+                LocalAcceptanceProvenanceVerifier.verify(provenance_verifier, self)
+                if provenance_verifier is not None
+                else TrustedProvenanceVerification(
+                    verified=False,
+                    checks={},
+                    error_code="trusted_provenance_verifier_unavailable",
+                )
+            )
+            if type(untrusted_provenance) is not TrustedProvenanceVerification:
+                raise TypeError("unexpected trusted provenance verifier result")
+            provenance = TrustedProvenanceVerification.model_validate(
+                untrusted_provenance.model_dump(mode="python")
+            )
+            if provenance.verified and set(provenance.checks) != PROVENANCE_REQUIRED_CHECKS:
+                provenance = TrustedProvenanceVerification(
+                    verified=False,
+                    checks={**provenance.checks, "required_check_contract": False},
+                    error_code="trusted_provenance_check_contract_mismatch",
+                )
+        except Exception:
+            provenance = TrustedProvenanceVerification(
+                verified=False,
+                checks={},
+                error_code="trusted_provenance_verifier_failed",
+            )
+        trusted_provenance = (
+            provenance.verified
+            and bool(provenance.checks)
+            and all(provenance.checks.values())
+            and provenance.error_code is None
+        )
         blockers = tuple(
             [f"policy_check_failed:{name}" for name, passed in sorted(checks.items()) if not passed]
             + (
@@ -953,8 +1129,12 @@ class AcceptanceWindowBundle(BaseModel):
             window_id=self.window_id,
             evidence_summary_satisfied=evidence_summary_satisfied,
             independent_replay_verified=independent_replay_verified,
+            independent_replay_checks=independent_replay.checks,
+            independent_replay_error_code=independent_replay.error_code,
             policy_satisfied=policy_satisfied,
             trusted_provenance=trusted_provenance,
+            trusted_provenance_checks=provenance.checks,
+            trusted_provenance_error_code=provenance.error_code,
             accepted=policy_satisfied and trusted_provenance,
             acceptance_blockers=blockers,
             checks=checks,

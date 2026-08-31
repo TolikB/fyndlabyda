@@ -39,9 +39,14 @@ unknown submission outcome, and WebSocket gap recovery. A deterministic replay o
 an immutable dataset covering at least 30 days, 10,000 events, and all eight CEX
 must produce identical result hashes twice. Dataset manifest, replay runner,
 command, and result digests plus stable artifact references make the replay
-rerunnable by an independent verifier. Failure and
-replay evidence are bound to the same Git revision, image digest, and configuration
-hash as the elapsed samples. Recovery budgets and the minimum of three injections
+rerunnable by an independent verifier. The built-in verifier resolves only a
+path-safe dataset reference below an explicitly trusted root; arbitrary commands
+from evidence are never executed. It verifies the Parquet manifest, schema,
+file bytes, release/config identity, per-venue temporal coverage, at least 30 fills
+and 15 closes, fresh book linkage for every fill, and fees/spread/slippage before
+running the versioned audit twice. Failure and replay evidence are bound to the
+same Git revision, image digest, and configuration hash as the elapsed samples.
+Recovery budgets and the minimum of three injections
 per scenario are fixed by verifier code; the evidence producer cannot relax them.
 A scenario passes only when every injected fault is detected and recovered, no
 unexpected effect occurs, and recovery stays within its fixed scenario budget.
@@ -83,17 +88,73 @@ PYTHONPATH=src python scripts/acceptance_window.py seal \
   --output evidence/runtime/gate-001-sealed.json
 ```
 
-Verify a sealed checkpoint or final window:
+Verify a sealed checkpoint without promoting it:
 
 ```bash
 PYTHONPATH=src python scripts/acceptance_window.py verify \
   --bundle evidence/runtime/gate-001-sealed.json
 ```
 
-For `verify`, exit code `0` is reserved for a fully accepted gate. Until trusted
-signed collector/CI provenance, independent artifact resolution/replay, and an
-external anchor are wired, `accepted` is always false and a summary-clean bundle
-returns exit code `3`. The result separately reports `evidence_summary_satisfied`,
+Final verification additionally requires the immutable replay root, a collector
+envelope signed by a trusted Ed25519 collector key, and a receipt signed by a
+different trusted external-anchor key:
+
+```bash
+PYTHONPATH=src python scripts/acceptance_window.py verify \
+  --bundle evidence/runtime/gate-001-sealed.json \
+  --artifact-root evidence/immutable-replay \
+  --collector-envelope evidence/provenance/collector-envelope.json \
+  --anchor-receipt evidence/provenance/anchor-receipt.json \
+  --trust-policy-id production-release-001
+```
+
+The verifier does not generate, read, or store private signing keys. Collector and
+anchor roles must use different canonical Ed25519 public-key bytes, have explicit
+validity windows and gate scopes, and sign domain-separated canonical payloads.
+CLI callers cannot provide keyrings, pins, or trust-root paths.
+`--trust-policy-id` resolves only a reviewed public policy under
+`config/acceptance_trust/`; that release-bundled policy fixes the code, image,
+configuration, environment, deployment, keyrings, independently reviewed replay
+cost schedule, exact verifier implementation/dependency digest, and exact next
+external-anchor sequence/head. No policy ships by default, so the gate fails closed
+until one is reviewed and committed for a release.
+
+Final provenance also requires the root-owned fixed-path runtime measurement at
+`/run/funding-arbitrage/release-identity.json`. Its observed Git revision, image
+digest, effective configuration hash, and complete application/verifier source plus
+dependency digest must match the trust policy and the sealed window. CLI callers
+cannot override this path. The file and every ancestor directory must be owned by
+root and must not be group- or world-writable; loading is descriptor-relative and
+does not follow symbolic links.
+
+The replay runner digest includes the actual verifier module bytes, not only an
+entrypoint label. Artifact input is copied through no-follow regular-file
+descriptors into a private bounded snapshot before Parquet parsing. Final trusted
+verification is Linux-only and requires descriptor-relative `openat`,
+`O_DIRECTORY`, and `O_NOFOLLOW`; the root itself is opened component-by-component
+from a pinned filesystem-root descriptor and all descendants reuse that pinned
+root. Other platforms fail closed. Replay is limited to
+25,000 rows, 64 parts, 64 MiB per part, 128 MiB compressed total, and 2 KiB per
+result payload. The reader preflights Parquet metadata, then streams 64-row
+batches while enforcing 128 MiB of actual Arrow buffers and 256 MiB of cumulative
+decoded-object volume. Arrow string offsets are checked before conversion to
+Python, and audit state plus deterministic hashes are updated incrementally; the
+full replay is never materialized in Arrow or Python.
+Every fill is tied to venue, instrument, order, position, and a
+preceding fresh book; fee, borrow, gas/transfer, spread, and slippage economics are
+recomputed from the release-bundled cost policy. That policy also declares which
+instruments require borrow, gas, or transfer costs, so replay-controlled zero usage
+cannot suppress required costs. Required borrow is reconciled independently for
+every filled position at close, required gas for every fill, and required transfer
+fees for every position lifecycle. Gas units come from the externally trusted cost
+schedule rather than replay rows. Closed position IDs cannot be reused. Closes must
+reference the same venue/instrument position, and fills must span at least two
+venues.
+
+For `verify`, exit code `0` means the summary, independent replay, collector
+signature, and external anchor all passed. Without any one of them, `accepted`
+is false and a structurally valid bundle returns exit code `3`. The result
+separately reports `evidence_summary_satisfied`,
 `independent_replay_verified`, `policy_satisfied`, and `trusted_provenance`.
 Therefore caller-provided hashes, counts, dates, or artifact labels cannot produce
 even `policy_satisfied=true`. The blocker list includes every failed summary check
@@ -103,13 +164,10 @@ rejected input values. `seal` returns `0` after writing a structurally valid
 immutable bundle even when `accepted` is false. Existing evidence paths are never
 overwritten.
 
-The SHA-256 chain detects changes after sealing; it is not an operator identity or
-CI signature. Consequently both gates intentionally remain `partial`. The
-deployment collector, trusted signature verification, and external transparency
-anchor still need to be wired before either gate can become accepted. A trusted
-artifact resolver must also verify dataset/runner/command hashes, rerun the fixed
-replay, and reconcile individual fills, books, and cost components; opaque evidence
-references are intentionally insufficient.
+The SHA-256 chain alone is not an operator identity or CI signature. The code now
+contains independent artifact, collector-signature, and anchor-receipt verification,
+but both gates intentionally remain `partial` until a deployment collector and
+separate external anchor produce real elapsed evidence for one exact release.
 
 This contract only makes evidence machine-verifiable. It does not grant order or
 withdrawal authority and it does not make Limited Live eligible by itself.

@@ -519,6 +519,10 @@
           "title": "Config Sha256",
           "type": "string"
         },
+        "cost_policy_sha256": {
+          "title": "Cost Policy Sha256",
+          "type": "string"
+        },
         "dataset_artifact_ref": {
           "maxLength": 128,
           "minLength": 1,
@@ -542,7 +546,7 @@
         },
         "event_count": {
           "exclusiveMinimum": 0,
-          "maximum": 1000000000000,
+          "maximum": 25000,
           "title": "Event Count",
           "type": "integer"
         },
@@ -626,6 +630,7 @@
         "dataset_manifest_sha256",
         "replay_runner_sha256",
         "replay_command_sha256",
+        "cost_policy_sha256",
         "dataset_artifact_ref",
         "replay_runner_artifact_ref",
         "first_result_sha256",

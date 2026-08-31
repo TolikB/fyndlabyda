@@ -147,6 +147,7 @@ def _seal(gate: AcceptanceGate, *, duration: timedelta) -> AcceptanceWindowBundl
         dataset_manifest_sha256="2" * 64,
         replay_runner_sha256="3" * 64,
         replay_command_sha256="4" * 64,
+        cost_policy_sha256="5" * 64,
         dataset_artifact_ref="v1-replay-dataset",
         replay_runner_artifact_ref="v1-replay-runner",
         first_result_sha256=_RESULT,

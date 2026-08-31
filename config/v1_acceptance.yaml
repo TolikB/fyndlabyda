@@ -730,10 +730,13 @@ requirements:
     status: partial
     evidence:
       - src/funding_arbitrage/qa/acceptance_window.py
+      - src/funding_arbitrage/qa/acceptance_artifacts.py
+      - src/funding_arbitrage/qa/acceptance_provenance.py
       - scripts/acceptance_window.py
       - scripts/export_acceptance_schema.py
       - config/schemas/acceptance-window-seal-input-v1.json
       - tests/test_acceptance_window.py
+      - tests/test_acceptance_artifacts.py
       - docs/V1_ACCEPTANCE_WINDOWS.md
   - id: GATE-002
     category: delivery
@@ -741,10 +744,13 @@ requirements:
     status: partial
     evidence:
       - src/funding_arbitrage/qa/acceptance_window.py
+      - src/funding_arbitrage/qa/acceptance_artifacts.py
+      - src/funding_arbitrage/qa/acceptance_provenance.py
       - scripts/acceptance_window.py
       - scripts/export_acceptance_schema.py
       - config/schemas/acceptance-window-seal-input-v1.json
       - tests/test_acceptance_window.py
+      - tests/test_acceptance_artifacts.py
       - docs/V1_ACCEPTANCE_WINDOWS.md
   - id: GATE-003
     category: delivery

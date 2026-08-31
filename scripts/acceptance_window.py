@@ -9,6 +9,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from funding_arbitrage.qa.acceptance_artifacts import LocalAcceptanceReplayVerifier
+from funding_arbitrage.qa.acceptance_provenance import (
+    LocalAcceptanceProvenanceVerifier,
+    load_acceptance_trust_policy,
+    load_runtime_release_identity,
+)
 from funding_arbitrage.qa.acceptance_window import (
     AcceptanceEvidenceIntegrityError,
     AcceptanceWindowBundle,
@@ -16,6 +22,9 @@ from funding_arbitrage.qa.acceptance_window import (
     load_acceptance_seal_input,
     write_acceptance_bundle,
 )
+
+TRUST_POLICY_ROOT = Path(__file__).resolve().parents[1] / "config" / "acceptance_trust"
+RUNTIME_RELEASE_IDENTITY_PATH = Path("/run/funding-arbitrage/release-identity.json")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -26,6 +35,20 @@ def _parser() -> argparse.ArgumentParser:
     seal.add_argument("--output", type=Path, required=True)
     verify = commands.add_parser("verify", help="verify hashes and acceptance policy")
     verify.add_argument("--bundle", type=Path, required=True)
+    verify.add_argument(
+        "--artifact-root",
+        type=Path,
+        help="trusted immutable Parquet artifact root used for independent replay",
+    )
+    verify.add_argument("--collector-envelope", type=Path)
+    verify.add_argument("--anchor-receipt", type=Path)
+    verify.add_argument(
+        "--trust-policy-id",
+        help=(
+            "ID of a release-bundled policy under config/acceptance_trust; "
+            "caller-provided trust-root paths are forbidden"
+        ),
+    )
     return parser
 
 
@@ -38,7 +61,54 @@ def main(argv: list[str] | None = None) -> int:
             write_acceptance_bundle(args.output, bundle)
         else:
             bundle = load_acceptance_bundle(args.bundle)
-        evaluation = bundle.evaluate()
+        trust_policy = (
+            load_acceptance_trust_policy(TRUST_POLICY_ROOT, args.trust_policy_id)
+            if args.command == "verify" and args.trust_policy_id is not None
+            else None
+        )
+        runtime_identity = (
+            load_runtime_release_identity(RUNTIME_RELEASE_IDENTITY_PATH)
+            if trust_policy is not None
+            else None
+        )
+        replay_verifier = (
+            LocalAcceptanceReplayVerifier(
+                args.artifact_root,
+                cost_policy=trust_policy.replay_cost_policy,
+            )
+            if args.command == "verify"
+            and args.artifact_root is not None
+            and trust_policy is not None
+            else None
+        )
+        provenance_paths = (
+            (args.collector_envelope, args.anchor_receipt)
+            if args.command == "verify"
+            else (None, None)
+        )
+        if any(path is not None for path in provenance_paths) and not all(
+            path is not None for path in provenance_paths
+        ):
+            raise ValueError("collector envelope and anchor receipt are required together")
+        if all(path is not None for path in provenance_paths) and trust_policy is None:
+            raise ValueError("release-bundled trust policy is required for provenance")
+        provenance_verifier = None
+        if all(path is not None for path in provenance_paths):
+            collector_envelope, anchor_receipt = provenance_paths
+            assert isinstance(collector_envelope, Path)
+            assert isinstance(anchor_receipt, Path)
+            assert trust_policy is not None
+            assert runtime_identity is not None
+            provenance_verifier = LocalAcceptanceProvenanceVerifier(
+                collector_envelope_path=collector_envelope,
+                anchor_receipt_path=anchor_receipt,
+                trust_policy=trust_policy,
+                runtime_identity=runtime_identity,
+            )
+        evaluation = bundle.evaluate(
+            replay_verifier=replay_verifier,
+            provenance_verifier=provenance_verifier,
+        )
     except (
         AcceptanceEvidenceIntegrityError,
         FileExistsError,
@@ -84,7 +154,7 @@ def _safe_error(error: Exception) -> dict[str, Any]:
         return {"message": "immutable acceptance output already exists"}
     if isinstance(error, OSError):
         return {"message": "acceptance evidence filesystem operation failed"}
-    return {"message": str(error)}
+    return {"message": "acceptance evidence is invalid"}
 
 
 if __name__ == "__main__":
