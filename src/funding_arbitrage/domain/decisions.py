@@ -57,6 +57,14 @@ class SignalLeg(BaseModel):
     side: Side
     hedge_ratio: Decimal = Field(default=Decimal("1"), gt=0)
     execution_priority: int = Field(default=0, ge=0)
+    preferred_limit_price: Decimal | None = Field(default=None, gt=0)
+    post_only: bool = False
+
+    @model_validator(mode="after")
+    def validate_execution_preference(self) -> SignalLeg:
+        if self.post_only and self.preferred_limit_price is None:
+            raise ValueError("post-only signal leg requires a preferred limit price")
+        return self
 
 
 class SignalIntent(BaseModel):
@@ -212,12 +220,15 @@ class ExecutionInstruction(BaseModel):
     quantity: Decimal = Field(gt=0)
     limit_price: Decimal | None = Field(default=None, gt=0)
     reduce_only: bool = False
+    post_only: bool = False
 
     @model_validator(mode="after")
     def validate_order_price(self) -> ExecutionInstruction:
         if self.order_type in {OrderType.LIMIT, OrderType.STOP_LIMIT}:
             if self.limit_price is None:
                 raise ValueError("limit execution instruction requires limit price")
+        if self.post_only and self.order_type is not OrderType.LIMIT:
+            raise ValueError("post-only execution instruction must be a limit order")
         return self
 
 
@@ -233,6 +244,8 @@ class ExecutionPlan(BaseModel):
     created_at: datetime
     expires_at: datetime
     instructions: tuple[ExecutionInstruction, ...] = Field(min_length=1)
+    market_snapshot_id: str | None = Field(default=None, min_length=1)
+    intent_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("created_at", "expires_at")
     @classmethod

@@ -23,6 +23,9 @@ from pydantic import (
 
 from funding_arbitrage.domain.decisions import MarketRegime, SignalIntent, SignalType
 from funding_arbitrage.domain.events import TradingMode
+from funding_arbitrage.services.strategy_execution import (
+    ADVANCED_EXECUTABLE_SIGNAL_TYPES,
+)
 from funding_arbitrage.strategies import (
     CrossExchangeLeadLagEvaluation,
     CrossExchangeLeadLagStrategy,
@@ -54,6 +57,9 @@ DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES = frozenset(
         SignalType.ORDERFLOW_BREAKOUT,
         SignalType.LIQUIDITY_SWEEP_REVERSION,
     }
+)
+PAPER_EXECUTABLE_SIGNAL_TYPES = (
+    DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES | ADVANCED_EXECUTABLE_SIGNAL_TYPES
 )
 
 
@@ -254,7 +260,7 @@ class StrategySuite:
         loss_averaging: LossAveragingResearchStrategy | None = None,
         executable_signal_types: frozenset[
             SignalType
-        ] = DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES,
+        ] = PAPER_EXECUTABLE_SIGNAL_TYPES,
     ) -> None:
         if not directional_strategies:
             raise ValueError("strategy suite requires directional strategies")
@@ -479,10 +485,13 @@ def _record(
         intent = None
         rejection_reason = "safe_mode_suppressed"
     elif (
-        request.mode
-        in {TradingMode.PAPER, TradingMode.LIMITED_LIVE, TradingMode.LIVE}
+        request.mode is TradingMode.PAPER
         and intent is not None
         and intent.signal_type not in executable_signal_types
+    ) or (
+        request.mode in {TradingMode.LIMITED_LIVE, TradingMode.LIVE}
+        and intent is not None
+        and intent.signal_type not in DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES
     ):
         intent = None
         rejection_reason = "execution_planner_unavailable"

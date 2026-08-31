@@ -340,6 +340,9 @@ class DirectionalPaperBroker:
         }
         updates: list[DirectionalPaperUpdate] = []
         for plan in batch.execution_plans:
+            if plan.signal_id not in intents:
+                # Advanced plans are consumed by the dedicated multi-leg broker.
+                continue
             position_id = _stable_id("mrp", self.simulation_version, plan.plan_id)
             if position_id in self._positions:
                 continue

@@ -744,6 +744,8 @@ requirements:
       - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/services/multi_regime_runtime.py
       - src/funding_arbitrage/execution/directional_paper.py
+      - src/funding_arbitrage/execution/advanced_paper.py
+      - src/funding_arbitrage/services/strategy_execution.py
       - src/funding_arbitrage/backtest/fills.py
       - src/funding_arbitrage/database/repositories/multi_regime.py
       - src/funding_arbitrage/database/repositories/directional_paper.py
@@ -756,6 +758,8 @@ requirements:
       - tests/test_backtest_fill_model.py
       - tests/test_directional_paper_persistence.py
       - tests/test_directional_paper_restore.py
+      - tests/test_advanced_paper.py
+      - tests/test_strategy_execution.py
       - src/funding_arbitrage/qa/multi_regime_paper.py
       - scripts/multi_regime_paper_probe.py
       - tests/test_multi_regime_paper_probe.py

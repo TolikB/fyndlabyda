@@ -501,20 +501,25 @@ def test_strategy_suite_evaluates_every_family_deterministically() -> None:
     ]
 
 
-def test_execution_modes_suppress_unplanned_advanced_intents_but_keep_audit() -> None:
+def test_paper_keeps_plannable_advanced_intents_and_safe_mode_suppresses_all() -> None:
     paper = _suite().evaluate(_request(TradingMode.PAPER))
     safe = _suite().evaluate(_request(TradingMode.SAFE_MODE))
 
-    assert [intent.signal_type for intent in paper.intents] == [
-        SignalType.ORDERFLOW_BREAKOUT
-    ]
+    assert {intent.signal_type for intent in paper.intents} == {
+        SignalType.ORDERFLOW_BREAKOUT,
+        SignalType.FUNDING_BASIS,
+        SignalType.CROSS_EXCHANGE_STAT_ARB,
+        SignalType.DATED_FUTURES_BASIS,
+        SignalType.OPTIONS_VOLATILITY,
+        SignalType.PASSIVE_MARKET_MAKING,
+    }
     funding = next(
         item
         for item in paper.evaluations
         if item.family is StrategyFamily.FUNDING_BASIS
     )
-    assert funding.intent is None
-    assert funding.rejection_reason == "execution_planner_unavailable"
+    assert funding.intent is not None
+    assert funding.rejection_reason is None
     assert funding.evaluation_payload["intent"] is not None
     assert safe.intents == ()
     accepted_directional = next(

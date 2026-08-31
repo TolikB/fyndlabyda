@@ -232,6 +232,8 @@ class PassiveMarketMakingStrategy:
                     instrument=context.instrument,
                     side=Side.BUY,
                     hedge_ratio=bid_multiplier,
+                    preferred_limit_price=bid_price,
+                    post_only=True,
                 )
             )
         if ask_price is not None:
@@ -240,6 +242,8 @@ class PassiveMarketMakingStrategy:
                     instrument=context.instrument,
                     side=Side.SELL,
                     hedge_ratio=ask_multiplier,
+                    preferred_limit_price=ask_price,
+                    post_only=True,
                 )
             )
         primary_side = Side.SELL if inventory_deviation > 0 else Side.BUY

@@ -60,12 +60,23 @@ risk decision and may not exceed the instrument, side, hedge ratio, or quantity 
 the approved intent. The PAPER broker repeats the authority checks before creating
 an order so even a malformed legacy or in-memory batch cannot bypass an AI veto.
 
-The currently verified multi-regime planner supports only one-leg
-`ORDERFLOW_BREAKOUT` and `LIQUIDITY_SWEEP_REVERSION`. Advanced outcomes are visible
-in SHADOW/BACKTEST/REPLAY but carry an explicit execution block. In PAPER and both
-live modes they are normalized to `execution_planner_unavailable`; in SAFE_MODE all
-intents are suppressed. Adding a signal type to an allowlist alone therefore cannot
-make it executable.
+The directional planner supports one-leg `ORDERFLOW_BREAKOUT` and
+`LIQUIDITY_SWEEP_REVERSION`. A separate synchronized planner supports PAPER intents
+for funding, cross-exchange stat-arb, dated-futures basis, options volatility, and
+passive market making. It requires a content-addressed snapshot with a fresh exact
+L2 book, data quality, venue fees, and quantity/tick rules for every leg. The
+snapshot, intent fingerprint, approved risk decision, plan, and each instruction
+are identity-bound. A missing/stale/crossed book, insufficient displayed depth,
+invalid post-only price, or changed intent is stored as an explicit block and no
+order is created.
+
+The advanced PAPER broker repeats the full authority-chain validation, models
+partial fills, requires trade evidence for passive maker fills, and automatically
+compensates filled orphan legs after entry failure. Its OMS/fill/position projection
+shares the canonical event checkpoint transaction, so restart cannot silently
+resubmit an accepted plan. LIMITED_LIVE and LIVE still suppress these advanced
+paths, and SAFE_MODE suppresses all intents. Adding a signal type to an allowlist
+alone therefore cannot make it executable.
 
 Funding execution remains on its existing, independently guarded two-leg funding
 pipeline until its opportunity projection is migrated to this contract without
@@ -87,7 +98,7 @@ empty rather than fabricated, and no AI claim is made for deployed behavior.
 
 The production application supplies passive-market-making evaluation inputs from
 the same canonical L2/order-flow state used by replay. Position limits use the paper
-size cap and current directional inventory; maker fees come from the selected venue;
+size cap and current directional plus advanced inventory; maker fees come from the selected venue;
 ATR and the configured cost floor are conservative adverse/hedging inputs. Missing
 ATR, venue fee metadata, or positive sizing produces no context. Live operator
 authorization is always false in this projection.
@@ -95,3 +106,6 @@ authorization is always false in this projection.
 The remaining families require synchronized cross-instrument providers (funding
 forecast pairs, multi-venue fair value, dated contracts, and options chains). Those
 providers are intentionally not fabricated from a single-instrument snapshot.
+When a dedicated provider supplies one of those contexts, execution still requires
+the independent synchronized per-leg snapshot and multi-leg portfolio-risk boundary
+described above.

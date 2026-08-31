@@ -272,7 +272,7 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
 
 
 @pytest.mark.asyncio
-async def test_daily_report_includes_directional_spread_and_impact_costs(
+async def test_daily_report_includes_all_multi_regime_costs_and_positions(
     database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
 ) -> None:
     _, factory = database
@@ -316,6 +316,30 @@ async def test_daily_report_includes_directional_spread_and_impact_costs(
                 exchange_timestamp=start + timedelta(hours=2),
                 receive_timestamp=start + timedelta(hours=2),
                 payload={"spread_cost": "0.40", "impact_cost": "0.10"},
+            )
+        )
+        session.add(
+            ExecutionFillRecord(
+                fill_id="advanced-cost-fill",
+                simulation_version=version,
+                client_order_id="mao_advanced_cost",
+                exchange_order_id="paper:mao_advanced_cost",
+                venue="gate",
+                instrument_id="GATE:PERP:BTC/USDT",
+                side="SELL",
+                price=Decimal("101"),
+                quantity=Decimal("1"),
+                fee_amount=Decimal("0.15"),
+                fee_asset="USDT",
+                liquidity_role="TAKER",
+                exchange_timestamp=start + timedelta(hours=2),
+                receive_timestamp=start + timedelta(hours=2),
+                payload={
+                    "fill": {
+                        "spread_cost": "0.30",
+                        "impact_cost": "0.20",
+                    }
+                },
             )
         )
         session.add(
@@ -411,6 +435,42 @@ async def test_daily_report_includes_directional_spread_and_impact_costs(
                     updated_at=start + timedelta(hours=6),
                     payload={},
                 ),
+                PositionStateRecord(
+                    position_id="map_open",
+                    simulation_version=version,
+                    strategy_id="cross-exchange-stat-arb",
+                    venue="GATE",
+                    instrument_id="GATE:PERP:BTC/USDT",
+                    status="OPEN",
+                    signed_quantity=Decimal("-1"),
+                    entry_price=Decimal("101"),
+                    mark_price=Decimal("100"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("1"),
+                    collateral=Decimal("20"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=None,
+                    updated_at=start + timedelta(hours=3),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="map_compensated",
+                    simulation_version=version,
+                    strategy_id="cross-exchange-stat-arb",
+                    venue="GATE",
+                    instrument_id="GATE:PERP:ETH/USDT",
+                    status="COMPENSATED",
+                    signed_quantity=Decimal("0"),
+                    entry_price=Decimal("101"),
+                    mark_price=Decimal("101"),
+                    realized_pnl=Decimal("-0.15"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("0"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=start + timedelta(hours=4),
+                    updated_at=start + timedelta(hours=4),
+                    payload={},
+                ),
             ]
         )
         await session.commit()
@@ -428,12 +488,13 @@ async def test_daily_report_includes_directional_spread_and_impact_costs(
         )
     await service.close()
 
-    assert report.day_fees == Decimal("0.25")
-    assert report.day_slippage == Decimal("0.50")
-    assert report.total_slippage == Decimal("0.50")
-    assert report.opened == 2
-    assert report.closed == 1
-    assert report.open_positions == 1
+    cents = Decimal("0.01")
+    assert report.day_fees.quantize(cents) == Decimal("0.40")
+    assert report.day_slippage.quantize(cents) == Decimal("1.00")
+    assert report.total_slippage.quantize(cents) == Decimal("1.00")
+    assert report.opened == 4
+    assert report.closed == 2
+    assert report.open_positions == 2
 
 
 @pytest.mark.asyncio

@@ -17,9 +17,9 @@ paper, and replay flows. The decision path is:
       -> portfolio risk authorization
       -> expiring execution plan
       -> multi_regime_decision_batches + risk_decisions
-      -> PAPER-only deterministic order-book fills
+      -> PAPER-only deterministic one- or multi-leg order-book fills
       -> OMS/fill/position projections + paper checkpoint
-      -> stop, target, time-stop, or partial-entry flatten
+      -> stop, target, time-stop, or failed/partial-leg compensation
 
 `StrategySuite` is declarative and has no order or sizing authority. It normalizes
 directional, funding/basis, lead-lag/stat-arb, dated-futures basis, options,
@@ -66,14 +66,14 @@ time-dependent; persisted decision batches remain authoritative. PAPER positions
 are restored from their latest durable projection, and only canonical rows after
 the paper checkpoint are replayed.
 
-Directional PAPER execution is enabled only when all of these conditions hold:
+Multi-regime PAPER execution is enabled only when all of these conditions hold:
 
 - effective mode is PAPER;
 - MULTI_REGIME_PAPER_EXECUTION_ENABLED=true;
 - PAPER_AUTOTRADE=true;
 - the shared entry-health gate and portfolio risk authority approve the signal.
 
-Fills use fresh canonical books, venue-specific maker/taker fees, bounded
+Directional fills use fresh canonical books, venue-specific maker/taker fees, bounded
 participation, latency, spread, and nonlinear impact. Aggressive fills walk visible
 L2 levels with a displayed-depth participation cap. Every partial market exit is a
 separate deterministic child IOC order, and realized PnL is accrued on each exit fill.
@@ -82,20 +82,33 @@ remainder and starts a reduce-only flatten. Realized price PnL is calculated fro
 actual simulated entry/exit prices, so spread and impact are already embedded in
 price PnL and are exposed as attribution fields rather than subtracted twice.
 
-For RUN_MODE=live, the multi-regime directional pipeline is forcibly downgraded to
+Advanced funding, cross-venue stat-arb, dated-basis, options-volatility, and
+passive-market-making intents have a separate multi-leg PAPER planner and broker.
+The planner is bound to one content-addressed execution snapshot containing the
+exact per-leg L2 book, venue fee schedule, quantity/tick rules, and data-quality
+state. Missing, future, stale, crossed, or insufficient-depth books fail closed.
+Post-only instructions require an explicit non-crossing limit price and simulated
+maker fills require matching trade evidence; a book snapshot alone cannot fill a
+passive quote. Entry expiry cancels unfilled quantities and automatically flattens
+every filled orphan leg. Orders, fills, positions, and the event-consumer checkpoint
+are committed atomically and restored without resubmitting historical plans.
+
+For RUN_MODE=live, the multi-regime pipeline is forcibly downgraded to
 SHADOW. It cannot construct a paper broker or submit exchange orders. Existing
 authenticated funding execution is a separate path. Directional live execution
 remains unavailable until paper/shadow acceptance evidence and an explicit later
 authorization exist.
 
-Only one-leg breakout and sweep/reversion intents currently have a verified planner
-and directional PAPER broker in this runtime. In PAPER, LIMITED_LIVE, and LIVE,
-accepted raw outcomes from every other strategy family are normalized as
-`execution_planner_unavailable` and cannot enter orchestration. In SHADOW/BACKTEST/
-REPLAY they may enter orchestration for measurement, but the decision batch records
-an explicit execution block before risk or planning. SAFE_MODE suppresses every
-intent. This separation prevents an implemented research strategy from being
-mistaken for an executable venue path.
+One-leg breakout and sweep/reversion intents use the directional planner and broker.
+The five safe advanced signal types listed above use the synchronized multi-leg
+planner and broker only in PAPER. An advanced intent cannot reach planning without
+an exact execution snapshot and an approved multi-leg portfolio-risk decision; a
+post-risk planning failure is stored as an explicit execution block. The default
+runtime currently projects passive-market-making contexts, while other advanced
+families remain absent unless a dedicated synchronized context provider supplies
+their inputs. LIMITED_LIVE and LIVE continue to suppress advanced execution, and
+SAFE_MODE suppresses every intent. Research-only Martingale, grid, and loss-
+averaging strategies remain non-executable in every mode.
 
 Read-only inspection endpoints:
 
@@ -112,23 +125,24 @@ Read-only inspection endpoints:
 identity and raw audit payload. This is additive for existing readers.
 
 Candidate output uses simulator version v32-multi-regime-candidate so its totals do
-not mix with v31 data. Directional positions, OMS orders, fills, and checkpoints are
-also isolated by simulator version. Portfolio snapshots have explicit legacy and
+not mix with v31 data. Directional and advanced positions, OMS orders, fills, and
+checkpoints are also isolated by simulator version. Portfolio snapshots have explicit legacy and
 combined scopes: funding-runner restore consumes legacy balances, while Telegram,
-analytics, and replay prefer the authoritative combined scope whenever directional
+analytics, and replay prefer the authoritative combined scope whenever multi-regime
 PAPER execution is enabled. This prevents a later funding-only cycle from hiding
-directional PnL. Combined funding plus directional snapshots feed the existing daily
-Telegram human-readable DAILY and ALL TIME sections; directional fills, fees,
-opens, and closes
-are included, while embedded spread/impact is called out explicitly.
+multi-regime PnL. Combined funding plus multi-regime snapshots feed the daily
+Telegram human-readable DAILY and ALL TIME sections. Directional and advanced fills,
+fees, opens, closes, and active positions are included in the totals; embedded
+spread/impact remains cost attribution and is not subtracted twice.
 
 The Telegram report deliberately excludes simulator versions, signal counters,
 cycle diagnostics, reconciliation internals, and other system telemetry. Those
 details remain available in logs and metrics; the user-facing message contains
 only financial results, trade counts, costs, balance, and open positions.
 
-This slice now proves canonical-event-to-risk-plan-to-durable PAPER position and PnL
-lifecycle. `scripts/multi_regime_paper_probe.py` extends that proof to the deployment
+Local integration tests prove the canonical-event-to-snapshot-to-risk-plan-to-
+durable PAPER position lifecycle, including restart recovery and multi-leg
+compensation. `scripts/multi_regime_paper_probe.py` extends the directional proof to the deployment
 PostgreSQL engine without touching application rows: it requires an unarmed
 `paper_test/mock/PAPER` host with no private exchange credentials, creates a unique
 temporary PostgreSQL database from `template0`, directs every probe dependency to

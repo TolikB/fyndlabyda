@@ -66,6 +66,12 @@ from funding_arbitrage.services.decision_support import (
     DecisionSupportGate,
     intent_fingerprint,
 )
+from funding_arbitrage.services.strategy_execution import (
+    ADVANCED_EXECUTABLE_SIGNAL_TYPES,
+    AdvancedStrategyExecutionPlanner,
+    StrategyExecutionPlanningError,
+    StrategyExecutionSnapshot,
+)
 from funding_arbitrage.services.strategy_suite import (
     DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES,
     DirectionalStrategy,
@@ -98,6 +104,25 @@ class RiskContextProvider(Protocol):
         book: BookSnapshot,
         timestamp: datetime,
     ) -> RiskAuthorizationContext | None: ...
+
+
+class AdvancedRiskContextProvider(Protocol):
+    def __call__(
+        self,
+        intent: SignalIntent,
+        snapshot: StrategyExecutionSnapshot,
+        timestamp: datetime,
+    ) -> RiskAuthorizationContext | None: ...
+
+
+class StrategyExecutionSnapshotProvider(Protocol):
+    def __call__(
+        self,
+        intent: SignalIntent,
+        source_event_id: str,
+        timestamp: datetime,
+        primary_book: BookSnapshot,
+    ) -> StrategyExecutionSnapshot | None: ...
 
 
 class MultiRegimeStrategySnapshot(BaseModel):
@@ -158,6 +183,7 @@ class StrategyExecutionBlock(BaseModel):
 
     signal_id: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+    risk_decision_id: str | None = Field(default=None, min_length=1)
 
 
 class MultiRegimeEngineConfig(BaseModel):
@@ -219,6 +245,7 @@ class MultiRegimeDecisionBatch(BaseModel):
     orchestration: SignalOrchestrationResult
     risk_authorizations: tuple[PortfolioRiskAuthorization, ...] = ()
     execution_plans: tuple[ExecutionPlan, ...] = ()
+    execution_snapshots: tuple[StrategyExecutionSnapshot, ...] = ()
     execution_blocks: tuple[StrategyExecutionBlock, ...] = ()
     decision_support_assessments: tuple[DecisionSupportAssessment, ...] = ()
     risk_context_missing_signal_ids: tuple[str, ...] = ()
@@ -296,6 +323,35 @@ class MultiRegimeDecisionBatch(BaseModel):
         if len(risk_signal_ids) != len(set(risk_signal_ids)):
             raise ValueError("strategy signal has duplicate risk authorizations")
 
+        snapshot_ids = tuple(
+            snapshot.snapshot_id for snapshot in self.execution_snapshots
+        )
+        snapshot_signal_ids = tuple(
+            snapshot.signal_id for snapshot in self.execution_snapshots
+        )
+        if len(snapshot_ids) != len(set(snapshot_ids)) or len(
+            snapshot_signal_ids
+        ) != len(set(snapshot_signal_ids)):
+            raise ValueError("strategy batch has duplicate execution snapshots")
+        snapshots_by_id = {
+            snapshot.snapshot_id: snapshot for snapshot in self.execution_snapshots
+        }
+        snapshots_by_signal = {
+            snapshot.signal_id: snapshot for snapshot in self.execution_snapshots
+        }
+        for snapshot in self.execution_snapshots:
+            snapshot_intent = suite_intents.get(snapshot.signal_id)
+            if (
+                snapshot_intent is None
+                or snapshot.signal_id not in accepted_ids
+                or snapshot_intent.signal_type not in ADVANCED_EXECUTABLE_SIGNAL_TYPES
+                or snapshot.source_event_id != self.source_event_id
+                or snapshot.captured_at != self.timestamp
+                or snapshot.intent_fingerprint
+                != intent_fingerprint(snapshot_intent)
+            ):
+                raise ValueError("advanced execution snapshot boundary mismatch")
+
         plan_ids = tuple(plan.plan_id for plan in self.execution_plans)
         planned_ids = tuple(plan.signal_id for plan in self.execution_plans)
         if len(plan_ids) != len(set(plan_ids)) or len(planned_ids) != len(
@@ -315,10 +371,17 @@ class MultiRegimeDecisionBatch(BaseModel):
         risk_set = set(risk_signal_ids)
         if planned_set & (blocked_set | missing_set):
             raise ValueError("planned strategy signal has conflicting execution outcome")
-        if blocked_set & (risk_set | missing_set):
-            raise ValueError("blocked strategy signal crossed execution boundary")
+        if blocked_set & missing_set:
+            raise ValueError("blocked strategy signal also has missing risk context")
         if missing_set & risk_set:
             raise ValueError("missing-risk strategy signal has a risk authorization")
+        pre_risk_blocked = {
+            block.signal_id
+            for block in self.execution_blocks
+            if block.risk_decision_id is None
+        }
+        if pre_risk_blocked & risk_set:
+            raise ValueError("pre-risk execution block crossed risk authority")
         routed_ids = risk_set | blocked_set | missing_set
         if routed_ids != accepted_ids:
             raise ValueError("accepted strategy signals are not routed exactly once")
@@ -337,6 +400,36 @@ class MultiRegimeDecisionBatch(BaseModel):
                 and decision.decision_support_multiplier > support_multiplier
             ):
                 raise ValueError("risk decision bypasses decision-support reduction")
+            planning_blocks = tuple(
+                block
+                for block in self.execution_blocks
+                if block.signal_id == decision.signal_id
+                and block.risk_decision_id is not None
+            )
+            plans = tuple(
+                plan for plan in self.execution_plans if plan.signal_id == decision.signal_id
+            )
+            if decision.approved and len(plans) + len(planning_blocks) != 1:
+                raise ValueError(
+                    "approved risk decision requires one plan or planning block"
+                )
+            if not decision.approved and (plans or planning_blocks):
+                raise ValueError("rejected risk decision reached execution planning")
+        for block in self.execution_blocks:
+            if block.risk_decision_id is None:
+                continue
+            blocked_decision = risk_by_decision_id.get(block.risk_decision_id)
+            blocked_intent = suite_intents.get(block.signal_id)
+            if (
+                blocked_decision is None
+                or not blocked_decision.approved
+                or blocked_decision.signal_id != block.signal_id
+                or blocked_intent is None
+                or blocked_intent.signal_type
+                not in ADVANCED_EXECUTABLE_SIGNAL_TYPES
+                or block.signal_id not in snapshots_by_signal
+            ):
+                raise ValueError("planning block lacks matching approved risk authority")
         for plan in self.execution_plans:
             risk_decision = risk_by_decision_id.get(plan.risk_decision_id)
             if risk_decision is None or not risk_decision.approved:
@@ -348,6 +441,20 @@ class MultiRegimeDecisionBatch(BaseModel):
                 raise ValueError("execution plan trading mode mismatch")
             if plan.created_at != self.timestamp or plan.expires_at > intent.expires_at:
                 raise ValueError("execution plan timestamp exceeds signal authority")
+            if intent.signal_type in ADVANCED_EXECUTABLE_SIGNAL_TYPES:
+                plan_snapshot = snapshots_by_signal.get(plan.signal_id)
+                if (
+                    plan_snapshot is None
+                    or plan.market_snapshot_id != plan_snapshot.snapshot_id
+                    or plan.intent_fingerprint != plan_snapshot.intent_fingerprint
+                    or snapshots_by_id.get(plan.market_snapshot_id) != plan_snapshot
+                ):
+                    raise ValueError("advanced execution plan is not snapshot-bound")
+            elif (
+                plan.market_snapshot_id is not None
+                or plan.intent_fingerprint is not None
+            ):
+                raise ValueError("directional execution plan cannot claim an advanced snapshot")
             instructions_by_index = {
                 instruction.leg_index: instruction
                 for instruction in plan.instructions
@@ -359,6 +466,12 @@ class MultiRegimeDecisionBatch(BaseModel):
                 if instruction is None or (
                     instruction.instrument != leg.instrument
                     or instruction.side is not leg.side
+                    or instruction.post_only is not leg.post_only
+                    or (
+                        leg.post_only
+                        and instruction.limit_price
+                        != leg.preferred_limit_price
+                    )
                     or instruction.quantity
                     > risk_decision.approved_quantity * leg.hedge_ratio
                 ):
@@ -436,6 +549,9 @@ class MultiRegimeEngine:
         | None = None,
         decision_support_provider: DecisionSupportProvider | None = None,
         decision_support_gate: DecisionSupportGate | None = None,
+        execution_snapshot_provider: StrategyExecutionSnapshotProvider | None = None,
+        advanced_risk_context_provider: AdvancedRiskContextProvider | None = None,
+        advanced_execution_planner: AdvancedStrategyExecutionPlanner | None = None,
         regime_thresholds: RegimeThresholds | None = None,
     ) -> None:
         if strategy_suite is not None and (
@@ -458,6 +574,11 @@ class MultiRegimeEngine:
         self.supplemental_context_provider = supplemental_context_provider
         self.decision_support_provider = decision_support_provider
         self.decision_support_gate = decision_support_gate or DecisionSupportGate()
+        self.execution_snapshot_provider = execution_snapshot_provider
+        self.advanced_risk_context_provider = advanced_risk_context_provider
+        self.advanced_execution_planner = (
+            advanced_execution_planner or AdvancedStrategyExecutionPlanner()
+        )
         self.regime_thresholds = regime_thresholds
         self.orchestrator = SignalOrchestrator(self.config.mode)
         self._states: dict[str, _InstrumentState] = {}
@@ -710,10 +831,51 @@ class MultiRegimeEngine:
         accepted = tuple(intent for intent in intents if intent.signal_id in accepted_ids)
         authorizations: list[PortfolioRiskAuthorization] = []
         plans: list[ExecutionPlan] = []
+        execution_snapshots: list[StrategyExecutionSnapshot] = []
         execution_blocks: list[StrategyExecutionBlock] = []
         missing: list[str] = []
         for intent in accepted:
-            if intent.signal_type not in DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES:
+            execution_snapshot: StrategyExecutionSnapshot | None = None
+            if intent.signal_type in DIRECTIONAL_EXECUTABLE_SIGNAL_TYPES:
+                if self.risk_context_provider is None:
+                    missing.append(intent.signal_id)
+                    continue
+                risk_context = self.risk_context_provider(
+                    intent, technical, orderflow, book, decision_time
+                )
+            elif intent.signal_type in ADVANCED_EXECUTABLE_SIGNAL_TYPES:
+                if self.execution_snapshot_provider is None:
+                    execution_blocks.append(
+                        StrategyExecutionBlock(
+                            signal_id=intent.signal_id,
+                            reason="execution_snapshot_provider_unavailable",
+                        )
+                    )
+                    continue
+                execution_snapshot = self.execution_snapshot_provider(
+                    intent,
+                    event.metadata.event_id,
+                    decision_time,
+                    book,
+                )
+                if execution_snapshot is None:
+                    execution_blocks.append(
+                        StrategyExecutionBlock(
+                            signal_id=intent.signal_id,
+                            reason="execution_snapshot_unavailable",
+                        )
+                    )
+                    continue
+                execution_snapshots.append(execution_snapshot)
+                if self.advanced_risk_context_provider is None:
+                    missing.append(intent.signal_id)
+                    continue
+                risk_context = self.advanced_risk_context_provider(
+                    intent,
+                    execution_snapshot,
+                    decision_time,
+                )
+            else:
                 execution_blocks.append(
                     StrategyExecutionBlock(
                         signal_id=intent.signal_id,
@@ -721,12 +883,6 @@ class MultiRegimeEngine:
                     )
                 )
                 continue
-            if self.risk_context_provider is None:
-                missing.append(intent.signal_id)
-                continue
-            risk_context = self.risk_context_provider(
-                intent, technical, orderflow, book, decision_time
-            )
             if risk_context is None:
                 missing.append(intent.signal_id)
                 continue
@@ -740,7 +896,30 @@ class MultiRegimeEngine:
             authorization = self.risk_authority.authorize(risk_context)
             authorizations.append(authorization)
             if authorization.decision.approved:
-                plans.append(self._plan(intent, authorization.decision, decision_time))
+                if execution_snapshot is None:
+                    plans.append(
+                        self._plan(intent, authorization.decision, decision_time)
+                    )
+                else:
+                    try:
+                        plans.append(
+                            self.advanced_execution_planner.build(
+                                intent,
+                                authorization.decision,
+                                execution_snapshot,
+                                decision_time,
+                            )
+                        )
+                    except StrategyExecutionPlanningError as error:
+                        execution_blocks.append(
+                            StrategyExecutionBlock(
+                                signal_id=intent.signal_id,
+                                reason=error.code.value,
+                                risk_decision_id=(
+                                    authorization.decision.decision_id
+                                ),
+                            )
+                        )
         batch_id = _stable_id(
             "mrb",
             event.metadata.event_id,
@@ -763,6 +942,12 @@ class MultiRegimeEngine:
             orchestration=orchestration,
             risk_authorizations=tuple(authorizations),
             execution_plans=tuple(plans),
+            execution_snapshots=tuple(
+                sorted(
+                    execution_snapshots,
+                    key=lambda item: (item.signal_id, item.snapshot_id),
+                )
+            ),
             execution_blocks=tuple(
                 sorted(execution_blocks, key=lambda block: block.signal_id)
             ),

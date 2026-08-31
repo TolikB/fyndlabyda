@@ -34,9 +34,12 @@ async def multi_regime_status(request: Request) -> dict[str, object]:
         "restored_events": runtime.restored_events,
         "persisted_batches": runtime.persisted_batches,
         "paper_replayed_events": runtime.paper_replayed_events,
-        "paper_execution_enabled": runtime.paper_broker is not None,
-        "paper_positions": (
-            len(runtime.paper_broker.positions) if runtime.paper_broker is not None else 0
+        "paper_execution_enabled": (
+            runtime.paper_broker is not None
+            or runtime.advanced_paper_broker is not None
+        ),
+        "paper_positions": sum(
+            len(broker.positions) for broker in _paper_brokers(runtime)
         ),
         "instruments": len(runtime.latest_by_instrument),
     }
@@ -83,8 +86,8 @@ async def risk(request: Request) -> list[dict[str, Any]]:
 @router.get("/multi-regime/paper/summary")
 async def paper_summary(request: Request) -> dict[str, object]:
     runtime = _runtime(request)
-    broker = runtime.paper_broker if runtime is not None else None
-    if broker is None:
+    brokers = _paper_brokers(runtime)
+    if not brokers:
         return {
             "enabled": False,
             "positions": 0,
@@ -96,12 +99,22 @@ async def paper_summary(request: Request) -> dict[str, object]:
         }
     return {
         "enabled": True,
-        "positions": len(broker.positions),
-        "active_positions": len(broker.active_positions),
-        "reserved_notional": str(broker.reserved_notional),
-        "gross_exposure": str(broker.gross_exposure),
-        "realized_net_pnl": str(broker.realized_net_pnl),
-        "total_net_pnl": str(broker.total_net_pnl),
+        "positions": sum(len(broker.positions) for broker in brokers),
+        "active_positions": sum(
+            len(broker.active_positions) for broker in brokers
+        ),
+        "reserved_notional": str(
+            sum((broker.reserved_notional for broker in brokers), 0)
+        ),
+        "gross_exposure": str(
+            sum((broker.gross_exposure for broker in brokers), 0)
+        ),
+        "realized_net_pnl": str(
+            sum((broker.realized_net_pnl for broker in brokers), 0)
+        ),
+        "total_net_pnl": str(
+            sum((broker.total_net_pnl for broker in brokers), 0)
+        ),
     }
 
 
@@ -111,18 +124,30 @@ async def paper_positions(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[dict[str, Any]]:
     runtime = _runtime(request)
-    broker = runtime.paper_broker if runtime is not None else None
-    if broker is None:
-        return []
+    brokers = _paper_brokers(runtime)
+    positions = [position for broker in brokers for position in broker.positions]
     return [
         position.model_dump(mode="json")
-        for position in broker.positions[-limit:]
+        for position in sorted(
+            positions,
+            key=lambda item: (item.created_at, item.position_id),
+        )[-limit:]
     ]
 
 
 def _runtime(request: Request) -> DurableMultiRegimeRuntime | None:
     runtime = getattr(request.app.state, "multi_regime_runtime", None)
     return runtime if isinstance(runtime, DurableMultiRegimeRuntime) else None
+
+
+def _paper_brokers(runtime: DurableMultiRegimeRuntime | None) -> tuple[Any, ...]:
+    if runtime is None:
+        return ()
+    return tuple(
+        broker
+        for broker in (runtime.paper_broker, runtime.advanced_paper_broker)
+        if broker is not None
+    )
 
 
 def _latest(request: Request) -> tuple[Any, ...]:

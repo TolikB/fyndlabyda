@@ -44,6 +44,7 @@ from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.exchanges.private_streams import create_private_stream_supervisor
 from funding_arbitrage.exchanges.public_events import create_public_event_supervisor
 from funding_arbitrage.exchanges.trading import create_trading_adapters
+from funding_arbitrage.execution.advanced_paper import AdvancedStrategyPaperBroker
 from funding_arbitrage.execution.directional_paper import DirectionalPaperBroker
 from funding_arbitrage.internal_tls import create_internal_ssl_context
 from funding_arbitrage.logging import configure_logging
@@ -65,7 +66,9 @@ from funding_arbitrage.services.multi_regime import (
 )
 from funding_arbitrage.services.multi_regime_runtime import (
     DurableMultiRegimeRuntime,
+    RuntimeAdvancedRiskContextProvider,
     RuntimePortfolioRiskContextProvider,
+    RuntimeStrategyExecutionSnapshotProvider,
     RuntimeSupplementalStrategyContextProvider,
 )
 from funding_arbitrage.services.paper_runner import (
@@ -175,6 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     event_router = CanonicalEventRouter(event_writer, event_quality_monitor)
     multi_regime_runtime: DurableMultiRegimeRuntime | None = None
     paper_broker: DirectionalPaperBroker | None = None
+    advanced_paper_broker: AdvancedStrategyPaperBroker | None = None
     adapters = create_public_adapters(
         active_settings, canonical_book_event_sink=event_router.publish
     )
@@ -224,34 +228,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         runtime_mode = active_settings.effective_trading_mode
         if runtime_mode in {TradingMode.LIMITED_LIVE, TradingMode.LIVE}:
             runtime_mode = TradingMode.SHADOW
+        paper_policies = {
+            venue: FillModelPolicy(
+                maker_fee_bps=maker_fee * 10_000,
+                taker_fee_bps=taker_fee * 10_000,
+                order_latency_ms=active_settings.multi_regime_paper_latency_ms,
+                maximum_participation_rate=(
+                    active_settings.multi_regime_paper_maximum_participation_rate
+                ),
+                impact_coefficient_bps=(
+                    active_settings.multi_regime_paper_impact_coefficient_bps
+                ),
+            )
+            for venue, (maker_fee, taker_fee) in (
+                active_settings.fee_schedules.items()
+            )
+        }
+        paper_execution_enabled = (
+            runtime_mode is TradingMode.PAPER
+            and active_settings.multi_regime_paper_execution_enabled
+        )
         paper_broker = (
             DirectionalPaperBroker(
-                {
-                    venue: FillModelPolicy(
-                        maker_fee_bps=maker_fee * 10_000,
-                        taker_fee_bps=taker_fee * 10_000,
-                        order_latency_ms=active_settings.multi_regime_paper_latency_ms,
-                        maximum_participation_rate=(
-                            active_settings.multi_regime_paper_maximum_participation_rate
-                        ),
-                        impact_coefficient_bps=(
-                            active_settings.multi_regime_paper_impact_coefficient_bps
-                        ),
-                    )
-                    for venue, (maker_fee, taker_fee) in (
-                        active_settings.fee_schedules.items()
-                    )
-                },
+                paper_policies,
                 simulation_version=active_settings.paper_simulation_version,
             )
-            if runtime_mode is TradingMode.PAPER
-            and active_settings.multi_regime_paper_execution_enabled
+            if paper_execution_enabled
             else None
         )
-        risk_provider = RuntimePortfolioRiskContextProvider(runtime, paper_broker)
+        advanced_paper_broker = (
+            AdvancedStrategyPaperBroker(
+                paper_policies,
+                simulation_version=active_settings.paper_simulation_version,
+            )
+            if paper_execution_enabled
+            else None
+        )
+        risk_provider = RuntimePortfolioRiskContextProvider(
+            runtime,
+            paper_broker,
+            advanced_paper_broker,
+        )
         supplemental_provider = RuntimeSupplementalStrategyContextProvider(
             runtime,
             paper_broker,
+            advanced_paper_broker,
+        )
+        execution_snapshot_provider = RuntimeStrategyExecutionSnapshotProvider(
+            runtime
+        )
+        advanced_risk_provider = RuntimeAdvancedRiskContextProvider(
+            runtime,
+            paper_broker,
+            advanced_paper_broker,
         )
         multi_regime_engine = MultiRegimeEngine(
             MultiRegimeEngineConfig(
@@ -273,11 +302,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             risk_context_provider=risk_provider,
             supplemental_context_provider=supplemental_provider,
+            execution_snapshot_provider=execution_snapshot_provider,
+            advanced_risk_context_provider=advanced_risk_provider,
         )
         multi_regime_runtime = DurableMultiRegimeRuntime(
             multi_regime_engine,
             session_factory,
             paper_broker=paper_broker,
+            advanced_paper_broker=advanced_paper_broker,
             runtime_state=runtime,
         )
         event_router.subscribe(multi_regime_runtime.publish)
