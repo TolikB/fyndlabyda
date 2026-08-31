@@ -109,27 +109,10 @@ def _signed_usd(value: Decimal) -> str:
 def _no_fill_note(
     *,
     fills: int,
-    equity_delta: Decimal,
-    eligible_signals: int,
-    confirmed_signals: int,
-    snapshot_count: int,
-    cycle_failures: int,
 ) -> str | None:
-    if fills != 0 or equity_delta != 0:
+    if fills != 0:
         return None
-    if snapshot_count == 0 or cycle_failures > 0:
-        return "Без угод: дані або торговий цикл мають помилки — потрібна перевірка."
-    if confirmed_signals > 0:
-        return (
-            f"Без угод: підтверджено сигналів {confirmed_signals}, "
-            "але їх заблокував ризик або виконання."
-        )
-    if eligible_signals > 0:
-        return (
-            f"Без угод: сигналів після фільтрів {eligible_signals}, "
-            "але жоден не підтвердився."
-        )
-    return "Без угод: сигналів, що пройшли фільтри, не було."
+    return "Сьогодні угод не було."
 
 
 class DailyReportService:
@@ -269,10 +252,10 @@ class DailyReportService:
             signal_start=signal_start,
         )
         lines = [
-            f"📊 Звіт про торгівлю · {report_date.isoformat()}",
+            f"📊 Результати торгівлі за {report_date.strftime('%d.%m.%Y')}",
             *self._portfolio_lines(candidate, include_label=False),
         ]
-        lines.extend(["", "Тестовий режим · реальних ордерів немає"])
+        lines.extend(["", "🧪 Тестовий рахунок — реальні ордери не виконуються"])
         return "\n".join(lines)
 
     async def _load_portfolio_report(
@@ -766,11 +749,6 @@ class DailyReportService:
         )
         no_trades_note = _no_fill_note(
             fills=report.fills,
-            equity_delta=equity_delta,
-            eligible_signals=report.eligible_signals,
-            confirmed_signals=report.confirmed_signals,
-            snapshot_count=report.snapshots,
-            cycle_failures=report.cycle_failures,
         )
         day_costs = report.day_fees + report.day_slippage
         total_costs = report.total_fees + report.total_slippage
@@ -781,21 +759,18 @@ class DailyReportService:
         )
         return [
             *([label] if include_label else []),
+            "",
             "ЗА ДЕНЬ",
-            f"Результат: {_signed_usd(equity_delta)}",
+            f"Прибуток / збиток: {_signed_usd(equity_delta)}",
+            f"Угоди: {report.opened} відкрито, {report.closed} закрито",
             f"Фандінг: {_signed_usd(report.day_funding)}",
-            (
-                f"Витрати: ${day_costs:.2f} "
-                f"(комісії ${report.day_fees:.2f}, "
-                f"прослизання ${report.day_slippage:.2f})"
-            ),
-            f"Угоди: відкрито {report.opened} · закрито {report.closed}",
+            f"Витрати: ${day_costs:.2f}",
             *([no_trades_note] if no_trades_note is not None else []),
             "",
-            "ЗАГАЛОМ",
+            "ЗА ВЕСЬ ЧАС",
             f"Баланс: ${report.equity:.2f}",
             (
-                f"Результат: {_signed_usd(report.total_pnl)} "
+                f"Прибуток / збиток: {_signed_usd(report.total_pnl)} "
                 f"({total_return_percent:+.4f}%)"
             ),
             f"Фандінг: {_signed_usd(report.total_funding)}",

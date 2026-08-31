@@ -71,8 +71,14 @@ combined scopes: funding-runner restore consumes legacy balances, while Telegram
 analytics, and replay prefer the authoritative combined scope whenever directional
 PAPER execution is enabled. This prevents a later funding-only cycle from hiding
 directional PnL. Combined funding plus directional snapshots feed the existing daily
-Telegram DAY RESULT and TOTAL sections; directional fills, fees, opens, and closes
+Telegram human-readable DAILY and ALL TIME sections; directional fills, fees,
+opens, and closes
 are included, while embedded spread/impact is called out explicitly.
+
+The Telegram report deliberately excludes simulator versions, signal counters,
+cycle diagnostics, reconciliation internals, and other system telemetry. Those
+details remain available in logs and metrics; the user-facing message contains
+only financial results, trade counts, costs, balance, and open positions.
 
 This slice now proves canonical-event-to-risk-plan-to-durable PAPER position and PnL
 lifecycle. `scripts/multi_regime_paper_probe.py` extends that proof to the deployment

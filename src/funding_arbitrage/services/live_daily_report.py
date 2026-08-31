@@ -198,16 +198,20 @@ class LiveDailyReportService:
         )
         return "\n".join(
             [
-                f"📊 Звіт про торгівлю · {report_date.isoformat()}",
+                f"📊 Результати торгівлі за {report_date.strftime('%d.%m.%Y')}",
                 "",
                 "ЗА ДЕНЬ",
-                f"Результат: {_signed_usd(day_pnl)}",
+                f"Прибуток / збиток: {_signed_usd(day_pnl)}",
+                f"Угоди: {opened} відкрито, {closed} закрито",
                 f"Фандінг: {_signed_usd(day_funding)}",
-                f"Угоди: відкрито {opened} · закрито {closed}",
+                *(["Сьогодні угод не було."] if opened == 0 and closed == 0 else []),
                 "",
-                "ЗАГАЛОМ",
+                "ЗА ВЕСЬ ЧАС",
                 f"Баланс: ${end_equity:.2f}",
-                f"Результат: {_signed_usd(total_pnl)} ({total_return_percent:+.4f}%)",
+                (
+                    f"Прибуток / збиток: {_signed_usd(total_pnl)} "
+                    f"({total_return_percent:+.4f}%)"
+                ),
                 f"Фандінг: {_signed_usd(total_funding)}",
                 f"Відкриті позиції: {active}",
             ]

@@ -240,22 +240,24 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
 
     assert result
     assert len(sent) == 1
-    assert "📊 Звіт про торгівлю · 2026-08-09" in sent[0]
+    assert "📊 Результати торгівлі за 09.08.2026" in sent[0]
     assert "ЗА ДЕНЬ" in sent[0]
-    assert "Результат: +$12.00" in sent[0]
+    assert "Прибуток / збиток: +$12.00" in sent[0]
     assert "Фандінг: +$8.00" in sent[0]
-    assert "Витрати: $1.60 (комісії $1.25, прослизання $0.35)" in sent[0]
-    assert "Угоди: відкрито 2 · закрито 2" in sent[0]
+    assert "Витрати: $1.60" in sent[0]
+    assert "Угоди: 2 відкрито, 2 закрито" in sent[0]
     assert sent[0].count("Відкриті позиції: 2") == 1
-    assert "ЗАГАЛОМ" in sent[0]
+    assert "ЗА ВЕСЬ ЧАС" in sent[0]
     assert "Баланс: $10012.00" in sent[0]
-    assert "Результат: +$12.00 (+0.1200%)" in sent[0]
+    assert "Прибуток / збиток: +$12.00 (+0.1200%)" in sent[0]
     assert "Витрати: $1.90" in sent[0]
-    assert "Тестовий режим · реальних ордерів немає" in sent[0]
+    assert "🧪 Тестовий рахунок — реальні ордери не виконуються" in sent[0]
     assert "Статус:" not in sent[0]
     assert "BYBIT" not in sent[0]
     assert "simulator" not in sent[0]
     assert "snapshots:" not in sent[0]
+    for system_term in ("сигнал", "цикл", "reconciliation", "simulation_version"):
+        assert system_term not in sent[0].lower()
     assert len(session.added) == 1
     assert events == ["commit", "send", "commit"]
 
@@ -616,8 +618,8 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
     monkeypatch.setattr(service.notifier, "send_message", send)
 
     assert await service.check_and_send(datetime(2026, 8, 11, 0, 1, tzinfo=UTC))
-    assert "Результат: +$0.00" in sent[0]
-    assert "Без угод: сигналів, що пройшли фільтри, не було." in sent[0]
+    assert "Прибуток / збиток: +$0.00" in sent[0]
+    assert "Сьогодні угод не було." in sent[0]
     assert "Статус:" not in sent[0]
     assert "Відкриті позиції: 0" in sent[0]
     assert "v26-oos-candidate" not in sent[0]
@@ -689,7 +691,7 @@ async def test_daily_report_omits_background_baseline_results(
 
     assert await service.check_and_send(datetime(2026, 8, 15, 0, 1, tzinfo=UTC))
     assert sent[0].count("ЗА ДЕНЬ") == 1
-    assert sent[0].count("ЗАГАЛОМ") == 1
+    assert sent[0].count("ЗА ВЕСЬ ЧАС") == 1
     assert "ОСНОВНА СТРАТЕГІЯ" not in sent[0]
     assert "СТРАТЕГІЯ ДЛЯ ПОРІВНЯННЯ" not in sent[0]
     assert "Баланс: $6250.00" in sent[0]
@@ -698,31 +700,20 @@ async def test_daily_report_omits_background_baseline_results(
     assert "v29-oos-" not in sent[0]
 
 
-def test_daily_report_distinguishes_unconfirmed_signals_from_no_edge() -> None:
+def test_daily_report_uses_plain_language_when_no_trades_occurred() -> None:
     note = _no_fill_note(
         fills=0,
-        equity_delta=Decimal("0"),
-        eligible_signals=10,
-        confirmed_signals=0,
-        snapshot_count=96,
-        cycle_failures=0,
     )
 
-    assert note == (
-        "Без угод: сигналів після фільтрів 10, але жоден не підтвердився."
-    )
+    assert note == "Сьогодні угод не було."
 
 
-def test_daily_report_does_not_call_unchanged_equity_no_edge_after_failure() -> None:
+def test_daily_report_does_not_expose_system_diagnostics() -> None:
     note = _no_fill_note(
         fills=0,
-        equity_delta=Decimal("0"),
-        eligible_signals=0,
-        confirmed_signals=0,
-        snapshot_count=0,
-        cycle_failures=1,
     )
 
     assert note is not None
-    assert "торговий цикл мають помилки" in note
-    assert "потрібна перевірка" in note
+    assert note == "Сьогодні угод не було."
+    assert "цикл" not in note
+    assert "помил" not in note
