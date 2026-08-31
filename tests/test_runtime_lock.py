@@ -40,7 +40,10 @@ def test_docker_runtime_uses_immutable_base_and_lock_file() -> None:
         "d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31"
     )
     assert dockerfile.count(expected_base) == 2
-    assert "apk add --no-cache gcc musl-dev" in dockerfile
+    assert dockerfile.count("libcrypto3=3.5.8-r0") == 2
+    assert dockerfile.count("libssl3=3.5.8-r0") == 2
+    assert "    gcc \\\n" in dockerfile
+    assert "    musl-dev\n" in dockerfile
     assert "apt-get" not in dockerfile
     assert (
         "pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock"
