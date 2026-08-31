@@ -119,6 +119,7 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://funding:funding@127.0.0.1:5432/funding
       PYTHONPATH: src
       RUN_POSTGRES_REPORT_CONTRACT: "1"
+      RUN_POSTGRES_REPOSITORY_CONTRACT: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -138,6 +139,7 @@ jobs:
           python -m pytest -q
           tests/test_migrations.py
           tests/test_market_data_repository.py
+          tests/test_market_data_repository_postgres.py
           tests/test_backtest_job_persistence.py
           tests/test_backtest_routes_contract.py
           tests/test_database_replay.py

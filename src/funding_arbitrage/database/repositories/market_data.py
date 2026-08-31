@@ -45,35 +45,73 @@ from ..models import (
 
 
 async def save_instruments(session: AsyncSession, instruments: list[NormalizedInstrument]) -> None:
-    for item in instruments:
-        record = await session.scalar(
-            select(InstrumentRecord).where(
-                InstrumentRecord.exchange == item.exchange,
-                InstrumentRecord.exchange_symbol == item.exchange_symbol,
-                InstrumentRecord.instrument_type == item.instrument_type.value,
+    rows = list(
+        {
+            (item.exchange, item.exchange_symbol, item.instrument_type.value): {
+                "exchange": item.exchange,
+                "exchange_symbol": item.exchange_symbol,
+                "canonical_id": item.canonical_id,
+                "base_asset": item.base_asset,
+                "quote_asset": item.quote_asset,
+                "instrument_type": item.instrument_type.value,
+                "settlement_asset": item.settlement_asset,
+                "contract_size": item.contract_size,
+                "tick_size": item.tick_size,
+                "step_size": item.step_size,
+                "min_order_size": item.min_order_size,
+                "funding_interval": item.funding_interval,
+                "expiry": item.expiry,
+                "is_active": item.is_active,
+            }
+            for item in instruments
+        }.values()
+    )
+    if not rows:
+        await session.commit()
+        return
+    bind = session.get_bind()
+    update_fields = (
+        "canonical_id",
+        "base_asset",
+        "quote_asset",
+        "settlement_asset",
+        "contract_size",
+        "tick_size",
+        "step_size",
+        "min_order_size",
+        "funding_interval",
+        "expiry",
+        "is_active",
+    )
+    if bind.dialect.name == "postgresql":
+        for index in range(0, len(rows), 1000):
+            pg_statement = pg_insert(InstrumentRecord).values(rows[index : index + 1000])
+            pg_statement = pg_statement.on_conflict_do_update(
+                constraint="uq_instrument_exchange_symbol_type",
+                set_={field: getattr(pg_statement.excluded, field) for field in update_fields},
             )
+            await session.execute(pg_statement)
+    elif bind.dialect.name == "sqlite":
+        sqlite_statement = sqlite_insert(InstrumentRecord).values(rows)
+        sqlite_statement = sqlite_statement.on_conflict_do_update(
+            index_elements=["exchange", "exchange_symbol", "instrument_type"],
+            set_={field: getattr(sqlite_statement.excluded, field) for field in update_fields},
         )
-        values = {
-            "exchange": item.exchange,
-            "exchange_symbol": item.exchange_symbol,
-            "canonical_id": item.canonical_id,
-            "base_asset": item.base_asset,
-            "quote_asset": item.quote_asset,
-            "instrument_type": item.instrument_type.value,
-            "settlement_asset": item.settlement_asset,
-            "contract_size": item.contract_size,
-            "tick_size": item.tick_size,
-            "step_size": item.step_size,
-            "min_order_size": item.min_order_size,
-            "funding_interval": item.funding_interval,
-            "expiry": item.expiry,
-            "is_active": item.is_active,
-        }
-        if record is None:
-            session.add(InstrumentRecord(**values))
-        else:
-            for field, value in values.items():
-                setattr(record, field, value)
+        await session.execute(sqlite_statement)
+    else:
+        for values in rows:
+            record = await session.scalar(
+                select(InstrumentRecord).where(
+                    InstrumentRecord.exchange == values["exchange"],
+                    InstrumentRecord.exchange_symbol == values["exchange_symbol"],
+                    InstrumentRecord.instrument_type == values["instrument_type"],
+                )
+            )
+            if record is None:
+                session.add(InstrumentRecord(**values))
+            else:
+                for field, value in values.items():
+                    setattr(record, field, value)
     await session.commit()
 
 

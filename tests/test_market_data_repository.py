@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from funding_arbitrage.database.models import (
@@ -23,6 +23,7 @@ from funding_arbitrage.database.models import (
 from funding_arbitrage.database.repositories.market_data import (
     save_candles,
     save_funding_history,
+    save_instruments,
     save_market_snapshot,
     save_opportunities,
     save_paper_fill,
@@ -290,6 +291,69 @@ async def test_market_data_repository_full_idempotent_mapping(
         assert await _count(session, PaperRuntimeIncidentRecord) == 2
         assert await _count(session, PaperFundingPaymentRecord) == 1
 
+
+async def test_save_instruments_bulk_upsert_avoids_n_plus_one_queries(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    engine, factory = database
+    statements: list[str] = []
+
+    def record_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    instruments = [
+        _instrument().model_copy(
+            update={
+                "exchange_symbol": f"BTC{index}USDT",
+                "is_active": True,
+            }
+        )
+        for index in range(50)
+    ]
+    event.listen(engine.sync_engine, "before_cursor_execute", record_statement)
+    try:
+        async with factory() as session:
+            await save_instruments(session, instruments)
+            await save_instruments(
+                session,
+                [instrument.model_copy(update={"is_active": False}) for instrument in instruments],
+            )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record_statement)
+
+    instrument_statements = [
+        statement for statement in statements if "instruments" in statement.lower()
+    ]
+    assert (
+        len(
+            [
+                statement
+                for statement in instrument_statements
+                if statement.lstrip().upper().startswith("INSERT")
+            ]
+        )
+        == 2
+    )
+    assert not any(
+        statement.lstrip().upper().startswith("SELECT") for statement in instrument_statements
+    )
+    async with factory() as session:
+        assert await _count(session, InstrumentRecord) == 50
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(InstrumentRecord)
+                .where(InstrumentRecord.is_active.is_(False))
+            )
+            == 50
+        )
 
 
 async def test_duplicate_funding_payment_preserves_immutable_raw_event(
