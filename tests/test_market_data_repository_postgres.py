@@ -66,10 +66,18 @@ async def test_postgres_save_instruments_bulk_upsert_contract() -> None:
                 session,
                 [_instrument(index, active=True) for index in range(50)],
             )
+            loaded = await session.scalar(
+                select(InstrumentRecord).where(
+                    InstrumentRecord.exchange_symbol == "BTC0USDT"
+                )
+            )
+            assert loaded is not None and loaded.is_active is True
             await save_instruments(
                 session,
                 [_instrument(index, active=False) for index in range(50)],
             )
+            assert loaded.is_active is False
+            assert loaded in session
 
         async with factory() as session:
             total = await session.scalar(select(func.count()).select_from(InstrumentRecord))

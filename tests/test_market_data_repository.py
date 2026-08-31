@@ -356,6 +356,55 @@ async def test_save_instruments_bulk_upsert_avoids_n_plus_one_queries(
         )
 
 
+async def test_save_instruments_chunks_large_sqlite_batches(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    engine, factory = database
+    insert_statements = 0
+
+    def count_inserts(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        nonlocal insert_statements
+        if statement.lstrip().upper().startswith("INSERT INTO INSTRUMENTS"):
+            insert_statements += 1
+
+    instruments = [
+        _instrument().model_copy(update={"exchange_symbol": f"ETH{index}USDT"})
+        for index in range(2500)
+    ]
+    event.listen(engine.sync_engine, "before_cursor_execute", count_inserts)
+    try:
+        async with factory() as session:
+            await save_instruments(session, instruments)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count_inserts)
+
+    assert insert_statements == 3
+    async with factory() as session:
+        assert await _count(session, InstrumentRecord) == 2500
+
+
+async def test_save_instruments_refreshes_loaded_record_in_same_session(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, factory = database
+    async with factory() as session:
+        await save_instruments(session, [_instrument(active=True)])
+        loaded = await session.scalar(select(InstrumentRecord))
+        assert loaded is not None and loaded.is_active is True
+
+        await save_instruments(session, [_instrument(active=False)])
+
+        assert loaded.is_active is False
+        assert loaded in session
+
+
 async def test_duplicate_funding_payment_preserves_immutable_raw_event(
     database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
 ) -> None:

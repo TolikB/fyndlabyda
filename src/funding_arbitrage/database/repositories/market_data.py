@@ -86,18 +86,34 @@ async def save_instruments(session: AsyncSession, instruments: list[NormalizedIn
     if bind.dialect.name == "postgresql":
         for index in range(0, len(rows), 1000):
             pg_statement = pg_insert(InstrumentRecord).values(rows[index : index + 1000])
-            pg_statement = pg_statement.on_conflict_do_update(
+            pg_upsert = pg_statement.on_conflict_do_update(
                 constraint="uq_instrument_exchange_symbol_type",
                 set_={field: getattr(pg_statement.excluded, field) for field in update_fields},
             )
-            await session.execute(pg_statement)
+            pg_returning = pg_upsert.returning(InstrumentRecord)
+            result = await session.execute(
+                pg_returning,
+                execution_options={"populate_existing": True},
+            )
+            result.scalars().all()
     elif bind.dialect.name == "sqlite":
-        sqlite_statement = sqlite_insert(InstrumentRecord).values(rows)
-        sqlite_statement = sqlite_statement.on_conflict_do_update(
-            index_elements=["exchange", "exchange_symbol", "instrument_type"],
-            set_={field: getattr(sqlite_statement.excluded, field) for field in update_fields},
-        )
-        await session.execute(sqlite_statement)
+        for index in range(0, len(rows), 1000):
+            sqlite_statement = sqlite_insert(InstrumentRecord).values(
+                rows[index : index + 1000]
+            )
+            sqlite_upsert = sqlite_statement.on_conflict_do_update(
+                index_elements=["exchange", "exchange_symbol", "instrument_type"],
+                set_={
+                    field: getattr(sqlite_statement.excluded, field)
+                    for field in update_fields
+                },
+            )
+            sqlite_returning = sqlite_upsert.returning(InstrumentRecord)
+            result = await session.execute(
+                sqlite_returning,
+                execution_options={"populate_existing": True},
+            )
+            result.scalars().all()
     else:
         for values in rows:
             record = await session.scalar(
