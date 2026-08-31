@@ -1,0 +1,33 @@
+# V1 release approval
+
+Limited Live approval is a configuration-only, fail-closed GitHub Environment
+gate. It does not arm execution, install credentials, submit orders, or authorize
+withdrawals.
+
+`scripts/manual_live_gate.py` accepts only a manual workflow dispatch on `main`,
+an immutable 40-character commit, the exact confirmation phrase, and a protected
+environment approver identity. Every V1 manifest requirement except the two
+terminal release gates must already have status `accepted`; `implemented`,
+`validated`, `partial`, and `missing` all block approval. This includes accepted
+Shadow and Paper elapsed-window evidence, research, failure-injection, security,
+infrastructure, restore, and load-SLO gates.
+
+The requirement ID set is fixed to the complete 70-item V1 contract. Removing a
+requirement, adding an unreviewed substitute, or omitting either terminal gate
+blocks approval.
+
+The emitted attestation binds the repository, commit, actor, ref, exact canonical
+manifest digest, and the fact that it caused no real-order side effect. A successful
+attestation is only a prerequisite for a separately armed Limited Live deployment;
+all runtime credential, risk, reconciliation, and operator interlocks remain
+mandatory.
+
+Before the protected environment approval, CI runs the 68-requirement prerequisite
+stage from `docs/V1_COMPLETION_AUDIT.md` against the same immutable commit. The
+approval attestation can then become evidence for the separate final-candidate and
+all-70 completion stages; no gate approves itself.
+
+The current repository intentionally does not satisfy this gate: elapsed Shadow
+and Paper evidence and several external delivery validations are still pending.
+Their absence must remain visible rather than being converted into synthetic
+approval.

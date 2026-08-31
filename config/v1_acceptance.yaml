@@ -756,9 +756,18 @@ requirements:
     category: delivery
     title: Limited Live is formally approved only after technical, research, shadow, paper, failure, and security gates
     status: missing
-    evidence: []
+    evidence:
+      - scripts/manual_live_gate.py
+      - tests/test_manual_live_gate.py
+      - .github/workflows/release-gate.yml
+      - docs/V1_RELEASE_APPROVAL.md
   - id: GATE-004
     category: delivery
     title: Full V1 completion audit proves every manifest requirement accepted with authoritative evidence
     status: missing
-    evidence: []
+    evidence:
+      - src/funding_arbitrage/acceptance.py
+      - scripts/v1_acceptance_audit.py
+      - tests/test_v1_acceptance.py
+      - .github/workflows/release-gate.yml
+      - docs/V1_COMPLETION_AUDIT.md

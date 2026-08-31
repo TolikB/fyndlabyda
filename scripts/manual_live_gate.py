@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from funding_arbitrage.acceptance import REQUIRED_REQUIREMENT_IDS
 
 REQUIRED_CONFIRMATION = "APPROVE_LIMITED_LIVE_CONFIGURATION_ONLY"
 APPROVAL_REQUIREMENTS_EXEMPT = frozenset({"GATE-003", "GATE-004"})
@@ -82,7 +85,7 @@ def build_attestation(
         if requirement_id in seen:
             raise ManualLiveGateError(f"duplicate requirement id: {requirement_id}")
         seen.add(requirement_id)
-        if requirement_id not in APPROVAL_REQUIREMENTS_EXEMPT and status != "implemented":
+        if requirement_id not in APPROVAL_REQUIREMENTS_EXEMPT and status != "accepted":
             blocking.append(requirement_id)
 
     missing_gate_ids = APPROVAL_REQUIREMENTS_EXEMPT - seen
@@ -90,11 +93,28 @@ def build_attestation(
         raise ManualLiveGateError(
             "missing terminal gate requirements: " + ",".join(sorted(missing_gate_ids))
         )
+    missing_requirements = REQUIRED_REQUIREMENT_IDS - seen
+    unexpected_requirements = seen - REQUIRED_REQUIREMENT_IDS
+    if missing_requirements or unexpected_requirements:
+        raise ManualLiveGateError(
+            "limited-live requirement scope mismatch: missing="
+            + ",".join(sorted(missing_requirements))
+            + ";unexpected="
+            + ",".join(sorted(unexpected_requirements))
+        )
     if blocking:
         raise ManualLiveGateError(
-            "limited-live prerequisites are not implemented: " + ",".join(blocking)
+            "limited-live prerequisites are not accepted: " + ",".join(blocking)
         )
 
+    manifest_sha256 = hashlib.sha256(
+        json.dumps(
+            root,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
     return {
         "approved_configuration_only": True,
         "real_order_side_effects": False,
@@ -104,6 +124,7 @@ def build_attestation(
         "ref": ref,
         "approved_by": actor,
         "confirmation": REQUIRED_CONFIRMATION,
+        "manifest_sha256": manifest_sha256,
         "precondition_count": len(requirements) - len(APPROVAL_REQUIREMENTS_EXEMPT),
     }
 

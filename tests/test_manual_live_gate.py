@@ -9,8 +9,10 @@ from scripts.manual_live_gate import (
     build_attestation,
 )
 
+from funding_arbitrage.acceptance import REQUIRED_REQUIREMENT_IDS
 
-def _manifest(*, blocking_status: str = "implemented") -> dict[str, object]:
+
+def _manifest(*, blocking_status: str = "accepted") -> dict[str, object]:
     return {
         "release": {
             "name": "V1",
@@ -26,11 +28,15 @@ def _manifest(*, blocking_status: str = "implemented") -> dict[str, object]:
             "dangerous_capabilities_default_enabled": False,
         },
         "requirements": [
-            {"id": "ARCH-001", "status": blocking_status},
-            {"id": "GATE-001", "status": blocking_status},
-            {"id": "GATE-002", "status": blocking_status},
-            {"id": "GATE-003", "status": "missing"},
-            {"id": "GATE-004", "status": "missing"},
+            {
+                "id": requirement_id,
+                "status": (
+                    "missing"
+                    if requirement_id in {"GATE-003", "GATE-004"}
+                    else blocking_status
+                ),
+            }
+            for requirement_id in sorted(REQUIRED_REQUIREMENT_IDS)
         ],
     }
 
@@ -54,7 +60,8 @@ def test_manual_gate_builds_configuration_only_attestation() -> None:
     assert result["approved_configuration_only"] is True
     assert result["real_order_side_effects"] is False
     assert result["release"] == "V1"
-    assert result["precondition_count"] == 3
+    assert result["precondition_count"] == 68
+    assert len(str(result["manifest_sha256"])) == 64
 
 
 @pytest.mark.parametrize(
@@ -76,7 +83,7 @@ def test_manual_gate_rejects_invalid_invocation(
 
 
 def test_manual_gate_rejects_any_unimplemented_prerequisite() -> None:
-    with pytest.raises(ManualLiveGateError, match="ARCH-001,GATE-001,GATE-002"):
+    with pytest.raises(ManualLiveGateError, match="prerequisites are not accepted"):
         _approve(_manifest(blocking_status="partial"))
 
 
@@ -108,6 +115,24 @@ def test_manual_gate_rejects_duplicate_or_missing_terminal_gates() -> None:
         _approve(duplicate)
     with pytest.raises(ManualLiveGateError, match="missing terminal gate"):
         _approve(missing)
+
+
+def test_manual_gate_rejects_narrowed_or_expanded_requirement_scope() -> None:
+    narrowed = _manifest()
+    narrowed["requirements"] = [  # type: ignore[index]
+        item
+        for item in narrowed["requirements"]  # type: ignore[index]
+        if item["id"] != "ARCH-002"
+    ]
+    expanded = _manifest()
+    expanded["requirements"].append(  # type: ignore[union-attr]
+        {"id": "EVIL-999", "status": "accepted"}
+    )
+
+    with pytest.raises(ManualLiveGateError, match="requirement scope mismatch"):
+        _approve(narrowed)
+    with pytest.raises(ManualLiveGateError, match="requirement scope mismatch"):
+        _approve(expanded)
 
 
 def test_manual_gate_cli_fails_closed_then_succeeds(

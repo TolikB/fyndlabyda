@@ -486,6 +486,13 @@ jobs:
       - name: Install hash-locked development dependencies
         run: python -m pip install --require-hashes --requirement requirements-dev-linux.lock
 
+      - name: Bind full V1 completion evidence to this commit
+        run: >-
+          python scripts/v1_acceptance_audit.py
+          --manifest config/v1_acceptance.yaml
+          --require-release-prerequisites
+          --expected-revision "$GITHUB_SHA"
+
       - name: Verify protected manual gate preconditions
         env:
           LIVE_GATE_CONFIRMATION: ${{ inputs.live_gate_confirmation }}
