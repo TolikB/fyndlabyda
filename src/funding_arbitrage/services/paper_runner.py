@@ -23,6 +23,10 @@ from funding_arbitrage.database.models import (
     PaperPositionRecord,
     PortfolioSnapshotRecord,
 )
+from funding_arbitrage.database.repositories.ledger import (
+    backfill_paper_funding_ledger,
+    infer_funding_settlement_asset,
+)
 from funding_arbitrage.database.repositories.market_data import (
     save_market_snapshot,
     save_opportunities,
@@ -217,6 +221,7 @@ class PaperTestRunner:
         self._position_by_key: dict[str, str] = {}
         self._position_ids_by_exposure_key: dict[str, set[str]] = {}
         self._next_funding_due: dict[tuple[str, str, str], datetime] = {}
+        self._funding_settlement_assets: dict[tuple[str, str], str] = {}
         self._funding_apply_lock = asyncio.Lock()
         self._pending_funding_reconciliation_failures: dict[
             str, PaperPosition
@@ -365,6 +370,7 @@ class PaperTestRunner:
             if self._restored:
                 return
             await self._restore_positions()
+            await self._restore_funding_ledger()
             if restore_history:
                 await self._restore_funding_history()
             self._restored = True
@@ -653,6 +659,20 @@ class PaperTestRunner:
                     self.runtime.portfolio.total_realized_pnl += position.pnl.total_pnl
                 if position.state is PositionState.OPEN:
                     self._register_open_position(position)
+
+    async def _restore_funding_ledger(self) -> None:
+        """Project pre-existing durable payments before accepting a new cycle."""
+
+        async with self.session_factory() as session:
+            inserted = await backfill_paper_funding_ledger(
+                session,
+                simulation_version=self.settings.paper_simulation_version,
+            )
+        if inserted:
+            logger.info(
+                "paper_funding_ledger_backfilled",
+                extra={"event": "paper_startup", "count": inserted},
+            )
 
     async def _restore_funding_history(self) -> None:
         cutoff = datetime.now(UTC) - timedelta(days=30)
@@ -1028,6 +1048,9 @@ class PaperTestRunner:
                         mark_price=event.mark_price,
                         timestamp=event.funding_timestamp,
                     )
+                    self._funding_settlement_assets[(leg.exchange, leg.symbol)] = (
+                        self._funding_settlement_asset(snapshot, leg)
+                    )
                     await self._apply_funding_event(
                         position,
                         leg,
@@ -1055,12 +1078,33 @@ class PaperTestRunner:
                 )
                 if now < due:
                     continue
+                self._funding_settlement_assets[(leg.exchange, leg.symbol)] = (
+                    self._funding_settlement_asset(snapshot, leg)
+                )
                 await self._apply_funding_event(
-                    position, leg, funding.model_copy(update={"timestamp": due})
+                    position,
+                    leg,
+                    funding.model_copy(update={"timestamp": due}),
                 )
                 self._next_funding_due[due_key] = due + timedelta(
                     seconds=self.settings.paper_settlement_interval_seconds
                 )
+
+    @staticmethod
+    def _funding_settlement_asset(
+        snapshot: MarketSnapshot,
+        leg: PaperFill,
+    ) -> str:
+        instrument = snapshot.instrument(
+            leg.exchange,
+            leg.symbol,
+            leg.instrument_type,
+        )
+        if instrument is not None:
+            settlement_asset = instrument.settlement_asset or instrument.quote_asset
+            if settlement_asset.strip():
+                return settlement_asset
+        return infer_funding_settlement_asset(leg.exchange, leg.symbol)
 
     async def _apply_funding_event(
         self,
@@ -1102,6 +1146,12 @@ class PaperTestRunner:
         calculated_pnl = self.runtime.portfolio.calculate_funding_pnl(
             leg.side, position.capital, funding.funding_rate
         )
+        durable_settlement_asset = self._funding_settlement_assets.get(
+            (leg.exchange, leg.symbol)
+        ) or infer_funding_settlement_asset(
+            leg.exchange,
+            leg.symbol,
+        )
         async with self.session_factory() as session:
             payment = await save_paper_funding_payment(
                 session,
@@ -1110,6 +1160,8 @@ class PaperTestRunner:
                 position.capital,
                 calculated_pnl,
                 history_event=history_event,
+                ledger_asset=durable_settlement_asset,
+                ledger_strategy_id=position.strategy or "LEGACY_FUNDING",
             )
         durable_funding = FundingSnapshot(
             exchange=payment.exchange,

@@ -498,7 +498,10 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/portfolio/ledger.py
+      - src/funding_arbitrage/database/repositories/ledger.py
+      - src/funding_arbitrage/database/repositories/market_data.py
       - tests/test_double_entry_ledger.py
+      - tests/test_funding_ledger_repository.py
   - id: PORT-002
     category: portfolio
     title: Continuous local versus venue order, fill, balance, position, and funding reconciliation is classified and audited
@@ -568,6 +571,7 @@ requirements:
       - migrations/versions/0017_multi_regime_runtime.py
       - src/funding_arbitrage/database/repositories/multi_regime.py
       - src/funding_arbitrage/database/repositories/directional_paper.py
+      - src/funding_arbitrage/database/repositories/ledger.py
       - tests/test_multi_regime_persistence.py
       - tests/test_directional_paper_persistence.py
       - tests/test_v1_operational_schema.py
@@ -756,6 +760,7 @@ requirements:
       - src/funding_arbitrage/backtest/fills.py
       - src/funding_arbitrage/database/repositories/multi_regime.py
       - src/funding_arbitrage/database/repositories/directional_paper.py
+      - src/funding_arbitrage/database/repositories/ledger.py
       - src/funding_arbitrage/services/daily_report.py
       - src/funding_arbitrage/services/paper_runner.py
       - src/funding_arbitrage/database/repositories/market_data.py
@@ -765,6 +770,7 @@ requirements:
       - tests/test_backtest_fill_model.py
       - tests/test_directional_paper_persistence.py
       - tests/test_directional_paper_restore.py
+      - tests/test_funding_ledger_repository.py
       - tests/test_advanced_paper.py
       - tests/test_strategy_execution.py
       - tests/test_runtime_strategy_contexts.py

@@ -55,10 +55,16 @@ fabricated from perpetual data.
 The mature legacy paper pipeline remains the sole funding execution and settlement
 owner. Canonical funding contexts are evaluated and retained as evidence, but their
 normalized runtime intent is suppressed so the same opportunity cannot create a
-second position or count one funding payment twice. Funding capital is capped across
-both legs: a `$100` limit means at most `$50 + $50`, not `$100` per venue. Lead-lag,
-dated-basis, and market-making intents continue through the advanced PAPER boundary.
-No projection grants live operator authority.
+second position or count one funding payment twice. Every authoritative non-zero
+funding payment is atomically projected into the canonical hash-chained double-entry
+ledger in the same database transaction as its raw-history-backed payment. The
+funding event natural key is the ledger idempotency key: an exact retry returns the
+durable transaction, while a changed amount, asset, strategy, or posting fails the
+runner closed. Startup performs a bounded backfill and rejects missing, orphaned, or
+total-divergent funding projections before a new cycle. Funding capital is capped
+across both legs: a `$100` limit means at most `$50 + $50`, not `$100` per venue.
+Lead-lag, dated-basis, and market-making intents continue through the advanced PAPER
+boundary. No projection grants live operator authority.
 
 The consumer is downstream of the raw-event commit. Parallel WebSocket callbacks do
 not define execution order: the runtime catches up by the canonical event table row

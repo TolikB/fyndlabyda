@@ -140,7 +140,7 @@ class JsonlLedgerJournal:
                 raise ValueError("ledger journal sequence is not contiguous")
             if transaction.previous_hash != previous_hash:
                 raise ValueError("ledger hash chain previous hash mismatch")
-            if transaction.transaction_hash != _transaction_hash(transaction):
+            if transaction.transaction_hash != ledger_transaction_hash(transaction):
                 raise ValueError("ledger transaction hash mismatch")
             previous_hash = transaction.transaction_hash
         return transactions
@@ -184,7 +184,7 @@ class DoubleEntryLedger:
             if identity != existing_identity:
                 raise ValueError("ledger transaction ID collision")
             return existing
-        candidate = LedgerTransaction(
+        transaction = build_ledger_transaction(
             sequence=self.sequence + 1,
             transaction_id=transaction_id,
             timestamp=timestamp,
@@ -193,10 +193,6 @@ class DoubleEntryLedger:
             description=description,
             postings=postings,
             previous_hash=self.head_hash,
-            transaction_hash=GENESIS_HASH,
-        )
-        transaction = candidate.model_copy(
-            update={"transaction_hash": _transaction_hash(candidate)}
         )
         self.journal.append(transaction)
         self._apply(transaction)
@@ -858,7 +854,38 @@ def _net_component(
     return dict(totals)
 
 
-def _transaction_hash(transaction: LedgerTransaction) -> str:
+def build_ledger_transaction(
+    *,
+    sequence: int,
+    transaction_id: str,
+    timestamp: datetime,
+    reference_type: str,
+    reference_id: str,
+    description: str,
+    postings: tuple[LedgerPosting, ...],
+    previous_hash: str,
+) -> LedgerTransaction:
+    """Build one validated hash-chained transaction for any durable journal."""
+
+    candidate = LedgerTransaction(
+        sequence=sequence,
+        transaction_id=transaction_id,
+        timestamp=timestamp,
+        reference_type=reference_type,
+        reference_id=reference_id,
+        description=description,
+        postings=postings,
+        previous_hash=previous_hash,
+        transaction_hash=GENESIS_HASH,
+    )
+    return candidate.model_copy(
+        update={"transaction_hash": ledger_transaction_hash(candidate)}
+    )
+
+
+def ledger_transaction_hash(transaction: LedgerTransaction) -> str:
+    """Return the canonical content hash used by file and database journals."""
+
     payload = transaction.model_dump(mode="json", exclude={"transaction_hash"})
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()

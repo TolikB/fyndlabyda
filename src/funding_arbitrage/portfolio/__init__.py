@@ -7,6 +7,8 @@ from funding_arbitrage.portfolio.ledger import (
     LedgerPosting,
     LedgerSnapshot,
     LedgerTransaction,
+    build_ledger_transaction,
+    ledger_transaction_hash,
 )
 from funding_arbitrage.portfolio.reconciliation import (
     BalanceReconState,
@@ -35,12 +37,14 @@ from funding_arbitrage.portfolio.withdrawal import (
 )
 
 __all__ = [
+    "build_ledger_transaction",
     "DoubleEntryLedger",
     "JsonlLedgerJournal",
     "LedgerAccountKind",
     "LedgerPosting",
     "LedgerSnapshot",
     "LedgerTransaction",
+    "ledger_transaction_hash",
     "BalanceReconState",
     "ContinuousReconciler",
     "FillReconState",

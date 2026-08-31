@@ -42,6 +42,7 @@ from ..models import (
     PortfolioSnapshotRecord,
     TickerSnapshotRecord,
 )
+from .ledger import append_funding_cashflow
 
 
 async def save_instruments(session: AsyncSession, instruments: list[NormalizedInstrument]) -> None:
@@ -555,7 +556,14 @@ async def save_paper_funding_payment(
     pnl: Decimal,
     *,
     history_event: FundingHistoryPoint | None = None,
+    ledger_asset: str | None = None,
+    ledger_strategy_id: str | None = None,
+    commit: bool = True,
 ) -> PaperFundingPaymentRecord:
+    if (ledger_asset is None) != (ledger_strategy_id is None):
+        raise ValueError(
+            "paper funding ledger asset and strategy must be provided together"
+        )
     if history_event is not None and (
         history_event.exchange != funding.exchange
         or history_event.symbol != funding.symbol
@@ -631,7 +639,21 @@ async def save_paper_funding_payment(
             raise RuntimeError(
                 "raw funding history conflicts with the durable paper payment"
             )
-    await session.commit()
+    if ledger_asset is not None and ledger_strategy_id is not None:
+        await append_funding_cashflow(
+            session,
+            position_id=record.position_id,
+            venue=record.exchange,
+            symbol=record.symbol,
+            strategy_id=ledger_strategy_id,
+            settlement_asset=ledger_asset,
+            amount=Decimal(str(record.pnl)),
+            timestamp=record.funding_timestamp,
+        )
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return record
 
 
