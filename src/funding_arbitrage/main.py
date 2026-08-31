@@ -590,7 +590,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503,
                 detail="canonical market-data pipeline is unavailable",
             )
-        snapshot = runtime.last_completed_snapshot
+        paper_runner = getattr(app.state, "paper_runner", None)
+        snapshot = (
+            paper_runner.last_completed_snapshot
+            if isinstance(paper_runner, SharedMarketPaperComparisonRunner)
+            else runtime.last_completed_snapshot
+        )
         if active_settings.run_mode == "paper_test":
             if snapshot is None:
                 raise HTTPException(
@@ -611,15 +616,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(
                     status_code=503,
                     detail="fewer than three venues supplied usable market data",
-                )
-            comparison_runtime = getattr(app.state, "baseline_runtime", None)
-            if (
-                comparison_runtime is not None
-                and comparison_runtime.last_completed_snapshot is not snapshot
-            ):
-                raise HTTPException(
-                    status_code=503,
-                    detail="baseline has not processed the candidate market snapshot",
                 )
         elif active_settings.run_mode == "live":
             live_runner: LiveTradingRunner | None = app.state.live_runner

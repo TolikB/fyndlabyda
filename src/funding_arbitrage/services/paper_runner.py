@@ -1523,6 +1523,7 @@ class SharedMarketPaperComparisonRunner:
         self.candidate = candidate
         self.baseline = baseline
         self.stop_event = asyncio.Event()
+        self.last_completed_snapshot: MarketSnapshot | None = None
 
     async def restore(self) -> None:
         await self.candidate.restore(restore_history=True)
@@ -1541,10 +1542,7 @@ class SharedMarketPaperComparisonRunner:
             started = time.monotonic()
             try:
                 snapshot = await self.candidate.collect_snapshot((self.baseline,))
-                await asyncio.gather(
-                    self.candidate.process_snapshot(snapshot, persist_market=True),
-                    self.baseline.process_snapshot(snapshot, persist_market=False),
-                )
+                await self.process_snapshot(snapshot)
                 paper_runner_cycle_duration_seconds.observe(time.monotonic() - started)
                 paper_runner_cycles_total.inc()
                 paper_runner_last_cycle_timestamp.set(datetime.now(UTC).timestamp())
@@ -1578,6 +1576,15 @@ class SharedMarketPaperComparisonRunner:
                 started,
                 self.candidate.settings.paper_loop_interval_seconds,
             )
+
+    async def process_snapshot(self, snapshot: MarketSnapshot) -> None:
+        """Publish a shared completion marker only after both ledgers finish."""
+
+        await asyncio.gather(
+            self.candidate.process_snapshot(snapshot, persist_market=True),
+            self.baseline.process_snapshot(snapshot, persist_market=False),
+        )
+        self.last_completed_snapshot = snapshot
 
     async def stop(self) -> None:
         self.stop_event.set()

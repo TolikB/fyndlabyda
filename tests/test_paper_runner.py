@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -41,7 +42,7 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.execution.base import FillStatus, PaperFill
-from funding_arbitrage.main import _attempt_shutdown, _finalize_shutdown
+from funding_arbitrage.main import _attempt_shutdown, _finalize_shutdown, create_app
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.opportunity.debounce import OpportunityDebouncer
 from funding_arbitrage.opportunity.models import (
@@ -746,15 +747,16 @@ async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
         paper_runner_module, "save_portfolio_snapshot", capture_portfolio_snapshot
     )
 
+    shared = SharedMarketPaperComparisonRunner(candidate, baseline)
     snapshot = await candidate.collect_snapshot((baseline,))
-    await candidate.process_snapshot(snapshot, persist_market=True)
-    await baseline.process_snapshot(snapshot, persist_market=False)
+    await shared.process_snapshot(snapshot)
 
     assert candidate.collector is baseline.collector
     assert candidate_runtime.latest_snapshot is snapshot
     assert baseline_runtime.latest_snapshot is snapshot
     assert candidate_runtime.last_completed_snapshot is snapshot
     assert baseline_runtime.last_completed_snapshot is snapshot
+    assert shared.last_completed_snapshot is snapshot
     assert candidate_runtime.portfolio.simulation_version == "candidate-shared-test"
     assert baseline_runtime.portfolio.simulation_version == "baseline-shared-test"
     assert candidate_runtime.portfolio.positions
@@ -766,7 +768,6 @@ async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
     assert len(portfolio_snapshots) == 2
     assert {item.timestamp for item in portfolio_snapshots} == {snapshot.captured_at}
 
-    shared = SharedMarketPaperComparisonRunner(candidate, baseline)
     shutdown_order: list[str] = []
 
     async def close_baseline(*, send_stopped: bool = True) -> None:
@@ -786,6 +787,118 @@ async def test_shared_feed_keeps_candidate_and_baseline_ledgers_isolated(
     await baseline.daily_report.close()
     for adapter in adapters.values():
         await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_completion_marker_is_published_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_collector = object()
+    candidate_finished = asyncio.Event()
+    baseline_started = asyncio.Event()
+    release_baseline = asyncio.Event()
+
+    class ControlledRunner:
+        def __init__(
+            self,
+            version: str,
+            *,
+            finished: asyncio.Event | None = None,
+            started: asyncio.Event | None = None,
+            release: asyncio.Event | None = None,
+        ) -> None:
+            self.collector = shared_collector
+            self.settings = Settings(paper_simulation_version=version)
+            self.finished = finished
+            self.started = started
+            self.release = release
+
+        async def process_snapshot(
+            self, _snapshot: MarketSnapshot, *, persist_market: bool
+        ) -> None:
+            del persist_market
+            if self.started is not None:
+                self.started.set()
+            if self.release is not None:
+                await self.release.wait()
+            if self.finished is not None:
+                self.finished.set()
+
+    candidate = cast(
+        PaperTestRunner,
+        ControlledRunner("candidate-atomic-test", finished=candidate_finished),
+    )
+    baseline = cast(
+        PaperTestRunner,
+        ControlledRunner(
+            "baseline-atomic-test",
+            started=baseline_started,
+            release=release_baseline,
+        ),
+    )
+    shared = SharedMarketPaperComparisonRunner(candidate, baseline)
+    def healthy_snapshot(captured_at: datetime) -> MarketSnapshot:
+        return MarketSnapshot(
+            [],
+            [
+                Ticker(
+                    exchange=exchange,
+                    symbol="BTCUSDT",
+                    instrument_type=InstrumentType.PERPETUAL,
+                    last_price=Decimal("100"),
+                    timestamp=captured_at,
+                )
+                for exchange in ("bybit", "gate", "okx")
+            ],
+            [],
+            {},
+            captured_at,
+        )
+
+    current_time = datetime.now(UTC)
+    previous = healthy_snapshot(current_time - timedelta(minutes=1))
+    current = healthy_snapshot(current_time)
+    app = create_app(
+        Settings(
+            _env_file=None,
+            run_mode="paper_test",
+            market_data_mode="mock",
+            paper_comparison_enabled=True,
+            paper_auto_init_database=False,
+        )
+    )
+
+    async def healthy_persistence() -> None:
+        return None
+
+    monkeypatch.setattr(
+        app.state.market_replay_job_store, "probe", healthy_persistence
+    )
+    app.state.paper_runner = shared
+    client = TestClient(app)
+
+    before_first_cycle = client.get("/health/ready")
+    assert before_first_cycle.status_code == 503
+    assert before_first_cycle.json()["detail"] == (
+        "paper runner has not completed a cycle"
+    )
+
+    shared.last_completed_snapshot = previous
+
+    processing = asyncio.create_task(shared.process_snapshot(current))
+    await candidate_finished.wait()
+    await baseline_started.wait()
+
+    assert not processing.done()
+    assert shared.last_completed_snapshot is previous
+    assert client.get("/health/ready").status_code == 200
+
+    release_baseline.set()
+    await processing
+
+    assert shared.last_completed_snapshot is current
+    assert client.get("/health/ready").status_code == 200
+    client.close()
 
 
 @pytest.mark.asyncio
