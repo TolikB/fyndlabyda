@@ -17,7 +17,6 @@ from funding_arbitrage.database.models import (
     LiveFundingPaymentRecord,
     LiveOrderRecord,
     LivePositionRecord,
-    LiveReconciliationRecord,
 )
 from funding_arbitrage.notifications.telegram import TelegramNotifier
 
@@ -141,24 +140,24 @@ class LiveDailyReportService:
         start_equity = await self._equity_at_start(session, start, end)
         end_equity = await self._equity_before(session, end)
         first_equity = await self._first_equity(session)
-        orders = int(
-            await session.scalar(
-                select(func.count(LiveOrderRecord.id)).where(
-                    LiveOrderRecord.created_at >= start,
-                    LiveOrderRecord.created_at < end,
+        day_fees = Decimal(
+            str(
+                await session.scalar(
+                    select(func.coalesce(func.sum(LiveOrderRecord.fee), 0)).where(
+                        LiveOrderRecord.updated_at >= start,
+                        LiveOrderRecord.updated_at < end,
+                    )
                 )
+                or 0
             )
-            or 0
         )
-        fills = int(
-            await session.scalar(
-                select(func.count(LiveOrderRecord.id)).where(
-                    LiveOrderRecord.updated_at >= start,
-                    LiveOrderRecord.updated_at < end,
-                    LiveOrderRecord.filled_quantity > 0,
+        total_fees = Decimal(
+            str(
+                await session.scalar(
+                    select(func.coalesce(func.sum(LiveOrderRecord.fee), 0))
                 )
+                or 0
             )
-            or 0
         )
         opened = int(
             await session.scalar(
@@ -210,37 +209,29 @@ class LiveDailyReportService:
                 or 0
             )
         )
-        reconciliation = await session.scalar(
-            select(LiveReconciliationRecord).order_by(
-                LiveReconciliationRecord.timestamp.desc()
-            )
-        )
         day_pnl = end_equity - start_equity
         total_pnl = end_equity - first_equity
+        total_return_percent = (
+            total_pnl / first_equity * Decimal("100")
+            if first_equity != 0
+            else Decimal("0")
+        )
         return "\n".join(
             [
-                f"💵 Live Funding Arbitrage — {report_date.isoformat()}",
-                "PnL source: actual authenticated account equity",
+                f"📊 Звіт про торгівлю · {report_date.isoformat()}",
                 "",
-                "DAY RESULT",
-                f"Start equity: ${start_equity:.2f}",
-                f"End equity: ${end_equity:.2f}",
-                f"Net PnL after venue costs: {_signed_usd(day_pnl)}",
-                f"Actual funding payments: {_signed_usd(day_funding)}",
-                f"Order records: {orders} | Fills: {fills}",
-                f"Opened: {opened} | Closed: {closed}",
+                "ЗА ДЕНЬ",
+                f"Результат: {_signed_usd(day_pnl)}",
+                f"Фандінг: {_signed_usd(day_funding)}",
+                f"Комісії: ${day_fees:.2f}",
+                f"Угоди: відкрито {opened} · закрито {closed}",
                 "",
-                "TOTAL",
-                f"Current equity: ${end_equity:.2f}",
-                f"Net PnL since live tracking: {_signed_usd(total_pnl)}",
-                f"Actual funding payments: {_signed_usd(total_funding)}",
-                f"Active positions: {active}",
-                (
-                    f"Last reconciliation: {reconciliation.status}"
-                    if reconciliation is not None
-                    else "Last reconciliation: none"
-                ),
-                "Mode: LIVE — real orders enabled",
+                "ЗАГАЛОМ",
+                f"Баланс: ${end_equity:.2f}",
+                f"Результат: {_signed_usd(total_pnl)} ({total_return_percent:+.4f}%)",
+                f"Фандінг: {_signed_usd(total_funding)}",
+                f"Комісії: ${total_fees:.2f}",
+                f"Відкриті позиції: {active}",
             ]
         )
 

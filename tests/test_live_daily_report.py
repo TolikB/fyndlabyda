@@ -80,11 +80,18 @@ async def test_live_daily_report_shows_day_and_total_actual_equity(
         message = await service._build_message(session, date(2026, 8, 11))
     await service.close()
 
-    assert "Net PnL after venue costs: +$4.00" in message
-    assert "Net PnL since live tracking: +$4.00" in message
-    assert "Current equity: $204.00" in message
-    assert "Active positions: 1" in message
-    assert message.count("Actual funding payments: +$1.50") == 2
+    assert "📊 Звіт про торгівлю · 2026-08-11" in message
+    assert "ЗА ДЕНЬ" in message
+    assert "Результат: +$4.00" in message
+    assert message.count("Фандінг: +$1.50") == 2
+    assert "Угоди: відкрито 0 · закрито 0" in message
+    assert "ЗАГАЛОМ" in message
+    assert "Баланс: $204.00" in message
+    assert "Результат: +$4.00 (+2.0000%)" in message
+    assert "Відкриті позиції: 1" in message
+    assert "PnL source" not in message
+    assert "Last reconciliation" not in message
+    assert "Mode:" not in message
 
 
 @pytest.mark.asyncio

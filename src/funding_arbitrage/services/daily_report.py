@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func, select
+from sqlalchemy import Numeric, cast, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -396,6 +396,23 @@ class DailyReportService:
             )
         )
         if includes_directional:
+            directional_spread_cost = func.coalesce(
+                cast(
+                    ExecutionFillRecord.payload["spread_cost"].as_string(),
+                    Numeric(38, 18),
+                ),
+                0,
+            )
+            directional_impact_cost = func.coalesce(
+                cast(
+                    ExecutionFillRecord.payload["impact_cost"].as_string(),
+                    Numeric(38, 18),
+                ),
+                0,
+            )
+            directional_execution_cost = (
+                directional_spread_cost + directional_impact_cost
+            )
             directional_fees = await session.scalar(
                 select(func.coalesce(func.sum(ExecutionFillRecord.fee_amount), 0))
                 .where(
@@ -403,6 +420,20 @@ class DailyReportService:
                     ExecutionFillRecord.simulation_version == simulation_version,
                     ExecutionFillRecord.exchange_timestamp >= start,
                     ExecutionFillRecord.exchange_timestamp < end,
+                )
+            )
+            directional_slippage = await session.scalar(
+                select(func.coalesce(func.sum(directional_execution_cost), 0)).where(
+                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    ExecutionFillRecord.simulation_version == simulation_version,
+                    ExecutionFillRecord.exchange_timestamp >= start,
+                    ExecutionFillRecord.exchange_timestamp < end,
+                )
+            )
+            directional_total_slippage = await session.scalar(
+                select(func.coalesce(func.sum(directional_execution_cost), 0)).where(
+                    ExecutionFillRecord.client_order_id.like("mro_%"),
+                    ExecutionFillRecord.simulation_version == simulation_version,
                 )
             )
             directional_fills = await session.scalar(
@@ -437,6 +468,12 @@ class DailyReportService:
                 )
             )
             fees = Decimal(str(fees or 0)) + Decimal(str(directional_fees or 0))
+            slippage = Decimal(str(slippage or 0)) + Decimal(
+                str(directional_slippage or 0)
+            )
+            total_slippage = Decimal(str(total_slippage or 0)) + Decimal(
+                str(directional_total_slippage or 0)
+            )
             fills = int(fills or 0) + int(directional_fills or 0)
             opened = int(opened or 0) + int(directional_opened or 0)
             closed = int(closed or 0) + int(directional_closed or 0)

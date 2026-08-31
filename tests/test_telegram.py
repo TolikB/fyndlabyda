@@ -9,10 +9,14 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from funding_arbitrage.config import Settings
-from funding_arbitrage.database.models import TelegramDailyReportRecord
+from funding_arbitrage.database.models import (
+    ExecutionFillRecord,
+    PortfolioSnapshotRecord,
+    TelegramDailyReportRecord,
+)
 from funding_arbitrage.notifications.telegram import (
     TelegramNotificationError,
     TelegramNotifier,
@@ -162,6 +166,8 @@ class ReportSession:
             1,
             1,
             Decimal("0.25"),
+            Decimal("0.15"),
+            Decimal("0.40"),
             2,
             1,
             1,
@@ -237,12 +243,13 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     assert "ЗА ДЕНЬ" in sent[0]
     assert "Результат: +$12.00" in sent[0]
     assert "Фандінг: +$8.00" in sent[0]
-    assert "Витрати: $1.45 (комісії $1.25, прослизання $0.20)" in sent[0]
+    assert "Витрати: $1.60 (комісії $1.25, прослизання $0.35)" in sent[0]
     assert "Угоди: відкрито 2 · закрито 2" in sent[0]
     assert sent[0].count("Відкриті позиції: 2") == 1
     assert "ЗАГАЛОМ" in sent[0]
     assert "Баланс: $10012.00" in sent[0]
     assert "Результат: +$12.00 (+0.1200%)" in sent[0]
+    assert "Витрати: $1.90" in sent[0]
     assert "Тестовий режим · реальних ордерів немає" in sent[0]
     assert "Статус:" not in sent[0]
     assert "BYBIT" not in sent[0]
@@ -259,6 +266,73 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     assert repeated is False
     assert len(sent) == 1
     assert len(session.added) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_report_includes_directional_spread_and_impact_costs(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, factory = database
+    version = "directional-cost-report"
+    start = datetime(2026, 8, 9, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    settings = Settings(
+        paper_simulation_version=version,
+        multi_regime_enabled=True,
+        multi_regime_paper_execution_enabled=True,
+    )
+    async with factory() as session:
+        session.add(
+            PortfolioSnapshotRecord(
+                timestamp=start + timedelta(hours=1),
+                simulation_version=version,
+                snapshot_scope="combined",
+                equity=Decimal("1000"),
+                cash=Decimal("1000"),
+                locked_capital=Decimal("0"),
+                total_pnl=Decimal("0"),
+                funding_pnl=Decimal("0"),
+                fees=Decimal("0.25"),
+                balances={},
+            )
+        )
+        session.add(
+            ExecutionFillRecord(
+                fill_id="directional-cost-fill",
+                simulation_version=version,
+                client_order_id="mro_directional_cost",
+                exchange_order_id="paper:mro_directional_cost",
+                venue="bybit",
+                instrument_id="BYBIT:PERP:BTC/USDT",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("1"),
+                fee_amount=Decimal("0.25"),
+                fee_asset="USDT",
+                liquidity_role="TAKER",
+                exchange_timestamp=start + timedelta(hours=2),
+                receive_timestamp=start + timedelta(hours=2),
+                payload={"spread_cost": "0.40", "impact_cost": "0.10"},
+            )
+        )
+        await session.commit()
+
+    service = DailyReportService(settings, factory)
+    async with factory() as session:
+        report = await service._load_portfolio_report(
+            session,
+            label="candidate",
+            simulation_version=version,
+            start=start,
+            end=end,
+            signal_start=start,
+            signal_counts=(0, 0),
+        )
+    await service.close()
+
+    assert report.day_fees == Decimal("0.25")
+    assert report.day_slippage == Decimal("0.50")
+    assert report.total_slippage == Decimal("0.50")
 
 
 @pytest.mark.asyncio
@@ -425,6 +499,8 @@ async def test_daily_report_explains_unchanged_equity_when_no_trades(
         0,
         0,
         0,
+        0,
+        0,
         96,
         0,
         0,
@@ -484,6 +560,8 @@ async def test_daily_report_omits_background_baseline_results(
         Decimal("0"),
         Decimal("0"),
         Decimal("0"),
+        0,
+        0,
         0,
         0,
         0,
