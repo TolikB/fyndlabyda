@@ -534,6 +534,38 @@ async def test_empty_clickhouse_replication_requires_a_successful_health_probe()
     await engine.dispose()
 
 
+async def test_clickhouse_replication_backlog_is_healthy_but_errors_fail_closed() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        assert await append_event(session, _event())
+
+    replicator = ClickHouseEventReplicator(
+        factory,
+        RecordingMarketAnalyticsSink(),
+        batch_size=1,
+        poll_seconds=0.01,
+    )
+
+    assert await replicator.replicate_once() == 1
+    assert replicator.ready
+    assert not replicator.caught_up
+    assert replicator.healthy
+    assert replicator.health_reason is None
+
+    replicator.failure(TimeoutError("simulated analytics outage"))
+    assert not replicator.healthy
+    assert replicator.health_reason == "clickhouse_event_replication:TimeoutError"
+
+    replicator.success(caught_up=False)
+    assert replicator.healthy
+    assert not replicator.caught_up
+    assert replicator.health_reason is None
+    await engine.dispose()
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, bytes] = {}

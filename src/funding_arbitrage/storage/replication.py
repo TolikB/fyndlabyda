@@ -47,7 +47,10 @@ class _ReplicationHealth:
 
     @property
     def healthy(self) -> bool:
-        return self.ready and self.caught_up and self.last_error is None
+        # A bounded backlog is normal while a durable analytics replica processes
+        # an active market-data burst. Trading readiness must fail only before the
+        # replica has connected successfully or after an actual replication error.
+        return self.ready and self.last_error is None
 
     @property
     def health_reason(self) -> str | None:
@@ -55,8 +58,6 @@ class _ReplicationHealth:
             return f"{self.health_prefix}:{self.last_error}"
         if not self.ready:
             return f"{self.health_prefix}_starting"
-        if not self.caught_up:
-            return f"{self.health_prefix}_catching_up"
         return None
 
     def success(self, *, caught_up: bool) -> None:
