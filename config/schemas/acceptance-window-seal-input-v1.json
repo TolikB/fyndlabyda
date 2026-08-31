@@ -1,0 +1,826 @@
+{
+  "$defs": {
+    "AcceptanceCosts": {
+      "additionalProperties": false,
+      "description": "Cumulative non-negative execution costs in USD.",
+      "properties": {
+        "borrow_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Borrow Usd"
+        },
+        "fees_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Fees Usd"
+        },
+        "gas_and_transfer_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Gas And Transfer Usd"
+        },
+        "slippage_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Slippage Usd"
+        },
+        "spread_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Spread Usd"
+        }
+      },
+      "required": [
+        "fees_usd",
+        "spread_usd",
+        "slippage_usd",
+        "borrow_usd",
+        "gas_and_transfer_usd"
+      ],
+      "title": "AcceptanceCosts",
+      "type": "object"
+    },
+    "AcceptanceCounters": {
+      "additionalProperties": false,
+      "description": "Cumulative counters captured from one clean acceptance namespace.",
+      "properties": {
+        "accounting_violations": {
+          "minimum": 0,
+          "title": "Accounting Violations",
+          "type": "integer"
+        },
+        "canonical_market_events": {
+          "minimum": 0,
+          "title": "Canonical Market Events",
+          "type": "integer"
+        },
+        "closed_positions": {
+          "minimum": 0,
+          "title": "Closed Positions",
+          "type": "integer"
+        },
+        "daily_reports": {
+          "minimum": 0,
+          "title": "Daily Reports",
+          "type": "integer"
+        },
+        "data_quality_incidents": {
+          "minimum": 0,
+          "title": "Data Quality Incidents",
+          "type": "integer"
+        },
+        "fill_book_reconciliations": {
+          "minimum": 0,
+          "title": "Fill Book Reconciliations",
+          "type": "integer"
+        },
+        "funding_settlements": {
+          "minimum": 0,
+          "title": "Funding Settlements",
+          "type": "integer"
+        },
+        "process_restarts": {
+          "minimum": 0,
+          "title": "Process Restarts",
+          "type": "integer"
+        },
+        "readiness_failures": {
+          "minimum": 0,
+          "title": "Readiness Failures",
+          "type": "integer"
+        },
+        "real_order_submissions": {
+          "minimum": 0,
+          "title": "Real Order Submissions",
+          "type": "integer"
+        },
+        "risk_limit_breaches": {
+          "minimum": 0,
+          "title": "Risk Limit Breaches",
+          "type": "integer"
+        },
+        "risk_rejections": {
+          "minimum": 0,
+          "title": "Risk Rejections",
+          "type": "integer"
+        },
+        "runner_cycles": {
+          "minimum": 0,
+          "title": "Runner Cycles",
+          "type": "integer"
+        },
+        "runner_errors": {
+          "minimum": 0,
+          "title": "Runner Errors",
+          "type": "integer"
+        },
+        "shadow_suppressed_orders": {
+          "minimum": 0,
+          "title": "Shadow Suppressed Orders",
+          "type": "integer"
+        },
+        "simulated_fills": {
+          "minimum": 0,
+          "title": "Simulated Fills",
+          "type": "integer"
+        },
+        "stale_stream_incidents": {
+          "minimum": 0,
+          "title": "Stale Stream Incidents",
+          "type": "integer"
+        },
+        "strategy_decisions": {
+          "minimum": 0,
+          "title": "Strategy Decisions",
+          "type": "integer"
+        },
+        "strategy_evaluations": {
+          "minimum": 0,
+          "title": "Strategy Evaluations",
+          "type": "integer"
+        },
+        "unknown_orders": {
+          "minimum": 0,
+          "title": "Unknown Orders",
+          "type": "integer"
+        },
+        "unprotected_positions": {
+          "minimum": 0,
+          "title": "Unprotected Positions",
+          "type": "integer"
+        },
+        "unreconciled_fills": {
+          "minimum": 0,
+          "title": "Unreconciled Fills",
+          "type": "integer"
+        },
+        "unresolved_reconciliation_items": {
+          "minimum": 0,
+          "title": "Unresolved Reconciliation Items",
+          "type": "integer"
+        },
+        "venue_outage_incidents": {
+          "minimum": 0,
+          "title": "Venue Outage Incidents",
+          "type": "integer"
+        },
+        "withdrawal_requests": {
+          "minimum": 0,
+          "title": "Withdrawal Requests",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runner_cycles",
+        "canonical_market_events",
+        "strategy_evaluations",
+        "strategy_decisions",
+        "risk_rejections",
+        "shadow_suppressed_orders",
+        "simulated_fills",
+        "fill_book_reconciliations",
+        "unreconciled_fills",
+        "closed_positions",
+        "daily_reports",
+        "funding_settlements",
+        "real_order_submissions",
+        "withdrawal_requests",
+        "runner_errors",
+        "accounting_violations",
+        "risk_limit_breaches",
+        "unresolved_reconciliation_items",
+        "unknown_orders",
+        "unprotected_positions",
+        "data_quality_incidents",
+        "readiness_failures",
+        "venue_outage_incidents",
+        "stale_stream_incidents",
+        "process_restarts"
+      ],
+      "title": "AcceptanceCounters",
+      "type": "object"
+    },
+    "AcceptanceGate": {
+      "enum": [
+        "GATE-001",
+        "GATE-002"
+      ],
+      "title": "AcceptanceGate",
+      "type": "string"
+    },
+    "AcceptanceObservationInput": {
+      "additionalProperties": false,
+      "description": "One unsealed observation from authoritative runtime and ledger state.",
+      "properties": {
+        "accounting_error_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Accounting Error Usd"
+        },
+        "code_revision": {
+          "maxLength": 40,
+          "minLength": 40,
+          "pattern": "^[a-f0-9]{40}$",
+          "title": "Code Revision",
+          "type": "string"
+        },
+        "config_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "configured_cycle_interval_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Configured Cycle Interval Seconds"
+        },
+        "configured_funding_snapshot_stale_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Configured Funding Snapshot Stale Seconds"
+        },
+        "configured_market_data_stale_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Configured Market Data Stale Seconds"
+        },
+        "configured_orderbook_stream_stale_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Configured Orderbook Stream Stale Seconds"
+        },
+        "costs": {
+          "$ref": "#/$defs/AcceptanceCosts"
+        },
+        "counters": {
+          "$ref": "#/$defs/AcceptanceCounters"
+        },
+        "data_quality_valid": {
+          "title": "Data Quality Valid",
+          "type": "boolean"
+        },
+        "exchange_orders_enabled": {
+          "title": "Exchange Orders Enabled",
+          "type": "boolean"
+        },
+        "healthy_venues": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Healthy Venues",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "image_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Image Digest",
+          "type": "string"
+        },
+        "interval_max_funding_snapshot_age_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Interval Max Funding Snapshot Age Seconds"
+        },
+        "interval_max_market_data_age_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Interval Max Market Data Age Seconds"
+        },
+        "interval_max_orderbook_stream_age_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Interval Max Orderbook Stream Age Seconds"
+        },
+        "ledger_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Ledger Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "pattern": "(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "process_start_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Process Start Id",
+          "type": "string"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "runtime_state_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Runtime State Sha256",
+          "type": "string"
+        },
+        "sample_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "simulated_fill_venues": {
+          "default": [],
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Simulated Fill Venues",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "source_watermark": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Source Watermark",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "sample_id",
+        "observed_at",
+        "code_revision",
+        "image_digest",
+        "config_sha256",
+        "process_start_id",
+        "source_watermark",
+        "ledger_sha256",
+        "runtime_state_sha256",
+        "mode",
+        "ready",
+        "exchange_orders_enabled",
+        "healthy_venues",
+        "data_quality_valid",
+        "configured_cycle_interval_seconds",
+        "configured_market_data_stale_seconds",
+        "configured_orderbook_stream_stale_seconds",
+        "configured_funding_snapshot_stale_seconds",
+        "interval_max_market_data_age_seconds",
+        "interval_max_orderbook_stream_age_seconds",
+        "interval_max_funding_snapshot_age_seconds",
+        "accounting_error_usd",
+        "counters",
+        "costs"
+      ],
+      "title": "AcceptanceObservationInput",
+      "type": "object"
+    },
+    "DeterministicReplayEvidence": {
+      "additionalProperties": false,
+      "description": "Two exact replay results bound to one immutable dataset and release.",
+      "properties": {
+        "code_revision": {
+          "maxLength": 40,
+          "minLength": 40,
+          "pattern": "^[a-f0-9]{40}$",
+          "title": "Code Revision",
+          "type": "string"
+        },
+        "config_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "dataset_artifact_ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Dataset Artifact Ref",
+          "type": "string"
+        },
+        "dataset_manifest_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dataset Manifest Sha256",
+          "type": "string"
+        },
+        "dataset_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dataset Sha256",
+          "type": "string"
+        },
+        "event_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000000000,
+          "title": "Event Count",
+          "type": "integer"
+        },
+        "first_result_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "First Result Sha256",
+          "type": "string"
+        },
+        "image_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Image Digest",
+          "type": "string"
+        },
+        "replay_command_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Replay Command Sha256",
+          "type": "string"
+        },
+        "replay_runner_artifact_ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Replay Runner Artifact Ref",
+          "type": "string"
+        },
+        "replay_runner_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Replay Runner Sha256",
+          "type": "string"
+        },
+        "second_result_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Second Result Sha256",
+          "type": "string"
+        },
+        "source_end": {
+          "format": "date-time",
+          "pattern": "(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "title": "Source End",
+          "type": "string"
+        },
+        "source_start": {
+          "format": "date-time",
+          "pattern": "(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "title": "Source Start",
+          "type": "string"
+        },
+        "tested_at": {
+          "format": "date-time",
+          "pattern": "(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "title": "Tested At",
+          "type": "string"
+        },
+        "venue_coverage": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Venue Coverage",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "tested_at",
+        "dataset_sha256",
+        "dataset_manifest_sha256",
+        "replay_runner_sha256",
+        "replay_command_sha256",
+        "dataset_artifact_ref",
+        "replay_runner_artifact_ref",
+        "first_result_sha256",
+        "second_result_sha256",
+        "event_count",
+        "source_start",
+        "source_end",
+        "venue_coverage",
+        "code_revision",
+        "image_digest",
+        "config_sha256"
+      ],
+      "title": "DeterministicReplayEvidence",
+      "type": "object"
+    },
+    "FailureInjectionEvidence": {
+      "additionalProperties": false,
+      "description": "Immutable reference to one release-bound failure-injection result.",
+      "properties": {
+        "artifact_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "code_revision": {
+          "maxLength": 40,
+          "minLength": 40,
+          "pattern": "^[a-f0-9]{40}$",
+          "title": "Code Revision",
+          "type": "string"
+        },
+        "config_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "detected_count": {
+          "minimum": 0,
+          "title": "Detected Count",
+          "type": "integer"
+        },
+        "image_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Image Digest",
+          "type": "string"
+        },
+        "injected_count": {
+          "exclusiveMinimum": 0,
+          "title": "Injected Count",
+          "type": "integer"
+        },
+        "maximum_recovery_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Maximum Recovery Seconds"
+        },
+        "recovered_count": {
+          "minimum": 0,
+          "title": "Recovered Count",
+          "type": "integer"
+        },
+        "scenario": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Scenario",
+          "type": "string"
+        },
+        "tested_at": {
+          "format": "date-time",
+          "pattern": "(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "title": "Tested At",
+          "type": "string"
+        },
+        "unexpected_effect_count": {
+          "minimum": 0,
+          "title": "Unexpected Effect Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scenario",
+        "tested_at",
+        "artifact_sha256",
+        "code_revision",
+        "image_digest",
+        "config_sha256",
+        "injected_count",
+        "detected_count",
+        "recovered_count",
+        "unexpected_effect_count",
+        "maximum_recovery_seconds"
+      ],
+      "title": "FailureInjectionEvidence",
+      "type": "object"
+    },
+    "TradingMode": {
+      "enum": [
+        "BACKTEST",
+        "REPLAY",
+        "SHADOW",
+        "PAPER",
+        "LIMITED_LIVE",
+        "LIVE",
+        "SAFE_MODE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    }
+  },
+  "$id": "https://fyndlabyda.local/schemas/acceptance-window-seal-input-v1.json",
+  "additionalProperties": false,
+  "description": "Validated boundary input used to create an immutable window bundle.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "pattern": "(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+      "title": "Created At",
+      "type": "string"
+    },
+    "deterministic_replay": {
+      "$ref": "#/$defs/DeterministicReplayEvidence"
+    },
+    "document_kind": {
+      "const": "acceptance-window-seal-input",
+      "title": "Document Kind",
+      "type": "string"
+    },
+    "failure_injections": {
+      "items": {
+        "$ref": "#/$defs/FailureInjectionEvidence"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Failure Injections",
+      "type": "array"
+    },
+    "gate_id": {
+      "$ref": "#/$defs/AcceptanceGate"
+    },
+    "observations": {
+      "items": {
+        "$ref": "#/$defs/AcceptanceObservationInput"
+      },
+      "maxItems": 100000,
+      "minItems": 2,
+      "title": "Observations",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "window_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "Window Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "document_kind",
+    "schema_version",
+    "gate_id",
+    "window_id",
+    "created_at",
+    "observations",
+    "failure_injections",
+    "deterministic_replay"
+  ],
+  "title": "AcceptanceWindowSealInputV1",
+  "type": "object",
+  "x-runtime-constraints": [
+    "all date-time values require an explicit UTC offset and are normalized to UTC",
+    "all sha256 digests are exactly 64 lowercase hexadecimal characters",
+    "image digests use the sha256:<64 lowercase hexadecimal characters> form",
+    "Git revisions are full 40-character lowercase hexadecimal SHAs",
+    "venue collections are normalized, non-empty where required, and unique",
+    "replay source_start is strictly earlier than source_end",
+    "JSON objects reject duplicate keys, non-finite numbers, and nesting above 128 levels"
+  ]
+}

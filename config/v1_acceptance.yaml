@@ -727,13 +727,25 @@ requirements:
   - id: GATE-001
     category: delivery
     title: Shadow acceptance window completes without accounting, risk, or reconciliation violations
-    status: missing
-    evidence: []
+    status: partial
+    evidence:
+      - src/funding_arbitrage/qa/acceptance_window.py
+      - scripts/acceptance_window.py
+      - scripts/export_acceptance_schema.py
+      - config/schemas/acceptance-window-seal-input-v1.json
+      - tests/test_acceptance_window.py
+      - docs/V1_ACCEPTANCE_WINDOWS.md
   - id: GATE-002
     category: delivery
     title: Paper acceptance window proves realistic fills, costs, failure behavior, and deterministic reports
-    status: missing
-    evidence: []
+    status: partial
+    evidence:
+      - src/funding_arbitrage/qa/acceptance_window.py
+      - scripts/acceptance_window.py
+      - scripts/export_acceptance_schema.py
+      - config/schemas/acceptance-window-seal-input-v1.json
+      - tests/test_acceptance_window.py
+      - docs/V1_ACCEPTANCE_WINDOWS.md
   - id: GATE-003
     category: delivery
     title: Limited Live is formally approved only after technical, research, shadow, paper, failure, and security gates

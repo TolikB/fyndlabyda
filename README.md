@@ -148,6 +148,14 @@ persisted baseline/candidate run IDs. If historical order books are unavailable,
 replay explicitly uses a conservative synthetic spread/depth model; it never
 silently assumes zero slippage.
 
+Elapsed `GATE-001` Shadow and `GATE-002` Paper evidence uses the immutable
+contract and verifier in `docs/V1_ACCEPTANCE_WINDOWS.md`. The contract is
+implemented, but both gates remain incomplete until a deployment-specific
+collector records a clean 72-hour Shadow window and a clean 30-day Paper window
+for one exact code/image/config identity and trusted signed provenance is verified.
+Evidence-summary success, independently verified replay, policy success, and final
+gate acceptance are reported as separate fail-closed states.
+
 ## Guarded live mode
 
 Live execution is disabled unless `RUN_MODE=live`, `EXECUTION_MODE=live`,
