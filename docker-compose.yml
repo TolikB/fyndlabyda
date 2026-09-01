@@ -69,7 +69,9 @@ services:
       retries: 5
       start_period: 180s
     stop_grace_period: 90s
-    restart: unless-stopped
+    # The trading process is started only by the Vault-gated systemd unit.
+    # Docker auto-restart would bypass that gate after a host reboot.
+    restart: "no"
 
   control-plane:
     image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
@@ -248,7 +250,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
     profiles: ["observability"]
-    user: "65534:65534"
+    user: "10001:10001"
     init: true
     read_only: true
     command:
@@ -260,7 +262,7 @@ services:
       - ${ALERTMANAGER_TELEGRAM_BOT_TOKEN_FILE:-./secrets/telegram-bot-token}:/run/secrets/telegram-bot-token:ro
       - ${ALERTMANAGER_TELEGRAM_CHAT_ID_FILE:-./secrets/telegram-chat-id}:/run/secrets/telegram-chat-id:ro
     tmpfs:
-      - /alertmanager:size=32m,mode=0700,uid=65534,gid=65534
+      - /alertmanager:size=32m,mode=0700,uid=10001,gid=10001
     ports:
       - "127.0.0.1:9093:9093"
     security_opt:

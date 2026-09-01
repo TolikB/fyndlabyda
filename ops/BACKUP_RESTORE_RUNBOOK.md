@@ -124,19 +124,19 @@ Never start the app merely to satisfy backup provenance during recovery.
 the restore operator, must have a non-writable operator-owned parent, and must
 not expose any group/world permission bits. The application remains stopped and
 fenced. Run reconciliation, ledger invariants, deterministic replay, and report
-checks. The restore deliberately sets the stopped app container policy to
-`no`; explicitly restore the declared Compose policy before removing the
-fence. Only then remove the exact fence and restart the unit:
+checks. The restore deliberately verifies that the stopped app container policy
+remains `no`, matching the Vault-gated Compose declaration. Verify it before
+removing the fence. Only then remove the exact fence and restart through the
+restricted control wrapper:
 
 ```bash
 app_container_id="$(sudo docker compose --project-name funding_arbitrage_v1 \
   --env-file .env.live --file docker-compose.yml ps --all --quiet app)"
-sudo docker update --restart=unless-stopped "$app_container_id"
-test "$(sudo docker inspect "$app_container_id" --format '{{.HostConfig.RestartPolicy.Name}}')" = unless-stopped
+test "$(sudo docker inspect "$app_container_id" --format '{{.HostConfig.RestartPolicy.Name}}')" = no
 
 sudo grep -Fxq "funding-arbitrage-v1-restore:${RESTORE_CHANGE_TICKET}" "$RESTORE_MAINTENANCE_MARKER"
 sudo rm -- "$RESTORE_MAINTENANCE_MARKER"
-sudo systemctl start funding-arbitrage-v1.service
+sudo /usr/local/sbin/funding-v1-control start
 ```
 
 Legacy backups containing `git_commit: "unknown"` or the former one-line
@@ -150,7 +150,10 @@ edit a manifest or sidecar to bypass the gate.
 - Encrypted backup: daily and before every migration/release.
 - Off-host object-lock replication: after each successful backup.
 - Checksum sampling: weekly.
-- Full disposable-VM restore drill: quarterly.
+- Full disposable-VM restore drill: quarterly. Seed a non-empty target event and
+  deterministic sentinel payload before backup, add distinct post-target rows,
+  and prove the restore contains the exact target rows while excluding every
+  post-target row; an empty-database smoke test is not acceptance evidence.
 - Record archive hash, source commit, migration head, duration, row/invariant
   checks, operator, and ticket. A backup is not accepted until a restore drill has
   proven it usable.

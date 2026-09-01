@@ -83,7 +83,10 @@ def test_compose_alertmanager_is_bounded_loopback_only_and_secret_mounted() -> N
     prometheus = compose["services"]["prometheus"]
 
     assert service["profiles"] == ["observability"]
-    assert service["user"] == "65534:65534"
+    assert service["user"] == "10001:10001"
+    assert service["tmpfs"] == [
+        "/alertmanager:size=32m,mode=0700,uid=10001,gid=10001"
+    ]
     assert service["read_only"] is True
     assert service["cap_drop"] == ["ALL"]
     assert service["ports"] == ["127.0.0.1:9093:9093"]

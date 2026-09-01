@@ -23,7 +23,14 @@ def test_terraform_is_provider_neutral_and_fail_closed() -> None:
     assert "provider \"" not in main
     assert "remote-exec" not in main
     assert "local-exec" not in main
-    assert "0.0.0.0/0" in variables and "::/0" in variables
+    assert 'regex("^[0-9.]+/32$"' in variables
+    assert 'regex("^[0-9A-Fa-f:]+/128$"' in variables
+    assert 'trimprefix(var.app_dir, "/opt/")' in variables
+    assert 'trimprefix(var.data_dir, "/srv/")' in variables
+    assert 'trimprefix(var.backup_root, "/var/backups/")' in variables
+    assert '!contains([".", ".."], segment)' in variables
+    assert "templatefile(" in main
+    assert "app_dir = var.app_dir" in main
     assert "Dedicated paths must never resolve to a broad system directory" in main
     assert "ssh_pwauth: false" in cloud
     assert "disable_root: true" in cloud
@@ -36,6 +43,24 @@ def test_terraform_is_provider_neutral_and_fail_closed() -> None:
     assert "groups: [adm]" in cloud
     assert "groups: [adm, docker" not in cloud
     assert "/usr/bin/docker compose *" not in cloud
+    assert "  - funding\n\nusers:" in cloud
+    assert "uid: 10001" in cloud
+    assert "primary_group: funding" in cloud
+    assert cloud.count("    defer: true") == 7
+    assert "LoadCredentialEncrypted=approle-secret-id:" in cloud
+    assert "ExecStartPre=/usr/local/sbin/funding-v1-vault-render-gate clear" in cloud
+    assert "ExecStartPost=/usr/local/sbin/funding-v1-vault-render-gate wait" in cloud
+    assert "Vault did not freshly render every required secret within 60 seconds" in cloud
+    assert 'for name in "$${required_files[@]}"' in cloud
+    assert "BindsTo=vault-agent-funding.service" in cloud
+    assert "ExecStartPre=/usr/bin/bash scripts/host_preflight.sh" in cloud
+    assert "/etc/credstore.encrypted/funding-v1-approle-secret-id" in cloud
+    assert "/usr/local/sbin/funding-v1-control start" in cloud
+    assert "#!/usr/bin/bash" in cloud
+    assert 'if [[ "$EUID" -ne 0 || "$#" -ne 1 ]]' in cloud
+    assert "unsupported funding-v1-control action" in cloud
+    assert 'readonly app_dir="${app_dir}"' in cloud
+    assert '[install, -d, -m, "0750", -o, root, -g, funding, ${app_dir}]' in cloud
     assert "LIVE_AUTOTRADE" not in cloud
 
 
@@ -46,10 +71,16 @@ def test_vault_agent_is_read_only_ephemeral_and_missing_key_strict() -> None:
     telegram = _read("infra/vault/telegram.ctmpl")
 
     assert 'type       = "approle"' in agent
-    assert "remove_secret_id_file_after_reading = true" in agent
+    assert "remove_secret_id_file_after_reading = false" in agent
+    assert (
+        'secret_id_file_path                 = '
+        '"/run/credentials/vault-agent-funding.service/approle-secret-id"'
+    ) in agent
     assert "exit_on_retry_failure" in agent
     assert agent.count("error_on_missing_key = true") == 5
     assert "sink" not in agent
+    assert agent.count('destination          = "${app_dir}/secrets/exchange/') == 5
+    assert "/opt/funding-arbitrage-v1/secrets/exchange" not in agent
     assert set(line.strip() for line in policy.splitlines() if "capabilities" in line) == {
         'capabilities = ["read"]'
     }
@@ -90,6 +121,10 @@ def test_compose_uses_optional_secret_overlays_and_live_requires_them() -> None:
     assert "APP_TELEGRAM_SECRETS_ENV_FILE=./secrets/exchange/telegram.env" in live
     assert "./secrets/exchange/telegram-bot-token" in live
     assert "./secrets/exchange/telegram-chat-id" in live
+    alertmanager = compose["services"]["alertmanager"]
+    assert alertmanager["user"] == "10001:10001"
+    assert "uid=10001,gid=10001" in alertmanager["tmpfs"][0]
+    assert compose["services"]["app"]["restart"] == "no"
 
 
 def test_acceptance_compose_overlay_pins_measured_image_and_evidence_paths() -> None:
@@ -273,7 +308,7 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "10#$mode > 600" not in preflight
     assert "internal secret directory must be root-owned mode 0711" in preflight
     assert "private artifact owner is invalid" in preflight
-    assert "for command_name in chronyc docker findmnt jq ss timedatectl" in preflight
+    assert "for command_name in chronyc docker findmnt id jq setpriv ss timedatectl" in preflight
     assert "POSTGRES_USER" in preflight
     assert "check_private_owner secrets/internal/clickhouse-server.key 101 101" in preflight
     assert "secrets/internal/clickhouse-client.crt" in preflight
@@ -282,6 +317,15 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "check_postgres_client_cn" in verifier
     assert "internal TLS directory must not contain a CA private key" in verifier
     assert "check_private_owner secrets/internal/clickhouse-client.key 101 101" in preflight
+    assert 'funding_uid="$(id -u funding)"' in preflight
+    assert 'funding_gid="$(id -g funding)"' in preflight
+    assert 'exchange_dir_uid="$(stat -c \'%u\' secrets/exchange)"' in preflight
+    assert "exchange secret directory must be UID 10001 mode 0700" in preflight
+    assert "check_private_uid \"$rendered_file\" 10001" in preflight
+    assert 'setpriv --reuid=10001 --regid="$funding_gid" --clear-groups' in preflight
+    assert "runtime UID 10001 cannot read rendered secret" in preflight
+    assert "secrets/exchange/telegram-bot-token" in preflight
+    assert "secrets/exchange/telegram-chat-id" in preflight
     assert (
         'bash scripts/verify_internal_tls.sh secrets/internal 86400 "$postgres_user"'
         in preflight
@@ -580,8 +624,8 @@ def test_infrastructure_and_restore_runbooks_preserve_safety_boundary() -> None:
     assert restore.index("RESTORE_MAINTENANCE_MARKER") < restore.index("systemctl stop")
     assert "--file docker-compose.yml up --detach postgres" in restore
     assert 'sudo rm -- "$RESTORE_MAINTENANCE_MARKER"' in restore
-    assert 'docker update --restart=unless-stopped "$app_container_id"' in restore
-    assert restore.index("--restart=unless-stopped") < restore.index('sudo rm --')
-    assert "systemctl start funding-arbitrage-v1.service" in restore
+    assert "HostConfig.RestartPolicy.Name" in restore
+    assert "= no" in restore
+    assert "funding-v1-control start" in restore
     assert "`AGE_IDENTITY_FILE` is mandatory" in restore
     assert "quarterly" in restore.lower()

@@ -89,6 +89,11 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert 'sudo find "$work_root" -depth -delete' in restore_drill
     assert "restore drill refuses an existing Compose project" in restore_drill
     assert "restore drill refuses to overwrite an existing repository artifact" in restore_drill
+    assert "ci-restore-target" in restore_drill
+    assert "ci-restore-post-target" in restore_drill
+    assert '"1|target-row"' in restore_drill
+    assert "SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$" in restore_drill
+    assert "SELECT payload->>$$marker$$" in restore_drill
     assert "rm -rf" not in restore_drill
     workflow = _workflow_text()
     assert "for script in \\" in workflow

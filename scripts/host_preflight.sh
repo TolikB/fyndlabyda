@@ -25,7 +25,7 @@ for overlay in secrets/exchange/runtime.env secrets/exchange/telegram.env; do
     compose_env_args+=(--env-file "$overlay")
   fi
 done
-for command_name in chronyc docker findmnt jq ss timedatectl; do
+for command_name in chronyc docker findmnt id jq setpriv ss timedatectl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "required command unavailable: $command_name" >&2
     exit 2
@@ -75,6 +75,8 @@ for secret_file in \
   secrets/exchange/runtime.env \
   secrets/exchange/telegram.env \
   secrets/exchange/credential-policy.json \
+  secrets/exchange/telegram-bot-token \
+  secrets/exchange/telegram-chat-id \
   secrets/internal/ca.crt \
   secrets/internal/app-client.crt \
   secrets/internal/app-client.key \
@@ -96,6 +98,8 @@ for private_file in \
   secrets/exchange/runtime.env \
   secrets/exchange/telegram.env \
   secrets/exchange/credential-policy.json \
+  secrets/exchange/telegram-bot-token \
+  secrets/exchange/telegram-chat-id \
   secrets/internal/app-client.key \
   secrets/internal/postgres-server.key \
   secrets/internal/redis-server.key \
@@ -134,12 +138,49 @@ check_private_owner() {
   fi
 }
 
+check_private_uid() {
+  local file="$1"
+  local expected_uid="$2"
+  local actual_uid
+  actual_uid="$(stat -c '%u' "$file")"
+  if [[ "$actual_uid" != "$expected_uid" ]]; then
+    echo "private artifact UID is invalid: $file ($actual_uid)" >&2
+    exit 1
+  fi
+}
+
 check_private_owner secrets/internal/app-client.key 10001 10001
 check_private_owner secrets/internal/postgres-server.key 70 70
 check_private_owner secrets/internal/redis-server.key 999 1000
 check_private_owner secrets/internal/redis-password 999 1000
 check_private_owner secrets/internal/clickhouse-server.key 101 101
 check_private_owner secrets/internal/clickhouse-client.key 101 101
+
+funding_uid="$(id -u funding)"
+funding_gid="$(id -g funding)"
+if [[ "$funding_uid" != "10001" || ! "$funding_gid" =~ ^[0-9]+$ ]]; then
+  echo "funding service UID must be 10001, got $funding_uid" >&2
+  exit 1
+fi
+exchange_dir_mode="$(stat -c '%a' secrets/exchange)"
+exchange_dir_uid="$(stat -c '%u' secrets/exchange)"
+if [[ "$exchange_dir_mode" != "700" || "$exchange_dir_uid" != "10001" ]]; then
+  echo "exchange secret directory must be UID 10001 mode 0700" >&2
+  exit 1
+fi
+for rendered_file in \
+  secrets/exchange/runtime.env \
+  secrets/exchange/telegram.env \
+  secrets/exchange/credential-policy.json \
+  secrets/exchange/telegram-bot-token \
+  secrets/exchange/telegram-chat-id; do
+  check_private_uid "$rendered_file" 10001
+  setpriv --reuid=10001 --regid="$funding_gid" --clear-groups \
+    /usr/bin/test -r "$rendered_file" || {
+      echo "runtime UID 10001 cannot read rendered secret: $rendered_file" >&2
+      exit 1
+    }
+done
 
 bash scripts/verify_internal_tls.sh secrets/internal 86400 "$postgres_user"
 

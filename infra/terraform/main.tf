@@ -9,7 +9,9 @@ locals {
     ssh_public_key          = trimspace(var.ssh_public_key)
     vault_address           = var.vault_address
     vault_namespace         = var.vault_namespace
-    vault_agent_hcl         = file("${path.module}/../vault/agent.hcl")
+    vault_agent_hcl = templatefile("${path.module}/../vault/agent.hcl", {
+      app_dir = var.app_dir
+    })
     vault_runtime_template  = file("${path.module}/../vault/runtime.env.ctmpl")
     vault_policy_template   = file("${path.module}/../vault/credential-policy.json.ctmpl")
     vault_telegram_template = file("${path.module}/../vault/telegram.ctmpl")

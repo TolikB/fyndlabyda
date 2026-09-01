@@ -5,16 +5,21 @@ timezone: UTC
 ssh_pwauth: false
 disable_root: true
 
+groups:
+  - funding
+
 users:
   - default
   - name: fundingops
     groups: [adm]
     shell: /bin/bash
-    sudo: ["ALL=(root) NOPASSWD:/usr/bin/systemctl status funding-arbitrage-v1.service,/usr/bin/journalctl -u funding-arbitrage-v1.service"]
+    sudo: ["ALL=(root) NOPASSWD:/usr/local/sbin/funding-v1-control start-vault,/usr/local/sbin/funding-v1-control preflight,/usr/local/sbin/funding-v1-control start,/usr/local/sbin/funding-v1-control stop,/usr/local/sbin/funding-v1-control status"]
     ssh_authorized_keys:
       - ${ssh_public_key}
   - name: funding
     system: true
+    uid: 10001
+    primary_group: funding
     shell: /usr/sbin/nologin
     lock_passwd: true
 
@@ -54,6 +59,7 @@ write_files:
   - path: /etc/funding-v1/vault-agent.env
     owner: root:funding
     permissions: "0640"
+    defer: true
     content: |
       VAULT_ADDR=${vault_address}
       VAULT_CACERT=/etc/funding-v1/vault-ca.crt
@@ -62,36 +68,42 @@ write_files:
   - path: /etc/funding-v1/vault-agent.hcl
     owner: root:funding
     permissions: "0640"
+    defer: true
     content: |
       ${indent(6, vault_agent_hcl)}
 
   - path: /etc/funding-v1/runtime.env.ctmpl
     owner: root:funding
     permissions: "0640"
+    defer: true
     content: |
       ${indent(6, vault_runtime_template)}
 
   - path: /etc/funding-v1/credential-policy.json.ctmpl
     owner: root:funding
     permissions: "0640"
+    defer: true
     content: |
       ${indent(6, vault_policy_template)}
 
   - path: /etc/funding-v1/telegram.ctmpl
     owner: root:funding
     permissions: "0640"
+    defer: true
     content: |
       ${indent(6, vault_telegram_template)}
 
   - path: /etc/funding-v1/telegram-bot-token.ctmpl
     owner: root:funding
     permissions: "0640"
+    defer: true
     content: |
       ${indent(6, vault_telegram_bot)}
 
   - path: /etc/funding-v1/telegram-chat-id.ctmpl
     owner: root:funding
     permissions: "0640"
+    defer: true
     content: |
       ${indent(6, vault_telegram_chat)}
 
@@ -106,16 +118,20 @@ write_files:
       ConditionPathExists=/usr/local/bin/vault
       ConditionPathExists=/etc/funding-v1/vault-ca.crt
       ConditionPathExists=/etc/funding-v1/approle-role-id
-      ConditionPathExists=/etc/funding-v1/approle-secret-id
+      ConditionPathExists=/etc/credstore.encrypted/funding-v1-approle-secret-id
 
       [Service]
       Type=simple
       User=funding
       Group=funding
       EnvironmentFile=/etc/funding-v1/vault-agent.env
+      LoadCredentialEncrypted=approle-secret-id:/etc/credstore.encrypted/funding-v1-approle-secret-id
+      ExecStartPre=/usr/local/sbin/funding-v1-vault-render-gate clear
       ExecStart=/usr/local/bin/vault agent -config=/etc/funding-v1/vault-agent.hcl
+      ExecStartPost=/usr/local/sbin/funding-v1-vault-render-gate wait
       Restart=on-failure
       RestartSec=5s
+      TimeoutStartSec=90
       RuntimeDirectory=vault-agent-funding
       RuntimeDirectoryMode=0700
       UMask=0077
@@ -128,24 +144,121 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  - path: /usr/local/sbin/funding-v1-vault-render-gate
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/bash
+      set -euo pipefail
+      readonly secret_dir="${app_dir}/secrets/exchange"
+      readonly required_files=(
+        runtime.env
+        telegram.env
+        credential-policy.json
+        telegram-bot-token
+        telegram-chat-id
+      )
+      if [[ "$#" -ne 1 || ! -d "$secret_dir" || -L "$secret_dir" ||
+            "$(stat -c '%u' "$secret_dir")" != "10001" ||
+            "$(stat -c '%a' "$secret_dir")" != "700" ]]; then
+        echo "Vault render directory or action is invalid" >&2
+        exit 2
+      fi
+      case "$1" in
+        clear)
+          for name in "$${required_files[@]}"; do
+            path="$secret_dir/$name"
+            if [[ -d "$path" && ! -L "$path" ]]; then
+              echo "refusing directory at Vault render target: $path" >&2
+              exit 2
+            fi
+            rm -f -- "$path"
+          done
+          ;;
+        wait)
+          for _ in {1..60}; do
+            ready=true
+            for name in "$${required_files[@]}"; do
+              path="$secret_dir/$name"
+              if [[ ! -s "$path" || -L "$path" ||
+                    "$(stat -c '%u' "$path" 2>/dev/null || true)" != "10001" ||
+                    "$(stat -c '%a' "$path" 2>/dev/null || true)" != "600" ]]; then
+                ready=false
+                break
+              fi
+            done
+            if [[ "$ready" == "true" ]]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Vault did not freshly render every required secret within 60 seconds" >&2
+          exit 1
+          ;;
+        *)
+          echo "unsupported Vault render gate action" >&2
+          exit 2
+          ;;
+      esac
+
+  - path: /usr/local/sbin/funding-v1-control
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/bash
+      set -euo pipefail
+      readonly app_dir="${app_dir}"
+      if [[ "$EUID" -ne 0 || "$#" -ne 1 ]]; then
+        echo "funding-v1-control requires one root-authorized action" >&2
+        exit 2
+      fi
+      case "$1" in
+        start-vault)
+          exec /usr/bin/systemctl start vault-agent-funding.service
+          ;;
+        preflight)
+          cd "$app_dir"
+          exec /usr/bin/bash scripts/host_preflight.sh
+          ;;
+        start)
+          test ! -e "$app_dir/.restore-maintenance"
+          /usr/bin/systemctl start vault-agent-funding.service
+          exec /usr/bin/systemctl start funding-arbitrage-v1.service
+          ;;
+        stop)
+          exec /usr/bin/systemctl stop funding-arbitrage-v1.service
+          ;;
+        status)
+          exec /usr/bin/systemctl status funding-arbitrage-v1.service --no-pager
+          ;;
+        *)
+          echo "unsupported funding-v1-control action" >&2
+          exit 2
+          ;;
+      esac
+
   - path: /etc/systemd/system/funding-arbitrage-v1.service
     owner: root:root
     permissions: "0644"
     content: |
       [Unit]
       Description=Funding Arbitrage V1 Compose application
-      Requires=docker.service vault-agent-funding.service
+      Requires=docker.service
+      BindsTo=vault-agent-funding.service
       After=docker.service vault-agent-funding.service network-online.target
       ConditionPathExists=${app_dir}/docker-compose.yml
       ConditionPathExists=${app_dir}/.env.live
       ConditionPathExists=${app_dir}/secrets/exchange/runtime.env
       ConditionPathExists=${app_dir}/secrets/exchange/credential-policy.json
+      ConditionPathExists=${app_dir}/secrets/exchange/telegram-bot-token
+      ConditionPathExists=${app_dir}/secrets/exchange/telegram-chat-id
 
       [Service]
       Type=oneshot
       RemainAfterExit=true
       WorkingDirectory=${app_dir}
       ExecCondition=/usr/bin/test ! -e ${app_dir}/.restore-maintenance
+      ExecStartPre=/usr/bin/bash scripts/host_preflight.sh
       ExecStartPre=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env config --quiet
       ExecStart=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env up --detach --remove-orphans
       ExecStop=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env stop
@@ -156,7 +269,7 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
-  - [install, -d, -m, "0750", -o, funding, -g, funding, ${app_dir}]
+  - [install, -d, -m, "0750", -o, root, -g, funding, ${app_dir}]
   - [install, -d, -m, "0700", -o, funding, -g, funding, ${app_dir}/secrets/exchange]
   - [install, -d, -m, "0750", -o, funding, -g, funding, ${data_dir}]
   - [install, -d, -m, "0700", -o, root, -g, root, ${backup_root}]

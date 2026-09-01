@@ -120,18 +120,6 @@ test "$app_status" = "healthy"
 app_container_id="$("${compose[@]}" ps --all --quiet app)"
 test "$(docker inspect "$app_container_id" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$expected_revision"
 
-age-keygen -o "$identity_file" >/dev/null
-chmod 0600 "$identity_file"
-recipient="$(age-keygen -y "$identity_file")"
-backup_output="$(
-  cd "$repo_root"
-  AGE_RECIPIENT="$recipient" BACKUP_ROOT="$backup_root" COMPOSE_PROJECT_NAME="$project" \
-  COMPOSE_FILE="$repo_root/docker-compose.yml" COMPOSE_ENV_FILE="$env_file" \
-  bash scripts/backup_state.sh
-)"
-target="${backup_output##*: }"
-test -s "$target"
-
 pg_exec() {
   local database_name="$1"
   local statement="$2"
@@ -158,7 +146,57 @@ pg_tool() {
   ' sh "$@"
 }
 
-pg_exec funding 'CREATE TABLE restore_exactness_sentinel(id integer PRIMARY KEY); INSERT INTO restore_exactness_sentinel VALUES (1);'
+# Seed non-empty target state before the target backup. The drill later adds
+# post-target rows and proves that restore returns the exact original payload.
+pg_exec funding '
+  CREATE TABLE restore_exactness_sentinel(
+    id integer PRIMARY KEY,
+    marker text NOT NULL
+  );
+  INSERT INTO restore_exactness_sentinel VALUES (1, $$target-row$$);
+  INSERT INTO canonical_events(
+    event_id, kind, source, sequence_id, native_sequence, correlation_id,
+    payload_version, quality, exchange_timestamp, receive_timestamp,
+    monotonic_ns, payload_hash, payload
+  ) VALUES (
+    $$ci-restore-target$$, $$ticker$$, $$ci_restore$$, $$target-1$$, 1,
+    $$ci-restore$$, 1, $$valid$$,
+    $$2026-01-01T00:00:00Z$$::timestamptz,
+    $$2026-01-01T00:00:00.001Z$$::timestamptz,
+    1, repeat($$a$$, 64),
+    $json${"marker":"target","notional":"17.25"}$json$::json
+  );'
+test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$')" = "1"
+test "$(pg_scalar funding 'SELECT id || $$|$$ || marker FROM restore_exactness_sentinel')" = "1|target-row"
+
+age-keygen -o "$identity_file" >/dev/null
+chmod 0600 "$identity_file"
+recipient="$(age-keygen -y "$identity_file")"
+backup_output="$(
+  cd "$repo_root"
+  AGE_RECIPIENT="$recipient" BACKUP_ROOT="$backup_root" COMPOSE_PROJECT_NAME="$project" \
+  COMPOSE_FILE="$repo_root/docker-compose.yml" COMPOSE_ENV_FILE="$env_file" \
+  bash scripts/backup_state.sh
+)"
+target="${backup_output##*: }"
+test -s "$target"
+
+pg_exec funding '
+  INSERT INTO restore_exactness_sentinel VALUES (2, $$post-target-row$$);
+  INSERT INTO canonical_events(
+    event_id, kind, source, sequence_id, native_sequence, correlation_id,
+    payload_version, quality, exchange_timestamp, receive_timestamp,
+    monotonic_ns, payload_hash, payload
+  ) VALUES (
+    $$ci-restore-post-target$$, $$ticker$$, $$ci_restore$$, $$post-target-2$$, 2,
+    $$ci-restore$$, 1, $$valid$$,
+    $$2026-01-01T00:00:01Z$$::timestamptz,
+    $$2026-01-01T00:00:01.001Z$$::timestamptz,
+    2, repeat($$b$$, 64),
+    $json${"marker":"post-target","notional":"99.99"}$json$::json
+  );'
+test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$')" = "2"
+test "$(pg_scalar funding 'SELECT COUNT(*) FROM restore_exactness_sentinel')" = "2"
 printf 'funding-arbitrage-v1-restore:%s\n' "$ticket" > "$fence"
 chmod 0600 "$fence"
 "${compose[@]}" stop --timeout 30 app
@@ -193,7 +231,10 @@ run_restore() {
 }
 
 run_restore "$ticket"
-test "$(pg_scalar funding "SELECT to_regclass('public.restore_exactness_sentinel') IS NULL")" = "t"
+test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$')" = "1"
+test "$(pg_scalar funding 'SELECT payload->>$$marker$$ FROM canonical_events WHERE event_id = $$ci-restore-target$$')" = "target"
+test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE event_id = $$ci-restore-post-target$$')" = "0"
+test "$(pg_scalar funding 'SELECT id || $$|$$ || marker FROM restore_exactness_sentinel')" = "1|target-row"
 test "$(pg_scalar funding 'SELECT version_num FROM alembic_version')" = "0017_multi_regime_runtime"
 test "$(pg_scalar postgres "SELECT COUNT(*) FROM pg_database WHERE datname LIKE 'restore_%' OR datname LIKE 'rollback_%'")" = "0"
 test ! -e "$swap_state"
@@ -225,7 +266,7 @@ write_state() {
 
 prepare_case() {
   pg_exec funding \
-    'DROP SCHEMA IF EXISTS ci_restore_stop CASCADE; DROP TABLE IF EXISTS restore_exactness_sentinel; CREATE TABLE restore_exactness_sentinel(id integer PRIMARY KEY); INSERT INTO restore_exactness_sentinel VALUES (1); CREATE SCHEMA ci_restore_stop;'
+    'DROP SCHEMA IF EXISTS ci_restore_stop CASCADE; DROP TABLE IF EXISTS restore_exactness_sentinel; CREATE TABLE restore_exactness_sentinel(id integer PRIMARY KEY, marker text NOT NULL); INSERT INTO restore_exactness_sentinel VALUES (1, $$recovery-row$$); CREATE SCHEMA ci_restore_stop;'
   pg_tool createdb --maintenance-db=postgres --template=funding "$restore_database"
   pg_exec "$restore_database" 'DROP TABLE restore_exactness_sentinel'
   pg_exec postgres "ALTER DATABASE $restore_database WITH ALLOW_CONNECTIONS false"

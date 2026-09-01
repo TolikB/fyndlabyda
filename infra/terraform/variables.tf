@@ -15,9 +15,12 @@ variable "operator_cidr" {
   validation {
     condition = (
       can(cidrhost(var.operator_cidr, 0)) &&
-      !contains(["0.0.0.0/0", "::/0"], var.operator_cidr)
+      (
+        can(regex("^[0-9.]+/32$", var.operator_cidr)) ||
+        can(regex("^[0-9A-Fa-f:]+/128$", var.operator_cidr))
+      )
     )
-    error_message = "operator_cidr must be a valid non-public CIDR."
+    error_message = "operator_cidr must be one exact IPv4 /32 or IPv6 /128 operator address."
   }
 }
 
@@ -49,7 +52,16 @@ variable "app_dir" {
   default     = "/opt/funding-arbitrage-v1"
 
   validation {
-    condition     = startswith(var.app_dir, "/opt/") && var.app_dir != "/opt/"
+    condition = (
+      startswith(var.app_dir, "/opt/") &&
+      var.app_dir == trimsuffix(var.app_dir, "/") &&
+      alltrue([
+        for segment in split("/", trimprefix(var.app_dir, "/opt/")) :
+        length(segment) > 0 &&
+        !contains([".", ".."], segment) &&
+        can(regex("^[A-Za-z0-9._-]+$", segment))
+      ])
+    )
     error_message = "app_dir must be a dedicated child of /opt."
   }
 }
@@ -60,7 +72,16 @@ variable "data_dir" {
   default     = "/srv/funding-arbitrage-v1"
 
   validation {
-    condition     = startswith(var.data_dir, "/srv/") && var.data_dir != "/srv/"
+    condition = (
+      startswith(var.data_dir, "/srv/") &&
+      var.data_dir == trimsuffix(var.data_dir, "/") &&
+      alltrue([
+        for segment in split("/", trimprefix(var.data_dir, "/srv/")) :
+        length(segment) > 0 &&
+        !contains([".", ".."], segment) &&
+        can(regex("^[A-Za-z0-9._-]+$", segment))
+      ])
+    )
     error_message = "data_dir must be a dedicated child of /srv."
   }
 }
@@ -73,7 +94,13 @@ variable "backup_root" {
   validation {
     condition = (
       startswith(var.backup_root, "/var/backups/") &&
-      var.backup_root != "/var/backups/"
+      var.backup_root == trimsuffix(var.backup_root, "/") &&
+      alltrue([
+        for segment in split("/", trimprefix(var.backup_root, "/var/backups/")) :
+        length(segment) > 0 &&
+        !contains([".", ".."], segment) &&
+        can(regex("^[A-Za-z0-9._-]+$", segment))
+      ])
     )
     error_message = "backup_root must be a dedicated child of /var/backups."
   }
