@@ -1,15 +1,15 @@
 locals {
   cloud_init = templatefile("${path.module}/cloud-init.yaml.tftpl", {
-    app_dir                 = var.app_dir
-    backup_root             = var.backup_root
-    data_dir                = var.data_dir
-    operator_cidr           = var.operator_cidr
-    project_name            = var.project_name
-    ssh_port                = var.ssh_port
-    ssh_public_key          = trimspace(var.ssh_public_key)
-    vault_address           = var.vault_address
-    vault_namespace         = var.vault_namespace
-    vault_agent_hcl         = templatefile("${path.module}/../vault/agent.hcl", {
+    app_dir         = var.app_dir
+    backup_root     = var.backup_root
+    data_dir        = var.data_dir
+    operator_cidr   = var.operator_cidr
+    project_name    = var.project_name
+    ssh_port        = var.ssh_port
+    ssh_public_key  = trimspace(var.ssh_public_key)
+    vault_address   = var.vault_address
+    vault_namespace = var.vault_namespace
+    vault_agent_hcl = templatefile("${path.module}/../vault/agent.hcl", {
       app_dir = var.app_dir
     })
     vault_runtime_template  = file("${path.module}/../vault/runtime.env.ctmpl")
