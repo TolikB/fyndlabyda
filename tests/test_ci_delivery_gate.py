@@ -162,8 +162,19 @@ def test_publish_and_manual_gate_are_tightly_scoped() -> None:
     assert isinstance(manual, dict)
     assert manual["if"] == "github.event_name == 'workflow_dispatch'"
     assert manual["environment"] == "limited-live-approval"
-    assert manual["permissions"] == {"contents": "read"}
     assert "manual_live_gate.py" in str(manual)
+    assert "--output" in str(manual)
+    assert "funding-v1-prerequisites.json" in str(manual)
+    assert "funding-limited-live-approval.json.sha256" in str(manual)
+    assert "set -euo pipefail" in str(manual)
+    assert "actions/attest@a1948c3f048ba23858d222213b7c278aabede763" in str(manual)
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in str(manual)
+    assert manual["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+        "attestations": "write",
+        "artifact-metadata": "write",
+    }
     assert "secrets." not in workflow
     assert not re.search(r"\b(?:ssh|scp|rsync)\b", workflow, re.IGNORECASE)
 

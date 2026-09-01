@@ -5,8 +5,9 @@ gate. It does not arm execution, install credentials, submit orders, or authoriz
 withdrawals.
 
 `scripts/manual_live_gate.py` accepts only a manual workflow dispatch on `main`,
-an immutable 40-character commit, the exact confirmation phrase, and a protected
-environment approver identity. Every V1 manifest requirement except the two
+an immutable 40-character commit, the exact confirmation phrase, the expected
+workflow/run identity, and the protected `limited-live-approval` environment.
+Every V1 manifest requirement except the two
 terminal release gates must already have status `accepted`; `implemented`,
 `validated`, `partial`, and `missing` all block approval. This includes accepted
 Shadow and Paper elapsed-window evidence, research, failure-injection, security,
@@ -16,8 +17,16 @@ The requirement ID set is fixed to the complete 70-item V1 contract. Removing a
 requirement, adding an unreviewed substitute, or omitting either terminal gate
 blocks approval.
 
-The emitted attestation binds the repository, commit, actor, ref, exact canonical
-manifest digest, and the fact that it caused no real-order side effect. A successful
+The emitted canonical JSON attestation binds the repository, commit, workflow actor,
+workflow/run identity, protected environment, ref, exact manifest-file digest,
+and the fact that it caused no real-order side effect. `GITHUB_ACTOR` is recorded as
+the workflow actor and is never mislabelled as the protected-environment reviewer;
+the actual reviewer identity remains authoritative in GitHub's deployment audit.
+The JSON and adjacent SHA-256 sidecar are retained under a commit/run/attempt-unique
+artifact name together with the successful 68-requirement prerequisite-audit JSON.
+Public-repository runs additionally receive GitHub/Sigstore provenance over all three
+files.
+A successful
 attestation is only a prerequisite for a separately armed Limited Live deployment;
 all runtime credential, risk, reconciliation, and operator interlocks remain
 mandatory.

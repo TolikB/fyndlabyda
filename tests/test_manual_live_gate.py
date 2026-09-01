@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -7,6 +9,7 @@ from scripts.manual_live_gate import (
     REQUIRED_CONFIRMATION,
     ManualLiveGateError,
     build_attestation,
+    write_attestation,
 )
 
 from funding_arbitrage.acceptance import REQUIRED_REQUIREMENT_IDS
@@ -49,6 +52,13 @@ def _approve(manifest: object | None = None, **updates: str) -> dict[str, object
         "commit_sha": "a" * 40,
         "repository": "owner/funding-bot",
         "actor": "operator",
+        "environment": "limited-live-approval",
+        "workflow_ref": (
+            "owner/funding-bot/.github/workflows/release-gate.yml@refs/heads/main"
+        ),
+        "run_id": "1234",
+        "run_attempt": "2",
+        "manifest_sha256": "c" * 64,
     }
     arguments.update(updates)
     return build_attestation(manifest or _manifest(), **arguments)
@@ -62,6 +72,11 @@ def test_manual_gate_builds_configuration_only_attestation() -> None:
     assert result["release"] == "V1"
     assert result["precondition_count"] == 68
     assert len(str(result["manifest_sha256"])) == 64
+    assert result["workflow_actor"] == "operator"
+    assert "approved_by" not in result
+    assert result["protected_environment"] == "limited-live-approval"
+    assert result["workflow_run_id"] == 1234
+    assert result["workflow_run_attempt"] == 2
 
 
 @pytest.mark.parametrize(
@@ -71,8 +86,17 @@ def test_manual_gate_builds_configuration_only_attestation() -> None:
         ("event_name", "push", "workflow_dispatch"),
         ("ref", "refs/heads/codex/work", "restricted to main"),
         ("commit_sha", "main", "immutable commit SHA"),
-        ("repository", "", "repository and approving actor"),
-        ("actor", "", "repository and approving actor"),
+        ("repository", "", "repository and workflow actor"),
+        ("actor", "", "repository and workflow actor"),
+        ("environment", "other", "protected limited-live environment"),
+        (
+            "workflow_ref",
+            "owner/other/.github/workflows/gate.yml@refs/heads/main",
+            "workflow identity",
+        ),
+        ("run_id", "0", "positive workflow run ID"),
+        ("run_attempt", "x", "positive workflow run attempt"),
+        ("manifest_sha256", "bad", "exact manifest file digest"),
     ],
 )
 def test_manual_gate_rejects_invalid_invocation(
@@ -146,6 +170,13 @@ def test_manual_gate_cli_fails_closed_then_succeeds(
     monkeypatch.setenv("GITHUB_SHA", "b" * 40)
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/funding-bot")
     monkeypatch.setenv("GITHUB_ACTOR", "operator")
+    monkeypatch.setenv("LIVE_GATE_ENVIRONMENT", "limited-live-approval")
+    monkeypatch.setenv(
+        "GITHUB_WORKFLOW_REF",
+        "owner/funding-bot/.github/workflows/release-gate.yml@refs/heads/main",
+    )
+    monkeypatch.setenv("GITHUB_RUN_ID", "1234")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
 
     assert manual_live_gate.main(["--manifest", str(manifest_path)]) == 0
     assert '"approved": true' in capsys.readouterr().out
@@ -153,3 +184,123 @@ def test_manual_gate_cli_fails_closed_then_succeeds(
     monkeypatch.setenv("LIVE_GATE_CONFIRMATION", "wrong")
     assert manual_live_gate.main(["--manifest", str(manifest_path)]) == 2
     assert '"approved": false' in capsys.readouterr().out
+
+
+def test_manual_gate_writes_canonical_immutable_evidence(tmp_path: Path) -> None:
+    output = tmp_path / "limited-live.json"
+    attestation = _approve()
+
+    checksum = write_attestation(output, attestation)
+
+    encoded = output.read_bytes()
+    assert encoded.endswith(b"\n")
+    assert json.loads(encoded) == attestation
+    digest = hashlib.sha256(encoded).hexdigest()
+    assert checksum.read_text(encoding="ascii") == f"{digest}  limited-live.json\n"
+    with pytest.raises(ManualLiveGateError, match="already exists"):
+        write_attestation(output, attestation)
+
+
+def test_manual_gate_does_not_remove_preexisting_evidence(tmp_path: Path) -> None:
+    output = tmp_path / "limited-live.json"
+    checksum = output.with_name(f"{output.name}.sha256")
+    output.write_text("operator-owned\n", encoding="utf-8")
+    checksum.write_text("operator-checksum\n", encoding="utf-8")
+
+    with pytest.raises(ManualLiveGateError, match="already exists"):
+        write_attestation(output, _approve())
+
+    assert output.read_text(encoding="utf-8") == "operator-owned\n"
+    assert checksum.read_text(encoding="utf-8") == "operator-checksum\n"
+
+
+def test_manual_gate_rejects_checksum_filename_injection(tmp_path: Path) -> None:
+    output = tmp_path / "limited-live\nforged.json"
+
+    with pytest.raises(ManualLiveGateError, match="filename is invalid"):
+        write_attestation(output, _approve())
+
+    assert not output.exists()
+
+
+def test_manual_gate_removes_partial_output_when_checksum_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "limited-live.json"
+    original = manual_live_gate._write_exclusive_regular_file
+    calls = 0
+
+    def fail_second_write(path: Path, payload: bytes) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ManualLiveGateError("simulated checksum failure")
+        original(path, payload)
+
+    monkeypatch.setattr(
+        manual_live_gate,
+        "_write_exclusive_regular_file",
+        fail_second_write,
+    )
+
+    with pytest.raises(ManualLiveGateError, match="simulated checksum failure"):
+        write_attestation(output, _approve())
+
+    assert not output.exists()
+    assert not output.with_name(f"{output.name}.sha256").exists()
+
+
+def test_manual_gate_cli_writes_output_only_after_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "acceptance.yaml"
+    output = tmp_path / "limited-live.json"
+    manifest_path.write_text(yaml.safe_dump(_manifest()), encoding="utf-8")
+    monkeypatch.setenv("LIVE_GATE_CONFIRMATION", "wrong")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/funding-bot")
+    monkeypatch.setenv("GITHUB_ACTOR", "operator")
+    monkeypatch.setenv("LIVE_GATE_ENVIRONMENT", "limited-live-approval")
+    monkeypatch.setenv(
+        "GITHUB_WORKFLOW_REF",
+        "owner/funding-bot/.github/workflows/release-gate.yml@refs/heads/main",
+    )
+    monkeypatch.setenv("GITHUB_RUN_ID", "1234")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+
+    assert manual_live_gate.main(
+        ["--manifest", str(manifest_path), "--output", str(output)]
+    ) == 2
+    assert not output.exists()
+    assert not output.with_name(f"{output.name}.sha256").exists()
+
+
+def test_manual_gate_cli_binds_exact_manifest_file_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "acceptance.yaml"
+    output = tmp_path / "limited-live.json"
+    manifest_path.write_text(yaml.safe_dump(_manifest()), encoding="utf-8")
+    expected_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    monkeypatch.setenv("LIVE_GATE_CONFIRMATION", REQUIRED_CONFIRMATION)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/funding-bot")
+    monkeypatch.setenv("GITHUB_ACTOR", "operator")
+    monkeypatch.setenv("LIVE_GATE_ENVIRONMENT", "limited-live-approval")
+    monkeypatch.setenv(
+        "GITHUB_WORKFLOW_REF",
+        "owner/funding-bot/.github/workflows/release-gate.yml@refs/heads/main",
+    )
+    monkeypatch.setenv("GITHUB_RUN_ID", "1234")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+
+    assert manual_live_gate.main(
+        ["--manifest", str(manifest_path), "--output", str(output)]
+    ) == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["manifest_sha256"] == (
+        expected_digest
+    )

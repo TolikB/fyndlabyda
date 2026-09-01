@@ -531,6 +531,9 @@ jobs:
     environment: limited-live-approval
     permissions:
       contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -546,13 +549,42 @@ jobs:
         run: python -m pip install --require-hashes --requirement requirements-dev-linux.lock
 
       - name: Bind full V1 completion evidence to this commit
-        run: >-
-          python scripts/v1_acceptance_audit.py
-          --manifest config/v1_acceptance.yaml
-          --require-release-prerequisites
-          --expected-revision "$GITHUB_SHA"
+        id: v1-prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/v1_acceptance_audit.py \
+            --manifest config/v1_acceptance.yaml \
+            --require-release-prerequisites \
+            --expected-revision "$GITHUB_SHA" \
+            | tee "${RUNNER_TEMP}/funding-v1-prerequisites.json"
 
       - name: Verify protected manual gate preconditions
+        id: limited-live-gate
         env:
           LIVE_GATE_CONFIRMATION: ${{ inputs.live_gate_confirmation }}
-        run: python scripts/manual_live_gate.py --manifest config/v1_acceptance.yaml
+          LIVE_GATE_ENVIRONMENT: limited-live-approval
+        run: >-
+          python scripts/manual_live_gate.py
+          --manifest config/v1_acceptance.yaml
+          --output "${RUNNER_TEMP}/funding-limited-live-approval.json"
+
+      - name: Attest protected approval evidence
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-path: |
+            ${{ runner.temp }}/funding-v1-prerequisites.json
+            ${{ runner.temp }}/funding-limited-live-approval.json
+            ${{ runner.temp }}/funding-limited-live-approval.json.sha256
+
+      - name: Retain immutable protected approval evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: funding-limited-live-approval-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/funding-v1-prerequisites.json
+            ${{ runner.temp }}/funding-limited-live-approval.json
+            ${{ runner.temp }}/funding-limited-live-approval.json.sha256
+          if-no-files-found: error
+          retention-days: 90
