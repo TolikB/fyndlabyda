@@ -760,9 +760,13 @@ requirements:
       - scripts/host_preflight.sh
       - scripts/backup_state.sh
       - scripts/restore_state.sh
+      - scripts/disaster_recovery_evidence.py
+      - src/funding_arbitrage/qa/disaster_recovery.py
       - ops/INFRASTRUCTURE_RUNBOOK.md
       - ops/BACKUP_RESTORE_RUNBOOK.md
+      - docs/V1_CONTROL_PLANE_SECURITY.md
       - tests/test_infrastructure_delivery.py
+      - tests/test_disaster_recovery_evidence.py
       - .github/workflows/release-gate.yml
   - id: QA-004
     category: delivery

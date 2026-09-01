@@ -306,7 +306,7 @@ validate_restored_database() {
   local database_name="$1"
   local expected_migration_head="$2"
   local context="$3"
-  local schema_count migration_head canonical_event_count
+  local schema_count migration_head missing_critical_table_count
 
   if ! schema_count="$(database_schema_count "$database_name")"; then
     echo "$context schema validation failed" >&2
@@ -328,16 +328,73 @@ validate_restored_database() {
     echo "$context did not reach the expected Alembic migration head" >&2
     return 1
   fi
-  if ! canonical_event_count="$(
+  if ! missing_critical_table_count="$(
     postgres_database_exec "$database_name" psql --tuples-only --no-align \
       --set ON_ERROR_STOP=1 \
-      --command 'SELECT COUNT(*) FROM canonical_events' | tr -d '\r\n'
+      --command "WITH required_table(name) AS (
+                   VALUES
+                     ('instruments'),
+                     ('ticker_snapshots'),
+                     ('funding_snapshots'),
+                     ('funding_history'),
+                     ('market_candles'),
+                     ('exchanges'),
+                     ('orderbook_snapshots'),
+                     ('opportunities'),
+                     ('paper_positions'),
+                     ('paper_fills'),
+                     ('paper_funding_payments'),
+                     ('portfolio_snapshots'),
+                     ('paper_runtime_incidents'),
+                     ('backtest_runs'),
+                     ('backtest_results'),
+                     ('market_replay_jobs'),
+                     ('telegram_daily_reports'),
+                     ('live_intents'),
+                     ('live_orders'),
+                     ('live_positions'),
+                     ('live_account_snapshots'),
+                     ('live_reconciliations'),
+                     ('live_daily_reports'),
+                     ('live_funding_payments'),
+                     ('canonical_events'),
+                     ('multi_regime_decision_batches'),
+                     ('multi_regime_paper_checkpoints'),
+                     ('analytics_replication_checkpoints'),
+                     ('risk_decisions'),
+                     ('oms_order_states'),
+                     ('execution_fills'),
+                     ('position_states'),
+                     ('balance_states'),
+                     ('ledger_transactions'),
+                     ('ledger_postings'),
+                     ('reconciliation_audits'),
+                     ('withdrawal_states'),
+                     ('api_idempotency_records'),
+                     ('immutable_audit_log')
+                 )
+                 SELECT COUNT(*)
+                 FROM required_table
+                 WHERE NOT EXISTS (
+                   SELECT 1
+                   FROM pg_catalog.pg_class AS relation
+                   JOIN pg_catalog.pg_namespace AS namespace
+                     ON namespace.oid = relation.relnamespace
+                   WHERE namespace.nspname = 'public'
+                     AND relation.relname = required_table.name
+                     AND relation.relkind IN ('r', 'p')
+                 )" \
+      | tr -d '\r\n'
   )"; then
     echo "$context critical-table validation failed" >&2
     return 1
   fi
-  if [[ ! "$canonical_event_count" =~ ^[0-9]+$ ]]; then
+  if [[ ! "$missing_critical_table_count" =~ ^[0-9]+$ ]]; then
     echo "$context critical-table count is invalid" >&2
+    return 1
+  fi
+  if (( missing_critical_table_count != 0 )); then
+    echo "$context is missing required application tables" >&2
     return 1
   fi
 }

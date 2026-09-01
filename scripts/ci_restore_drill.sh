@@ -9,11 +9,13 @@ readonly restore_confirmation="RESTORE_FUNDING_V1_POSTGRES_AND_KEEP_APP_STOPPED"
 artifact_dir="${1:-}"
 image_ref="${2:-}"
 expected_revision="${3:-}"
-if [[ -z "$artifact_dir" || -z "$image_ref" || ! "$expected_revision" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "usage: ci_restore_drill.sh <artifact-dir> <candidate-image> <revision>" >&2
+evidence_dir="${4:-}"
+if [[ -z "$artifact_dir" || -z "$image_ref" || -z "$evidence_dir" ||
+      ! "$expected_revision" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "usage: ci_restore_drill.sh <artifact-dir> <candidate-image> <revision> <evidence-dir>" >&2
   exit 2
 fi
-for command_name in age age-keygen docker find jq realpath sha256sum; do
+for command_name in age age-keygen date docker find jq python realpath sha256sum stat; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "required CI restore command is unavailable: $command_name" >&2
     exit 2
@@ -31,6 +33,19 @@ if [[ "$runner_temp" == "/" || "$runner_temp" == "/tmp" ||
       "$runner_temp" == "/var/tmp" || "$runner_temp" == "/home" ||
       "$runner_temp" != */_temp ]]; then
   echo "RUNNER_TEMP is not an isolated GitHub Actions temporary root" >&2
+  exit 2
+fi
+evidence_dir="$(realpath -e -- "$evidence_dir")"
+if [[ "$evidence_dir" == "$runner_temp" || "$evidence_dir" != "$runner_temp/"* ||
+      -L "$evidence_dir" || "$(stat -c '%u:%a' "$evidence_dir")" != "$EUID:700" ]]; then
+  echo "restore evidence directory must be an operator-owned mode-0700 runner directory" >&2
+  exit 2
+fi
+evidence="$evidence_dir/funding-disaster-recovery.json"
+evidence_checksum="$evidence.sha256"
+if [[ -e "$evidence" || -L "$evidence" ||
+      -e "$evidence_checksum" || -L "$evidence_checksum" ]]; then
+  echo "restore drill refuses existing evidence output" >&2
   exit 2
 fi
 
@@ -96,6 +111,7 @@ chmod 0600 "$secrets_dir/runtime.env" "$secrets_dir/telegram.env"
 cp "$repo_root/.env.paper-test.example" "$env_file"
 {
   printf 'APP_ENV_FILE=%s\n' "$env_file"
+  printf 'APP_IMAGE=%s\n' "$app_image"
   printf 'LIVE_SECRETS_DIR=%s\n' "$secrets_dir"
   printf 'INTERNAL_TLS_SECRETS_DIR=%s\n' "$pki_dir"
   printf 'PAPER_AUTOTRADE=false\n'
@@ -119,6 +135,7 @@ done
 test "$app_status" = "healthy"
 app_container_id="$("${compose[@]}" ps --all --quiet app)"
 test "$(docker inspect "$app_container_id" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$expected_revision"
+drill_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 pg_exec() {
   local database_name="$1"
@@ -145,6 +162,77 @@ pg_tool() {
     exec "$@"
   ' sh "$@"
 }
+critical_state_sha256() {
+  local payload
+  payload="$(pg_scalar funding '
+    SELECT jsonb_agg(
+      jsonb_build_object(
+        $$entity$$, entity,
+        $$key$$, record_key,
+        $$value$$, record_value
+      ) ORDER BY entity, record_key
+    )::text
+    FROM (
+      SELECT $$paper_position$$ AS entity, position_id AS record_key,
+             to_jsonb(paper_positions)::text AS record_value
+      FROM paper_positions WHERE position_id = $$ci-restore-paper-position$$
+      UNION ALL
+      SELECT $$paper_fill$$, fill_id, to_jsonb(paper_fills)::text
+      FROM paper_fills WHERE fill_id = $$ci-restore-paper-fill$$
+      UNION ALL
+      SELECT $$portfolio$$, simulation_version, to_jsonb(portfolio_snapshots)::text
+      FROM portfolio_snapshots WHERE simulation_version = $$ci-restore$$
+      UNION ALL
+      SELECT $$risk_decision$$, decision_id, to_jsonb(risk_decisions)::text
+      FROM risk_decisions WHERE decision_id = $$ci-restore-risk$$
+      UNION ALL
+      SELECT $$oms_order$$, client_order_id, to_jsonb(oms_order_states)::text
+      FROM oms_order_states WHERE client_order_id = $$ci-restore-order$$
+      UNION ALL
+      SELECT $$execution_fill$$, fill_id, to_jsonb(execution_fills)::text
+      FROM execution_fills WHERE fill_id = $$ci-restore-execution-fill$$
+      UNION ALL
+      SELECT $$position$$, position_id, to_jsonb(position_states)::text
+      FROM position_states WHERE position_id = $$ci-restore-position$$
+      UNION ALL
+      SELECT $$balance$$, venue || $$:$$ || asset, to_jsonb(balance_states)::text
+      FROM balance_states WHERE venue = $$CI$$ AND asset = $$USDT$$
+      UNION ALL
+      SELECT $$ledger_transaction$$, transaction_id,
+             to_jsonb(ledger_transactions)::text
+      FROM ledger_transactions WHERE transaction_id = $$ci-restore-ledger$$
+      UNION ALL
+      SELECT $$ledger_postings$$, transaction_id,
+             jsonb_agg(to_jsonb(ledger_postings) ORDER BY posting_index)::text
+      FROM ledger_postings WHERE transaction_id = $$ci-restore-ledger$$
+      GROUP BY transaction_id
+      UNION ALL
+      SELECT $$reconciliation$$, run_id, to_jsonb(reconciliation_audits)::text
+      FROM reconciliation_audits WHERE run_id = $$ci-restore-reconciliation$$
+      UNION ALL
+      SELECT $$daily_report$$, report_date::text,
+             to_jsonb(telegram_daily_reports)::text
+      FROM telegram_daily_reports WHERE report_date = $$2026-01-01$$::date
+      UNION ALL
+      SELECT $$audit$$, audit_event_id, to_jsonb(immutable_audit_log)::text
+      FROM immutable_audit_log WHERE audit_event_id = $$ci-restore-audit$$
+      UNION ALL
+      SELECT $$idempotency$$, principal_id || $$:$$ || idempotency_key,
+             to_jsonb(api_idempotency_records)::text
+      FROM api_idempotency_records
+      WHERE principal_id = $$ci-restore$$ AND idempotency_key = $$ci-restore-key$$
+    ) AS critical_state
+  ')" || return 1
+  if [[ -z "$payload" || "$payload" == "null" ]]; then
+    echo "critical restore-state payload is empty" >&2
+    return 1
+  fi
+  if [[ "$(jq --raw-output 'length' <<<"$payload")" != "14" ]]; then
+    echo "critical restore-state entity coverage is incomplete" >&2
+    return 1
+  fi
+  printf '%s' "$payload" | sha256sum | awk '{print $1}'
+}
 
 # Seed non-empty target state before the target backup. The drill later adds
 # post-target rows and proves that restore returns the exact original payload.
@@ -165,9 +253,145 @@ pg_exec funding '
     $$2026-01-01T00:00:00.001Z$$::timestamptz,
     1, repeat($$a$$, 64),
     $json${"marker":"target","notional":"17.25"}$json$::json
+  );
+  INSERT INTO paper_positions(
+    position_id, opportunity_id, state, asset, capital, simulation_version,
+    opened_at, closed_at, payload
+  ) VALUES (
+    $$ci-restore-paper-position$$, NULL, $$OPEN$$, $$BTC$$, 17.25,
+    $$ci-restore$$, $$2026-01-01T00:00:00Z$$::timestamptz, NULL,
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO paper_fills(
+    fill_id, position_id, exchange, symbol, instrument_type, side,
+    filled_quantity, price, fee, slippage, status, timestamp, payload
+  ) VALUES (
+    $$ci-restore-paper-fill$$, $$ci-restore-paper-position$$, $$bybit$$,
+    $$BTC/USDT$$, $$perpetual$$, $$BUY$$, 0.01, 1725, 0.10, 0.05,
+    $$FILLED$$, $$2026-01-01T00:00:00Z$$::timestamptz,
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO portfolio_snapshots(
+    timestamp, simulation_version, snapshot_scope, equity, cash,
+    locked_capital, total_pnl, funding_pnl, fees, balances
+  ) VALUES (
+    $$2026-01-01T00:00:00Z$$::timestamptz, $$ci-restore$$, $$combined$$,
+    1001.25, 984.00, 17.25, 1.25, 1.40, 0.15,
+    json_build_object($$CI$$, json_build_object($$USDT$$, $$1001.25$$))
+  );
+  INSERT INTO risk_decisions(
+    decision_id, signal_id, approved, rejection_reason, approved_risk_usdt,
+    approved_quantity, approved_notional, decided_at, payload
+  ) VALUES (
+    $$ci-restore-risk$$, $$ci-restore-signal$$, true, NULL, 17.25,
+    0.01, 17.25, $$2026-01-01T00:00:00Z$$::timestamptz,
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO oms_order_states(
+    client_order_id, simulation_version, exchange_order_id, risk_decision_id,
+    signal_id, venue, instrument_id, side, order_type, status,
+    requested_quantity, filled_quantity, limit_price, reduce_only, version,
+    created_at, updated_at, payload
+  ) VALUES (
+    $$ci-restore-order$$, $$ci-restore$$, $$ci-exchange-order$$,
+    $$ci-restore-risk$$, $$ci-restore-signal$$, $$CI$$,
+    $$CI:PERP:BTC/USDT$$, $$BUY$$, $$LIMIT$$, $$FILLED$$,
+    0.01, 0.01, 1725, false, 1,
+    $$2026-01-01T00:00:00Z$$::timestamptz,
+    $$2026-01-01T00:00:01Z$$::timestamptz,
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO execution_fills(
+    fill_id, simulation_version, client_order_id, exchange_order_id, venue,
+    instrument_id, side, price, quantity, fee_amount, fee_asset,
+    liquidity_role, exchange_timestamp, receive_timestamp, payload
+  ) VALUES (
+    $$ci-restore-execution-fill$$, $$ci-restore$$, $$ci-restore-order$$,
+    $$ci-exchange-order$$, $$CI$$, $$CI:PERP:BTC/USDT$$, $$BUY$$,
+    1725, 0.01, 0.10, $$USDT$$, $$TAKER$$,
+    $$2026-01-01T00:00:01Z$$::timestamptz,
+    $$2026-01-01T00:00:01.001Z$$::timestamptz,
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO position_states(
+    position_id, simulation_version, strategy_id, venue, instrument_id,
+    status, signed_quantity, entry_price, mark_price, realized_pnl,
+    unrealized_pnl, collateral, opened_at, closed_at, updated_at, payload
+  ) VALUES (
+    $$ci-restore-position$$, $$ci-restore$$, $$ci-strategy$$, $$CI$$,
+    $$CI:PERP:BTC/USDT$$, $$OPEN$$, 0.01, 1725, 1730, 0, 0.05,
+    17.25, $$2026-01-01T00:00:01Z$$::timestamptz, NULL,
+    $$2026-01-01T00:00:02Z$$::timestamptz,
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO balance_states(
+    venue, asset, total, available, locked, borrowed, observed_at, payload
+  ) VALUES (
+    $$CI$$, $$USDT$$, 1001.25, 984.00, 17.25, 0,
+    $$2026-01-01T00:00:02Z$$::timestamptz,
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO ledger_transactions(
+    sequence, transaction_id, timestamp, reference_type, reference_id,
+    description, previous_hash, transaction_hash, payload
+  ) VALUES (
+    1, $$ci-restore-ledger$$, $$2026-01-01T00:00:02Z$$::timestamptz,
+    $$ci_restore$$, $$ci-restore-order$$, $$CI restore target$$,
+    repeat($$0$$, 64), repeat($$5$$, 64),
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO ledger_postings(
+    transaction_id, posting_index, account, account_kind, asset, amount,
+    venue, strategy_id, position_id
+  ) VALUES
+    ($$ci-restore-ledger$$, 0, $$cash:ci:usdt$$, $$asset$$, $$USDT$$,
+     -17.25, $$CI$$, $$ci-strategy$$, $$ci-restore-position$$),
+    ($$ci-restore-ledger$$, 1, $$collateral:ci:usdt$$, $$asset$$, $$USDT$$,
+     17.25, $$CI$$, $$ci-strategy$$, $$ci-restore-position$$);
+  INSERT INTO reconciliation_audits(
+    sequence, run_id, timestamp, passed, critical_count, warning_count,
+    input_hash, previous_hash, audit_hash, issues
+  ) VALUES (
+    1, $$ci-restore-reconciliation$$,
+    $$2026-01-01T00:00:03Z$$::timestamptz, true, 0, 0,
+    repeat($$3$$, 64), repeat($$0$$, 64), repeat($$4$$, 64),
+    json_build_array()
+  );
+  INSERT INTO telegram_daily_reports(
+    report_date, status, sent_at, message, error
+  ) VALUES (
+    $$2026-01-01$$::date, $$sent$$,
+    $$2026-01-02T00:00:00Z$$::timestamptz,
+    $$CI target report$$, NULL
+  );
+  INSERT INTO immutable_audit_log(
+    sequence, audit_event_id, timestamp, actor_id, actor_role, action,
+    resource_type, resource_id, idempotency_key, outcome, payload_hash,
+    previous_hash, audit_hash, payload
+  ) VALUES (
+    1, $$ci-restore-audit$$, $$2026-01-01T00:00:03Z$$::timestamptz,
+    $$ci$$, $$administrator$$, $$restore_test$$, $$database$$,
+    $$funding$$, NULL, $$success$$, repeat($$1$$, 64),
+    repeat($$0$$, 64), repeat($$2$$, 64),
+    json_build_object($$marker$$, $$target$$)
+  );
+  INSERT INTO api_idempotency_records(
+    principal_id, idempotency_key, request_hash, state, status_code,
+    response_body, response_headers, created_at, updated_at, expires_at
+  ) VALUES (
+    $$ci-restore$$, $$ci-restore-key$$, repeat($$7$$, 64), $$completed$$,
+    200, NULL, json_build_object($$content-type$$, $$application/json$$),
+    $$2026-01-01T00:00:03Z$$::timestamptz,
+    $$2026-01-01T00:00:03Z$$::timestamptz,
+    $$2026-01-02T00:00:03Z$$::timestamptz
   );'
-test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$')" = "1"
+target_event_count_in_backup="$(
+  pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$'
+)"
+test "$target_event_count_in_backup" = "1"
 test "$(pg_scalar funding 'SELECT id || $$|$$ || marker FROM restore_exactness_sentinel')" = "1|target-row"
+target_critical_state_sha256="$(critical_state_sha256)"
+[[ "$target_critical_state_sha256" =~ ^[0-9a-f]{64}$ ]]
 
 age-keygen -o "$identity_file" >/dev/null
 chmod 0600 "$identity_file"
@@ -194,9 +418,25 @@ pg_exec funding '
     $$2026-01-01T00:00:01.001Z$$::timestamptz,
     2, repeat($$b$$, 64),
     $json${"marker":"post-target","notional":"99.99"}$json$::json
-  );'
-test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$')" = "2"
+  );
+  UPDATE position_states
+  SET mark_price = 9999, updated_at = $$2026-01-01T00:00:04Z$$::timestamptz
+  WHERE position_id = $$ci-restore-position$$;
+  UPDATE balance_states
+  SET total = 9999, available = 9981.75,
+      observed_at = $$2026-01-01T00:00:04Z$$::timestamptz
+  WHERE venue = $$CI$$ AND asset = $$USDT$$;
+  UPDATE telegram_daily_reports
+  SET message = $$post-target-report$$
+  WHERE report_date = $$2026-01-01$$::date;'
+source_event_count_before_restore="$(
+  pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$'
+)"
+test "$source_event_count_before_restore" = "2"
 test "$(pg_scalar funding 'SELECT COUNT(*) FROM restore_exactness_sentinel')" = "2"
+post_target_critical_state_sha256="$(critical_state_sha256)"
+[[ "$post_target_critical_state_sha256" =~ ^[0-9a-f]{64}$ ]]
+test "$post_target_critical_state_sha256" != "$target_critical_state_sha256"
 printf 'funding-arbitrage-v1-restore:%s\n' "$ticket" > "$fence"
 chmod 0600 "$fence"
 "${compose[@]}" stop --timeout 30 app
@@ -230,13 +470,33 @@ run_restore() {
   )
 }
 
+database_restore_started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
 run_restore "$ticket"
-test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$')" = "1"
-test "$(pg_scalar funding 'SELECT payload->>$$marker$$ FROM canonical_events WHERE event_id = $$ci-restore-target$$')" = "target"
-test "$(pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE event_id = $$ci-restore-post-target$$')" = "0"
-test "$(pg_scalar funding 'SELECT id || $$|$$ || marker FROM restore_exactness_sentinel')" = "1|target-row"
-test "$(pg_scalar funding 'SELECT version_num FROM alembic_version')" = "0017_multi_regime_runtime"
-test "$(pg_scalar postgres "SELECT COUNT(*) FROM pg_database WHERE datname LIKE 'restore_%' OR datname LIKE 'rollback_%'")" = "0"
+database_restore_completed_at="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+restored_target_event_count="$(
+  pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$'
+)"
+restored_target_marker="$(
+  pg_scalar funding 'SELECT payload->>$$marker$$ FROM canonical_events WHERE event_id = $$ci-restore-target$$'
+)"
+restored_post_target_event_count="$(
+  pg_scalar funding 'SELECT COUNT(*) FROM canonical_events WHERE event_id = $$ci-restore-post-target$$'
+)"
+restored_sentinel="$(
+  pg_scalar funding 'SELECT id || $$|$$ || marker FROM restore_exactness_sentinel'
+)"
+restored_alembic_head="$(pg_scalar funding 'SELECT version_num FROM alembic_version')"
+restored_critical_state_sha256="$(critical_state_sha256)"
+orphan_restore_database_count="$(
+  pg_scalar postgres "SELECT COUNT(*) FROM pg_database WHERE datname LIKE 'restore_%' OR datname LIKE 'rollback_%'"
+)"
+test "$restored_target_event_count" = "1"
+test "$restored_target_marker" = "target"
+test "$restored_post_target_event_count" = "0"
+test "$restored_sentinel" = "1|target-row"
+test "$restored_alembic_head" = "0017_multi_regime_runtime"
+test "$restored_critical_state_sha256" = "$target_critical_state_sha256"
+test "$orphan_restore_database_count" = "0"
 test ! -e "$swap_state"
 
 ticket_hash="$(printf '%s' "$ticket" | sha256sum | awk '{print $1}')"
@@ -339,7 +599,150 @@ test -s "$swap_state"
 printf 'funding-arbitrage-v1-restore:%s\n' "$ticket" > "$fence"
 invoke_recovery_gate t
 
-test "$(docker inspect "$app_container_id" --format '{{.State.Running}}|{{.HostConfig.RestartPolicy.Name}}|{{.RestartCount}}')" = "false|no|0"
-test -z "$(find "$host_tmpfs" -maxdepth 1 -type f -print -quit 2>/dev/null || true)"
-test -z "$("${compose[@]}" exec -T postgres find /dev/shm/funding-arbitrage-v1-restore -maxdepth 1 -type f -print -quit 2>/dev/null || true)"
-echo "CI restore drill passed: exact restore, stopped backup, stage recovery, wrong-ticket rejection"
+app_restore_state="$(
+  docker inspect "$app_container_id" \
+    --format '{{.State.Running}}|{{.HostConfig.RestartPolicy.Name}}|{{.RestartCount}}'
+)"
+test "$app_restore_state" = "false|no|0"
+host_plaintext_artifact="$(
+  find "$host_tmpfs" -maxdepth 1 -type f -print -quit 2>/dev/null || true
+)"
+database_plaintext_artifact="$(
+  "${compose[@]}" exec -T postgres \
+    find /dev/shm/funding-arbitrage-v1-restore -maxdepth 1 -type f -print -quit \
+    2>/dev/null || true
+)"
+test -z "$host_plaintext_artifact"
+test -z "$database_plaintext_artifact"
+
+candidate_image_id="$(tr -d '\r\n' < "$artifact_dir/funding-candidate-image.id")"
+test "$candidate_image_id" = "$(docker image inspect --format '{{.Id}}' "$image_ref")"
+target_created_compact="$(jq --raw-output '.created_at_utc' "$target.json")"
+safety_created_compact="$(jq --raw-output '.created_at_utc' "$safety.json")"
+for backup_timestamp in "$target_created_compact" "$safety_created_compact"; do
+  [[ "$backup_timestamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]
+done
+target_created_at="${target_created_compact:0:4}-${target_created_compact:4:2}-${target_created_compact:6:2}T${target_created_compact:9:2}:${target_created_compact:11:2}:${target_created_compact:13:2}Z"
+safety_created_at="${safety_created_compact:0:4}-${safety_created_compact:4:2}-${safety_created_compact:6:2}T${safety_created_compact:9:2}:${safety_created_compact:11:2}:${safety_created_compact:13:2}Z"
+target_manifest_sha256="$(sha256sum "$target.json" | awk '{print $1}')"
+target_completion_sha256="$(sha256sum "$target.complete" | awk '{print $1}')"
+safety_manifest_sha256="$(sha256sum "$safety.json" | awk '{print $1}')"
+safety_completion_sha256="$(sha256sum "$safety.complete" | awk '{print $1}')"
+target_size_bytes="$(stat -c '%s' "$target")"
+safety_size_bytes="$(stat -c '%s' "$safety")"
+target_revision="$(jq --raw-output '.git_commit' "$target.json")"
+safety_revision="$(jq --raw-output '.git_commit' "$safety.json")"
+target_alembic_head="$(jq --raw-output '.alembic_head' "$target.json")"
+safety_alembic_head="$(jq --raw-output '.alembic_head' "$safety.json")"
+test "$target_revision" = "$expected_revision"
+test "$safety_revision" = "$expected_revision"
+test "$target_alembic_head" = "$restored_alembic_head"
+test "$safety_alembic_head" = "$restored_alembic_head"
+drill_completed_at="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+
+facts="$work_root/disaster-recovery-facts.json"
+umask 077
+jq --null-input --compact-output \
+  --arg drill_started_at "$drill_started_at" \
+  --arg database_restore_started_at "$database_restore_started_at" \
+  --arg database_restore_completed_at "$database_restore_completed_at" \
+  --arg drill_completed_at "$drill_completed_at" \
+  --arg target_archive_sha256 "$archive_sha256" \
+  --arg target_manifest_sha256 "$target_manifest_sha256" \
+  --arg target_completion_sha256 "$target_completion_sha256" \
+  --argjson target_size_bytes "$target_size_bytes" \
+  --arg target_created_at "$target_created_at" \
+  --arg target_revision "$target_revision" \
+  --arg target_alembic_head "$target_alembic_head" \
+  --arg safety_archive_sha256 "$safety_sha256" \
+  --arg safety_manifest_sha256 "$safety_manifest_sha256" \
+  --arg safety_completion_sha256 "$safety_completion_sha256" \
+  --argjson safety_size_bytes "$safety_size_bytes" \
+  --arg safety_created_at "$safety_created_at" \
+  --arg safety_revision "$safety_revision" \
+  --arg safety_alembic_head "$safety_alembic_head" \
+  --argjson source_event_count_before_restore "$source_event_count_before_restore" \
+  --argjson target_event_count_in_backup "$target_event_count_in_backup" \
+  --argjson restored_target_event_count "$restored_target_event_count" \
+  --argjson restored_post_target_event_count "$restored_post_target_event_count" \
+  --arg restored_target_marker "$restored_target_marker" \
+  --arg restored_sentinel "$restored_sentinel" \
+  --arg restored_alembic_head "$restored_alembic_head" \
+  --arg target_critical_state_sha256 "$target_critical_state_sha256" \
+  --arg post_target_critical_state_sha256 "$post_target_critical_state_sha256" \
+  --arg restored_critical_state_sha256 "$restored_critical_state_sha256" \
+  --argjson orphan_restore_database_count "$orphan_restore_database_count" \
+  '{
+    document_kind: "disaster-recovery-drill-facts",
+    schema_version: 1,
+    drill_started_at: $drill_started_at,
+    database_restore_started_at: $database_restore_started_at,
+    database_restore_completed_at: $database_restore_completed_at,
+    drill_completed_at: $drill_completed_at,
+    target_backup: {
+      role: "target",
+      archive_sha256: $target_archive_sha256,
+      manifest_sha256: $target_manifest_sha256,
+      completion_sha256: $target_completion_sha256,
+      encrypted_size_bytes: $target_size_bytes,
+      created_at: $target_created_at,
+      code_revision: $target_revision,
+      alembic_head: $target_alembic_head,
+      compose_project: "funding_arbitrage_v1",
+      encrypted: true
+    },
+    pre_restore_backup: {
+      role: "pre_restore",
+      archive_sha256: $safety_archive_sha256,
+      manifest_sha256: $safety_manifest_sha256,
+      completion_sha256: $safety_completion_sha256,
+      encrypted_size_bytes: $safety_size_bytes,
+      created_at: $safety_created_at,
+      code_revision: $safety_revision,
+      alembic_head: $safety_alembic_head,
+      compose_project: "funding_arbitrage_v1",
+      encrypted: true
+    },
+    source_event_count_before_restore: $source_event_count_before_restore,
+    target_event_count_in_backup: $target_event_count_in_backup,
+    restored_target_event_count: $restored_target_event_count,
+    restored_post_target_event_count: $restored_post_target_event_count,
+    restored_target_marker: $restored_target_marker,
+    restored_sentinel: $restored_sentinel,
+    restored_alembic_head: $restored_alembic_head,
+    critical_state_entity_count: 14,
+    target_critical_state_sha256: $target_critical_state_sha256,
+    post_target_critical_state_sha256: $post_target_critical_state_sha256,
+    restored_critical_state_sha256: $restored_critical_state_sha256,
+    orphan_restore_database_count: $orphan_restore_database_count,
+    recovered_crash_stages: [
+      "prepared",
+      "canonical_locked",
+      "original_renamed",
+      "replacement_renamed",
+      "validated"
+    ],
+    wrong_ticket_rejected: true,
+    target_catalog_verified: true,
+    safety_catalog_verified: true,
+    restored_schema_verified: true,
+    critical_tables_verified: true,
+    app_running_during_restore: false,
+    app_restart_policy: "no",
+    app_restart_count: 0,
+    host_plaintext_artifact_count: 0,
+    database_plaintext_artifact_count: 0
+  }' > "$facts"
+chmod 0600 "$facts"
+
+PYTHONPATH="$repo_root/src" python "$repo_root/scripts/disaster_recovery_evidence.py" \
+  seal \
+  --facts "$facts" \
+  --output "$evidence" \
+  --revision "$expected_revision" \
+  --image-id "$candidate_image_id" \
+  --github-run-id "$GITHUB_RUN_ID" \
+  --github-run-attempt "$GITHUB_RUN_ATTEMPT"
+test -s "$evidence"
+test -s "$evidence_checksum"
+echo "CI restore drill passed with release-bound evidence: $evidence"

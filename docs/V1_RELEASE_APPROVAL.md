@@ -12,6 +12,17 @@ terminal release gates must already have status `accepted`; `implemented`,
 `validated`, `partial`, and `missing` all block approval. This includes accepted
 Shadow and Paper elapsed-window evidence, research, failure-injection, security,
 infrastructure, restore, and load-SLO gates.
+The restore CI job emits a typed, checksummed, transient envelope for the exact
+commit and sealed candidate image; a successful console message alone is not
+evidence. That envelope proves exact authoritative PostgreSQL state, backup-age
+bounds, database-restore duration, crash-stage recovery, a stopped application,
+and plaintext cleanup. It explicitly does **not** prove end-to-end service
+recovery, ClickHouse projection rebuilding, independent attestation, or durable
+evidence retention. Consequently it cannot, by itself, satisfy restore acceptance
+or authorize a release. Accepted restore evidence additionally requires separately
+authorized external retention/attestation plus verified service recovery and
+ClickHouse rebuild. Security-sensitive Redis loss also requires operator-controlled
+JWT-secret rotation and kill-switch reassertion before startup.
 The load-SLO prerequisite must identify the same sealed candidate image and source
 commit that passed the other release jobs; source-checkout-only performance output
 is diagnostic and cannot satisfy release approval.

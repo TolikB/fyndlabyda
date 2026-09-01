@@ -101,6 +101,10 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "scripts/backup_state.sh" in str(jobs["infrastructure-verify"])
     assert "scripts/ci_candidate_load_slo.sh" in str(jobs["infrastructure-verify"])
     assert "scripts/ci_restore_drill.sh" in str(jobs["restore-drill"])
+    assert "scripts/disaster_recovery_evidence.py verify" in str(jobs["restore-drill"])
+    assert "requirements-linux.lock" in str(jobs["restore-drill"])
+    assert "funding-disaster-recovery.json" in str(jobs["restore-drill"])
+    assert "funding-disaster-recovery.json.sha256" not in str(jobs["restore-drill"])
     assert "restore-drill" in jobs["shadow-deploy"]["needs"]
     restore_drill = (ROOT / "scripts" / "ci_restore_drill.sh").read_text(encoding="utf-8")
     assert "BACKUP_FUNDING_V1_POSTGRES_WHILE_APP_STOPPED_AND_FENCED" in (
@@ -117,7 +121,22 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "restore drill refuses to overwrite an existing repository artifact" in restore_drill
     assert "ci-restore-target" in restore_drill
     assert "ci-restore-post-target" in restore_drill
+    assert "APP_IMAGE=%s" in restore_drill
+    assert '"$app_image"' in restore_drill
+    assert "to_jsonb(paper_fills)::text" in restore_drill
+    assert (
+        "jsonb_agg(to_jsonb(ledger_postings) ORDER BY posting_index)::text"
+        in restore_drill
+    )
+    assert "COUNT(*)::text || $$|$$ || SUM(amount)::text" not in restore_drill
     assert '"1|target-row"' in restore_drill
+    assert "disaster_recovery_evidence.py" in restore_drill
+    assert "disaster-recovery-drill-facts" in restore_drill
+    assert "recovered_crash_stages" in restore_drill
+    assert 'app_restart_policy: "no"' in restore_drill
+    assert 'host_plaintext_artifact_count: 0' in restore_drill
+    assert '--github-run-id "$GITHUB_RUN_ID"' in restore_drill
+    assert '--github-run-attempt "$GITHUB_RUN_ATTEMPT"' in restore_drill
     assert "SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$" in restore_drill
     assert "SELECT payload->>$$marker$$" in restore_drill
     assert "rm -rf" not in restore_drill

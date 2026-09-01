@@ -147,6 +147,34 @@ edit a manifest or sidecar to bypass the gate.
 
 ## Schedule and evidence
 
+PostgreSQL is the authoritative V1 recovery source for orders, fills, positions,
+risk state, accounting, market events, and reporting. ClickHouse is designed as a
+rebuildable analytical projection and may not replace PostgreSQL during recovery,
+but its rebuild is not verified by the isolated CI database drill. Redis is an
+ephemeral but security-sensitive store: losing it also removes live token-revocation
+entries and rate-limit windows. Before any recovered control plane is started, rotate
+`CONTROL_PLANE_JWT_SECRET` through the approved Vault procedure and invalidate every
+previously issued token. The runtime `LIVE_DISABLED` kill switch is operator safety
+state and is deliberately reasserted through the maintenance fence instead of being
+restored from an older archive.
+
+The isolated CI drill emits a private, canonical
+`funding-disaster-recovery.json` plus SHA-256 sidecar. The typed envelope binds the
+exact source commit and sealed candidate image to both encrypted backup sets,
+Alembic head, restored/excluded sentinel rows, all interrupted-swap stages,
+wrong-ticket rejection, stopped-app fence, plaintext cleanup, bounded backup ages,
+database-restore duration, and total drill duration.
+Its state-scope record explicitly distinguishes PostgreSQL authority, the ClickHouse
+projection, security-sensitive Redis, mandatory JWT-secret rotation, and the runtime
+kill switch. The CI drill does not claim that an operator performed the external
+Vault rotation, that ClickHouse was rebuilt, or that the application recovered to
+healthy service; those remain production recovery prerequisites and keep QA-003
+partial until separately verified.
+CI strictly reloads and verifies the envelope before the restore job can pass. It
+is a transient same-job gate, not independent release evidence: the workflow does
+not publish or retain it as an artifact. Moving it to external evidence storage or
+attesting it requires a separately authorized retention and access policy.
+
 - Encrypted backup: daily and before every migration/release.
 - Off-host object-lock replication: after each successful backup.
 - Checksum sampling: weekly.

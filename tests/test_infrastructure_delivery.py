@@ -268,6 +268,14 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert 'validate_restored_database "$database_name"' in restore
     assert "did not reach the expected Alembic migration head" in restore
     assert "critical-table count is invalid" in restore
+    assert "is missing required application tables" in restore
+    assert "relation.relkind IN ('r', 'p')" in restore
+    assert "oms_order_states" in restore
+    assert "execution_fills" in restore
+    assert "position_states" in restore
+    assert "ledger_transactions" in restore
+    assert "ledger_postings" in restore
+    assert "immutable_audit_log" in restore
     assert "createdb --maintenance-db=postgres --template=template0" in restore
     assert "ALLOW_CONNECTIONS $extra_name" in restore
     assert 'postgres_admin allow "$database_name" false' in restore
@@ -311,6 +319,24 @@ def test_restore_requires_safety_backup_stopped_app_and_transaction() -> None:
     assert "application remains stopped and fenced" in restore
     assert "docker system prune" not in restore
     assert "rm -rf" not in restore
+
+
+def test_restore_drill_emits_private_typed_release_bound_evidence() -> None:
+    drill = _read("scripts/ci_restore_drill.sh")
+    workflow = yaml.safe_load(_read(".github/workflows/release-gate.yml"))
+    restore_job = workflow["jobs"]["restore-drill"]
+
+    assert "funding-disaster-recovery.json" in drill
+    assert "disaster_recovery_evidence.py" in drill
+    assert "source_event_count_before_restore" in drill
+    assert "restored_post_target_event_count" in drill
+    assert "wrong_ticket_rejected: true" in drill
+    assert "target_catalog_verified: true" in drill
+    assert "safety_catalog_verified: true" in drill
+    assert "app_running_during_restore: false" in drill
+    assert "database_plaintext_artifact_count: 0" in drill
+    assert "scripts/disaster_recovery_evidence.py verify" in str(restore_job)
+    assert "actions/upload-artifact" not in str(restore_job)
 
 
 def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None:

@@ -20,6 +20,11 @@ not-before, token ID, subject, and one or more roles. Viewer access is read-only
 operator, risk-manager, and administrator writes are route-scoped. Live
 revocation state is shared in Redis. HTTP checks revocation on every request and
 WebSockets re-check expiry and revocation every second.
+Redis is intentionally not the durable accounting authority, but its revocation
+entries are security-sensitive. A Redis loss or disaster restore must therefore
+keep the control plane stopped until `CONTROL_PLANE_JWT_SECRET` is rotated through
+Vault; all tokens issued under the previous secret are then invalid and must not be
+reused.
 
 The static dashboard contains no credentials. It keeps the operator-supplied
 read-only JWT in memory only, sends it as a Bearer token to protected APIs,
