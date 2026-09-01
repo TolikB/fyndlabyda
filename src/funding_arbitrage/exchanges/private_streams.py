@@ -63,6 +63,46 @@ class PrivateStreamProfile:
     watch_positions: bool
     positions_via_reconciliation: bool = False
     params: Mapping[str, object] = field(default_factory=dict)
+    supported_instrument_types: frozenset[InstrumentType] = field(
+        default_factory=frozenset
+    )
+
+    def __post_init__(self) -> None:
+        if self.default_type not in {"spot", "swap", "future"}:
+            raise ValueError(
+                f"unsupported private stream default type: {self.default_type}"
+            )
+        if not self.supported_instrument_types:
+            inferred = (
+                frozenset({InstrumentType.SPOT})
+                if self.default_type == "spot"
+                else frozenset(
+                    {
+                        InstrumentType.PERPETUAL
+                        if self.default_type == "swap"
+                        else InstrumentType.FUTURE
+                    }
+                )
+            )
+            object.__setattr__(self, "supported_instrument_types", inferred)
+        allowed = {
+            InstrumentType.SPOT,
+            InstrumentType.PERPETUAL,
+            InstrumentType.FUTURE,
+        }
+        if not self.supported_instrument_types.issubset(allowed):
+            raise ValueError("private stream profile declares an unsupported instrument type")
+
+    def supports(self, instrument_type: InstrumentType) -> bool:
+        """Return whether this account client can resolve the instrument market.
+
+        Profiles created by older internal callers retain the previous
+        ``default_type`` inference. Production profiles declare their coverage
+        explicitly so unified accounts are not mistaken for derivative-only
+        accounts during REST reconciliation.
+        """
+
+        return instrument_type in self.supported_instrument_types
 
 
 @dataclass(frozen=True)
@@ -329,7 +369,8 @@ class CcxtPrivateEventNormalizer:
     def _reconciled_position_event(
         self, row: VenuePosition, observed_at: datetime
     ) -> EventEnvelope[Any]:
-        market = self._market(row.exchange_symbol)
+        expected_type = InstrumentType(row.instrument_type.value)
+        market = self._market(row.exchange_symbol, expected_type=expected_type)
         instrument = _instrument(self.venue, market, expected_type=row.instrument_type.value)
         mark = row.mark_price or row.entry_price
         if mark is None:
@@ -358,13 +399,25 @@ class CcxtPrivateEventNormalizer:
     def _reconciled_order_event(
         self, row: TradingOrderResult, observed_at: datetime
     ) -> EventEnvelope[Any]:
-        market = self._market(row.exchange_symbol)
+        expected_type = InstrumentType(row.instrument_type.value)
+        market = self._market(row.exchange_symbol, expected_type=expected_type)
         instrument = _instrument(self.venue, market, expected_type=row.instrument_type.value)
         status = _live_order_status(row.status)
+        client_order_id = row.client_order_id.strip()
+        exchange_order_id = (
+            row.exchange_order_id.strip() if row.exchange_order_id is not None else None
+        )
+        exchange_order_id = exchange_order_id or None
+        if not client_order_id:
+            if exchange_order_id is None:
+                raise PrivateStreamNormalizationError(
+                    "reconciled order has no client or exchange identity"
+                )
+            client_order_id = f"external:{exchange_order_id}"
         payload = OrderUpdate(
             instrument=instrument,
-            client_order_id=row.client_order_id,
-            exchange_order_id=row.exchange_order_id,
+            client_order_id=client_order_id,
+            exchange_order_id=exchange_order_id,
             status=status,
             side=_side(row.side),
             order_type=OrderType.LIMIT,
@@ -374,39 +427,93 @@ class CcxtPrivateEventNormalizer:
             reduce_only=row.reduce_only,
             exchange_timestamp=_utc(row.timestamp),
         )
-        if row.exchange_order_id:
-            self._client_ids[row.exchange_order_id] = row.client_order_id
+        if exchange_order_id is not None:
+            self._client_ids[exchange_order_id] = client_order_id
         return _envelope(
             payload,
             kind=EventKind.ORDER_UPDATE,
             source=self._source("orders", "PRIVATE_REST_RECONCILIATION"),
             sequence_id=(
-                f"order:{row.exchange_order_id or row.client_order_id}:"
+                f"order:{exchange_order_id or client_order_id}:"
                 f"{_timestamp_token(payload.exchange_timestamp)}:{status.value}:"
                 f"{row.filled_base_quantity}"
             ),
-            correlation_id=f"order:{self.venue.upper()}:{row.client_order_id}",
+            correlation_id=f"order:{self.venue.upper()}:{client_order_id}",
             received_at=observed_at,
             quality=DataQuality.RECOVERING,
         )
 
-    def _market(self, symbol: object) -> dict[str, Any]:
+    def _market(
+        self,
+        symbol: object,
+        *,
+        expected_type: InstrumentType | None = None,
+    ) -> dict[str, Any]:
         name = _text(symbol)
         if not name:
             raise PrivateStreamNormalizationError("private event symbol is unavailable")
+        candidates: list[dict[str, Any]] = []
+
+        def add(candidate: object) -> None:
+            if not isinstance(candidate, dict):
+                return
+            identity = (
+                _text(candidate.get("id")),
+                _text(candidate.get("symbol")),
+                bool(candidate.get("spot")),
+                bool(candidate.get("swap")),
+                bool(candidate.get("future")),
+                _text(candidate.get("settle")),
+            )
+            if any(
+                identity
+                == (
+                    _text(item.get("id")),
+                    _text(item.get("symbol")),
+                    bool(item.get("spot")),
+                    bool(item.get("swap")),
+                    bool(item.get("future")),
+                    _text(item.get("settle")),
+                )
+                for item in candidates
+            ):
+                return
+            candidates.append(candidate)
+
         try:
-            market = self.exchange.market(name)
+            add(self.exchange.market(name))
         except Exception:
-            market = None
-        if isinstance(market, dict):
-            return market
+            pass
+        markets_by_id = getattr(self.exchange, "markets_by_id", {}) or {}
+        by_id = markets_by_id.get(name) or markets_by_id.get(name.upper())
+        if isinstance(by_id, list):
+            for candidate in by_id:
+                add(candidate)
+        else:
+            add(by_id)
         markets = getattr(self.exchange, "markets", {}) or {}
         for candidate in markets.values():
             if isinstance(candidate, dict) and name in {
                 _text(candidate.get("id")),
                 _text(candidate.get("symbol")),
             }:
-                return candidate
+                add(candidate)
+        if expected_type is not None:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if _market_type(candidate) is expected_type
+            ]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise PrivateStreamNormalizationError(
+                f"private event market is ambiguous: {name}"
+            )
+        if expected_type is not None:
+            raise PrivateStreamNormalizationError(
+                f"private event market type is unresolved: {name}:{expected_type.value}"
+            )
         raise PrivateStreamNormalizationError(f"private event market is unresolved: {name}")
 
     def _source(self, stream: str, transport: str) -> str:
@@ -438,6 +545,7 @@ class PrivateStreamSupervisor:
         self.reconciliation_max_age_seconds = reconciliation_max_age_seconds
         self.reconnect_initial_seconds = reconnect_initial_seconds
         self.reconnect_max_seconds = reconnect_max_seconds
+        self._validate_topology()
         self._normalizers = {
             (account.profile.venue, account.profile.account): CcxtPrivateEventNormalizer(
                 account.profile.venue, account.exchange, account.profile.account
@@ -447,17 +555,101 @@ class PrivateStreamSupervisor:
         self._states: dict[tuple[str, str, str], _ChannelState] = {}
         self._tasks: dict[tuple[str, str, str], asyncio.Task[None]] = {}
         self._last_reconciliation_at: datetime | None = None
+        self._last_reconciliation_failed_at: datetime | None = None
+        self._last_reconciliation_failure_reason: str | None = None
         self._started = False
         self._stopping = False
+
+    def _validate_topology(self) -> None:
+        covered = {account.profile.venue for account in self.accounts}
+        if covered != set(self.adapters):
+            raise ValueError("private stream venue coverage does not match trading adapters")
+        keys = [
+            (account.profile.venue, account.profile.account) for account in self.accounts
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("private stream account identities must be unique")
+        required = {InstrumentType.SPOT, InstrumentType.PERPETUAL}
+        for venue in sorted(covered):
+            profiles = [
+                account.profile
+                for account in self.accounts
+                if account.profile.venue == venue
+            ]
+            coverage = {
+                instrument_type: sum(
+                    profile.supports(instrument_type) for profile in profiles
+                )
+                for instrument_type in {
+                    InstrumentType.SPOT,
+                    InstrumentType.PERPETUAL,
+                    InstrumentType.FUTURE,
+                }
+            }
+            missing = sorted(
+                instrument_type.value
+                for instrument_type in required
+                if coverage[instrument_type] == 0
+            )
+            ambiguous = sorted(
+                instrument_type.value
+                for instrument_type, count in coverage.items()
+                if count > 1
+            )
+            if missing or ambiguous:
+                raise ValueError(
+                    "invalid private stream instrument coverage for "
+                    f"{venue}: missing={','.join(missing) or '-'};"
+                    f"ambiguous={','.join(ambiguous) or '-'}"
+                )
+
+    def reconciliation_coverage(self) -> dict[str, frozenset[str]]:
+        """Expose the exact running topology used to gate live submissions."""
+
+        return {
+            venue: frozenset(
+                instrument_type.value
+                for account in self.accounts
+                if account.profile.venue == venue
+                for instrument_type in account.profile.supported_instrument_types
+            )
+            for venue in sorted(self.adapters)
+        }
 
     async def start(self) -> None:
         if self._started:
             raise RuntimeError("private stream supervisor already started")
-        covered = {account.profile.venue for account in self.accounts}
-        if covered != set(self.adapters):
-            raise ValueError("private stream venue coverage does not match trading adapters")
         exchanges = _unique_exchanges(self.accounts)
         try:
+            capability_names = {
+                InstrumentType.SPOT: "spot",
+                InstrumentType.PERPETUAL: "swap",
+                InstrumentType.FUTURE: "future",
+            }
+            for account in self.accounts:
+                for instrument_type in account.profile.supported_instrument_types:
+                    capability = capability_names[instrument_type]
+                    if account.exchange.has.get(capability) is not True:
+                        raise RuntimeError(
+                            f"{account.profile.venue}:{account.profile.account} "
+                            f"lacks declared {capability} market capability"
+                        )
+                required_streams = {
+                    "watchOrders",
+                    "watchMyTrades",
+                    "watchBalance",
+                }
+                if (
+                    account.profile.watch_positions
+                    and not account.profile.positions_via_reconciliation
+                ):
+                    required_streams.add("watchPositions")
+                for capability in sorted(required_streams):
+                    if account.exchange.has.get(capability) is not True:
+                        raise RuntimeError(
+                            f"{account.profile.venue}:{account.profile.account} "
+                            f"lacks required {capability} capability"
+                        )
             for exchange in exchanges:
                 exchange.check_required_credentials()
             await asyncio.gather(
@@ -470,20 +662,19 @@ class PrivateStreamSupervisor:
             raise
         self._stopping = False
         self._started = True
-        for account in self.accounts:
-            profile = account.profile
-            required = ("orders", "fills", "balance")
-            for stream in required:
-                self._start_channel(account, stream)
-            if profile.watch_positions:
-                if not bool(account.exchange.has.get("watchPositions")):
-                    if not profile.positions_via_reconciliation:
-                        await self.stop()
-                        raise RuntimeError(
-                            f"{profile.venue}:{profile.account} has no private position stream"
-                        )
-                else:
+        try:
+            for account in self.accounts:
+                profile = account.profile
+                required = ("orders", "fills", "balance")
+                for stream in required:
+                    self._start_channel(account, stream)
+                if profile.watch_positions and bool(
+                    account.exchange.has.get("watchPositions")
+                ):
                     self._start_channel(account, "positions")
+        except BaseException:
+            await self.stop()
+            raise
         self._set_health_metrics()
 
     async def stop(self) -> None:
@@ -508,45 +699,66 @@ class PrivateStreamSupervisor:
     ) -> None:
         if not self._started:
             raise RuntimeError("private stream supervisor is not started")
-        if not result.passed:
-            raise RuntimeError("cannot journal a failed private reconciliation as healthy")
         normalized_at = _utc(observed_at)
-        for venue in sorted(self.adapters):
-            balance_normalizer = self._venue_normalizer(venue)
-            events: list[EventEnvelope[Any]] = list(
-                balance_normalizer.reconciliation_events(
-                    balance=result.balances.get(venue),
-                    positions=(),
-                    orders=(),
-                    observed_at=normalized_at,
+        self._last_reconciliation_failed_at = normalized_at
+        self._last_reconciliation_failure_reason = (
+            result.reason or "reconciliation_ingest_incomplete"
+        )
+        self._set_health_metrics(now=normalized_at)
+        try:
+            for venue in sorted(self.adapters):
+                balance_normalizer = self._venue_normalizer(venue)
+                await self._publish(
+                    balance_normalizer.reconciliation_events(
+                        balance=result.balances.get(venue),
+                        positions=(),
+                        orders=(),
+                        observed_at=normalized_at,
+                    ),
+                    venue=venue,
+                    stream="reconciliation",
+                    source="rest",
                 )
+                for position in result.positions:
+                    if position.exchange == venue:
+                        await self._publish(
+                            self._venue_normalizer(
+                                venue, position.instrument_type.value
+                            ).reconciliation_events(
+                                balance=None,
+                                positions=(position,),
+                                orders=(),
+                                observed_at=normalized_at,
+                            ),
+                            venue=venue,
+                            stream="reconciliation",
+                            source="rest",
+                        )
+                for order in result.open_orders:
+                    if order.exchange == venue:
+                        await self._publish(
+                            self._venue_normalizer(
+                                venue, order.instrument_type.value
+                            ).reconciliation_events(
+                                balance=None,
+                                positions=(),
+                                orders=(order,),
+                                observed_at=normalized_at,
+                            ),
+                            venue=venue,
+                            stream="reconciliation",
+                            source="rest",
+                        )
+        except BaseException as exc:
+            self._last_reconciliation_failure_reason = (
+                f"reconciliation_ingest_{type(exc).__name__}"
             )
-            for position in result.positions:
-                if position.exchange == venue:
-                    events.extend(
-                        self._venue_normalizer(
-                            venue, position.instrument_type.value
-                        ).reconciliation_events(
-                            balance=None,
-                            positions=(position,),
-                            orders=(),
-                            observed_at=normalized_at,
-                        )
-                    )
-            for order in result.open_orders:
-                if order.exchange == venue:
-                    events.extend(
-                        self._venue_normalizer(
-                            venue, order.instrument_type.value
-                        ).reconciliation_events(
-                            balance=None,
-                            positions=(),
-                            orders=(order,),
-                            observed_at=normalized_at,
-                        )
-                    )
-            await self._publish(events, venue=venue, stream="reconciliation", source="rest")
-        self._last_reconciliation_at = normalized_at
+            self._set_health_metrics(now=normalized_at)
+            raise
+        if result.passed:
+            self._last_reconciliation_at = normalized_at
+            self._last_reconciliation_failed_at = None
+            self._last_reconciliation_failure_reason = None
         self._set_health_metrics(now=normalized_at)
 
     def health(self, now: datetime | None = None) -> tuple[bool, str | None]:
@@ -560,6 +772,8 @@ class PrivateStreamSupervisor:
     def _venue_health(self, venue: str, current: datetime) -> tuple[bool, str | None]:
         if not self._started or self._stopping:
             return False, "private_stream_supervisor_not_running"
+        if self._last_reconciliation_failed_at is not None:
+            return False, "private_stream_reconciliation_failed"
         if self._last_reconciliation_at is None:
             return False, "private_stream_reconciliation_missing"
         age = (current - self._last_reconciliation_at).total_seconds()
@@ -584,6 +798,14 @@ class PrivateStreamSupervisor:
                 self._last_reconciliation_at.isoformat()
                 if self._last_reconciliation_at is not None
                 else None
+            ),
+            "last_reconciliation_failed_at": (
+                self._last_reconciliation_failed_at.isoformat()
+                if self._last_reconciliation_failed_at is not None
+                else None
+            ),
+            "last_reconciliation_failure_reason": (
+                self._last_reconciliation_failure_reason
             ),
             "channels": {
                 ":".join(key): {
@@ -711,15 +933,32 @@ class PrivateStreamSupervisor:
     def _venue_normalizer(
         self, venue: str, instrument_type: str | None = None
     ) -> CcxtPrivateEventNormalizer:
-        for account in self.accounts:
-            profile = account.profile
-            derivative = profile.default_type in {"future", "swap"}
-            expected_derivative = instrument_type in {"PERPETUAL", "FUTURE"}
-            if profile.venue == venue and (
-                instrument_type is None or derivative == expected_derivative
-            ):
-                return self._normalizers[(profile.venue, profile.account)]
-        raise RuntimeError(f"no private stream normalizer for {venue}")
+        venue_accounts = [
+            account for account in self.accounts if account.profile.venue == venue
+        ]
+        if instrument_type is None:
+            if not venue_accounts:
+                raise RuntimeError(f"no private stream normalizer for {venue}")
+            profile = venue_accounts[0].profile
+            return self._normalizers[(profile.venue, profile.account)]
+        try:
+            expected_type = InstrumentType(instrument_type)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"unsupported private reconciliation instrument type: {instrument_type}"
+            ) from exc
+        matches = [
+            account
+            for account in venue_accounts
+            if account.profile.supports(expected_type)
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"private stream normalizer coverage is not unique for "
+                f"{venue}:{instrument_type}"
+            )
+        profile = matches[0].profile
+        return self._normalizers[(profile.venue, profile.account)]
 
     def _set_health_metrics(self, now: datetime | None = None) -> None:
         current = _utc(now or datetime.now(UTC))
@@ -731,10 +970,22 @@ class PrivateStreamSupervisor:
 def private_stream_profiles(venue: str) -> tuple[PrivateStreamProfile, ...]:
     """Return the explicit account topology used for every supported live venue."""
 
+    spot = frozenset({InstrumentType.SPOT})
+    perpetual = frozenset({InstrumentType.PERPETUAL})
+    derivatives = perpetual | {InstrumentType.FUTURE}
+    spot_perpetual = spot | perpetual
+    unified = spot | derivatives
+
     profiles: dict[str, tuple[PrivateStreamProfile, ...]] = {
         "binance": (
             PrivateStreamProfile(
-                "binance", "spot", "binance", "spot", False, params={"type": "spot"}
+                "binance",
+                "spot",
+                "binance",
+                "spot",
+                False,
+                params={"type": "spot"},
+                supported_instrument_types=spot,
             ),
             PrivateStreamProfile(
                 "binance",
@@ -743,14 +994,28 @@ def private_stream_profiles(venue: str) -> tuple[PrivateStreamProfile, ...]:
                 "future",
                 True,
                 params={"type": "future"},
+                supported_instrument_types=derivatives,
             ),
         ),
         "bybit": (
-            PrivateStreamProfile("bybit", "unified", "bybit", "swap", True),
+            PrivateStreamProfile(
+                "bybit",
+                "unified",
+                "bybit",
+                "swap",
+                True,
+                supported_instrument_types=unified,
+            ),
         ),
         "gate": (
             PrivateStreamProfile(
-                "gate", "spot", "gate", "spot", False, params={"type": "spot"}
+                "gate",
+                "spot",
+                "gate",
+                "spot",
+                False,
+                params={"type": "spot"},
+                supported_instrument_types=spot,
             ),
             PrivateStreamProfile(
                 "gate",
@@ -759,24 +1024,78 @@ def private_stream_profiles(venue: str) -> tuple[PrivateStreamProfile, ...]:
                 "swap",
                 True,
                 params={"type": "swap", "settle": "usdt"},
+                supported_instrument_types=perpetual,
             ),
         ),
-        "okx": (PrivateStreamProfile("okx", "unified", "okx", "swap", True),),
+        "okx": (
+            PrivateStreamProfile(
+                "okx",
+                "unified",
+                "okx",
+                "swap",
+                True,
+                supported_instrument_types=unified,
+            ),
+        ),
         "hyperliquid": (
-            PrivateStreamProfile("hyperliquid", "unified", "hyperliquid", "swap", True),
+            PrivateStreamProfile(
+                "hyperliquid",
+                "unified",
+                "hyperliquid",
+                "swap",
+                True,
+                supported_instrument_types=spot_perpetual,
+            ),
         ),
         "mexc": (
-            PrivateStreamProfile("mexc", "spot", "mexc", "spot", False, params={"type": "spot"}),
             PrivateStreamProfile(
-                "mexc", "linear", "mexc", "swap", True, True, params={"type": "swap"}
+                "mexc",
+                "spot",
+                "mexc",
+                "spot",
+                False,
+                params={"type": "spot"},
+                supported_instrument_types=spot,
+            ),
+            PrivateStreamProfile(
+                "mexc",
+                "linear",
+                "mexc",
+                "swap",
+                True,
+                True,
+                params={"type": "swap"},
+                supported_instrument_types=perpetual,
             ),
         ),
         "kucoin": (
-            PrivateStreamProfile("kucoin", "spot", "kucoin", "spot", False),
-            PrivateStreamProfile("kucoin", "linear", "kucoinfutures", "swap", True),
+            PrivateStreamProfile(
+                "kucoin",
+                "spot",
+                "kucoin",
+                "spot",
+                False,
+                supported_instrument_types=spot,
+            ),
+            PrivateStreamProfile(
+                "kucoin",
+                "linear",
+                "kucoinfutures",
+                "swap",
+                True,
+                supported_instrument_types=derivatives,
+            ),
         ),
         "htx": (
-            PrivateStreamProfile("htx", "spot", "htx", "spot", False, params={"type": "spot"}),
+            PrivateStreamProfile(
+                "htx",
+                "spot",
+                "htx",
+                "spot",
+                False,
+                params={"type": "spot"},
+                supported_instrument_types=spot,
+            ),
             PrivateStreamProfile(
                 "htx",
                 "linear",
@@ -785,6 +1104,7 @@ def private_stream_profiles(venue: str) -> tuple[PrivateStreamProfile, ...]:
                 True,
                 True,
                 params={"type": "swap", "subType": "linear"},
+                supported_instrument_types=perpetual,
             ),
         ),
     }
@@ -871,14 +1191,7 @@ def _envelope(
 def _instrument(
     venue: str, market: Mapping[str, Any], *, expected_type: str | None = None
 ) -> InstrumentKey:
-    if market.get("spot"):
-        instrument_type = InstrumentType.SPOT
-    elif market.get("swap"):
-        instrument_type = InstrumentType.PERPETUAL
-    elif market.get("future"):
-        instrument_type = InstrumentType.FUTURE
-    else:
-        raise PrivateStreamNormalizationError("private event market type is unsupported")
+    instrument_type = _market_type(market)
     if expected_type is not None and instrument_type.value != expected_type:
         raise PrivateStreamNormalizationError("private event instrument type mismatch")
     base = _text(market.get("base"))
@@ -897,6 +1210,16 @@ def _instrument(
         settlement_asset=_text(market.get("settle")) or None,
         expiry=expiry_time,
     )
+
+
+def _market_type(market: Mapping[str, Any]) -> InstrumentType:
+    if market.get("spot"):
+        return InstrumentType.SPOT
+    if market.get("swap"):
+        return InstrumentType.PERPETUAL
+    if market.get("future"):
+        return InstrumentType.FUTURE
+    raise PrivateStreamNormalizationError("private event market type is unsupported")
 
 
 def _rows(value: object) -> list[object]:

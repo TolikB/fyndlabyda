@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -55,12 +56,17 @@ class LiveTradingExecutor:
         session_factory: async_sessionmaker[AsyncSession],
         risk: LiveRiskController,
         metadata_registry: VenueMetadataRegistry | None = None,
+        private_reconciliation_coverage: Mapping[str, Collection[str]] | None = None,
     ) -> None:
         self.settings = settings
         self.adapters = adapters
         self.session_factory = session_factory
         self.risk = risk
         self.metadata_registry = metadata_registry
+        self.private_reconciliation_coverage = {
+            venue.lower(): frozenset(instrument_type.upper() for instrument_type in types)
+            for venue, types in (private_reconciliation_coverage or {}).items()
+        }
 
     async def open_position(
         self,
@@ -548,6 +554,15 @@ class LiveTradingExecutor:
         venues = {item[1] for item in specifications}
         if not venues.issubset(self.adapters):
             raise LiveExecutionError("execution plan uses a non-enabled live venue")
+        for _, venue, _, instrument_type, _ in specifications:
+            supported_types = self.private_reconciliation_coverage.get(venue)
+            if (
+                supported_types is None
+                or instrument_type.value not in supported_types
+            ):
+                raise LiveExecutionError(
+                    "instrument type lacks private reconciliation coverage"
+                )
         if approval.expected_net_profit <= 0:
             raise LiveExecutionError("approved net profit must be positive")
         if approval.capital_per_leg <= 0:

@@ -60,6 +60,11 @@ from funding_arbitrage.services.decision_pipeline import FundingLiveDecisionServ
 from funding_arbitrage.services.live_runner import LiveTradingRunner
 from tests.live_security import live_credential_policy_json
 
+PRIVATE_RECONCILIATION_COVERAGE = {
+    "bybit": frozenset({"SPOT", "PERPETUAL", "FUTURE"}),
+    "gate": frozenset({"SPOT", "PERPETUAL"}),
+}
+
 
 class FakeTradingAdapter(TradingAdapter):
     def __init__(self, name: str, outcomes: list[LiveOrderStatus]) -> None:
@@ -470,6 +475,7 @@ def _helper_executor(tmp_path: Path) -> LiveTradingExecutor:
     executor = LiveTradingExecutor.__new__(LiveTradingExecutor)
     executor.settings = live_settings(tmp_path)
     executor.adapters = {"bybit": FakeTradingAdapter("bybit", [])}
+    executor.private_reconciliation_coverage = PRIVATE_RECONCILIATION_COVERAGE
     return executor
 
 
@@ -600,6 +606,43 @@ def test_live_approval_validation_rejects_expired_asset_and_strategy(
         )
 
 
+def test_live_approval_rejects_instrument_without_private_reconciliation(
+    tmp_path: Path,
+) -> None:
+    executor = _helper_executor(tmp_path)
+    executor.adapters["gate"] = FakeTradingAdapter("gate", [])
+    executor.private_reconciliation_coverage = {
+        "bybit": frozenset({"SPOT", "PERPETUAL"}),
+        "gate": frozenset({"SPOT", "PERPETUAL"}),
+    }
+    snapshot = market_snapshot()
+    approval = live_approval(
+        executor.settings,
+        opportunity(),
+        snapshot,
+        "unsupported-private-reconciliation",
+    )
+    instructions = list(approval.plan.instructions)
+    bybit_instruction = instructions[0]
+    instructions[0] = bybit_instruction.model_copy(
+        update={
+            "instrument": bybit_instruction.instrument.model_copy(
+                update={"instrument_type": DomainInstrumentType.FUTURE}
+            )
+        }
+    )
+    unsupported = approval.model_copy(
+        update={
+            "plan": approval.plan.model_copy(
+                update={"instructions": tuple(instructions)}
+            )
+        }
+    )
+
+    with pytest.raises(LiveExecutionError, match="private reconciliation coverage"):
+        executor._validate_approval(unsupported)
+
+
 @pytest.mark.asyncio
 async def test_live_open_and_close_use_exact_filled_base_quantities(
     database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]], tmp_path: Path
@@ -617,6 +660,7 @@ async def test_live_open_and_close_use_exact_filled_base_quantities(
         {"bybit": bybit, "gate": gate},
         factory,
         LiveRiskController(settings),
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
 
     position = await open_approved(
@@ -650,6 +694,7 @@ async def test_disarmed_autotrade_stops_before_intent_or_exchange_action(
         {"bybit": bybit, "gate": gate},
         factory,
         LiveRiskController(settings),
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
 
     with pytest.raises(LiveTradingPaused, match="live_autotrade_not_armed"):
@@ -685,7 +730,13 @@ async def test_spot_base_fee_is_hedged_from_balance_delta_and_dust_is_reconciled
         ],
     )
     risk = LiveRiskController(settings)
-    executor = LiveTradingExecutor(settings, {"bybit": adapter}, factory, risk)
+    executor = LiveTradingExecutor(
+        settings,
+        {"bybit": adapter},
+        factory,
+        risk,
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
+    )
 
     position = await open_approved(
         executor,
@@ -733,6 +784,7 @@ async def test_second_leg_rejection_unwinds_first_leg(
         {"bybit": bybit, "gate": gate},
         factory,
         LiveRiskController(settings),
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
 
     position = await open_approved(
@@ -756,7 +808,11 @@ async def test_unknown_order_state_trips_persistent_kill_switch(
     bybit = FakeTradingAdapter("bybit", [LiveOrderStatus.UNKNOWN])
     gate = FakeTradingAdapter("gate", [])
     executor = LiveTradingExecutor(
-        settings, {"bybit": bybit, "gate": gate}, factory, risk
+        settings,
+        {"bybit": bybit, "gate": gate},
+        factory,
+        risk,
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
 
     position = await open_approved(
@@ -781,7 +837,11 @@ async def test_submission_exception_is_durable_unknown_and_never_retried(
     bybit = AcceptedThenRaisesAdapter("bybit", [])
     gate = FakeTradingAdapter("gate", [])
     executor = LiveTradingExecutor(
-        settings, {"bybit": bybit, "gate": gate}, factory, risk
+        settings,
+        {"bybit": bybit, "gate": gate},
+        factory,
+        risk,
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
 
     candidate = opportunity()
@@ -823,6 +883,7 @@ async def test_stale_book_fails_before_any_exchange_submission(
         {"bybit": bybit, "gate": gate},
         factory,
         LiveRiskController(settings),
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
 
     stale_snapshot = market_snapshot(stale=True)
@@ -843,7 +904,11 @@ async def test_spot_entry_rejects_funds_held_only_in_derivatives_wallet(
     settings = live_settings(tmp_path)
     adapter = SpotFeeTradingAdapter("bybit", [LiveOrderStatus.FILLED])
     executor = LiveTradingExecutor(
-        settings, {"bybit": adapter}, factory, LiveRiskController(settings)
+        settings,
+        {"bybit": adapter},
+        factory,
+        LiveRiskController(settings),
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
     aggregate_only = VenueBalance(
         exchange="bybit",
@@ -1133,6 +1198,7 @@ async def test_live_entry_consumes_dynamic_metadata_and_rejects_inactive_market(
         factory,
         LiveRiskController(settings),
         metadata_registry=registry,
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
 
     with pytest.raises(LiveExecutionError, match="metadata is inactive"):
@@ -1195,6 +1261,7 @@ async def test_live_executor_rejects_unapproved_snapshot_before_exchange_action(
         {"bybit": bybit, "gate": gate},
         factory,
         LiveRiskController(settings),
+        private_reconciliation_coverage=PRIVATE_RECONCILIATION_COVERAGE,
     )
     approved_snapshot = market_snapshot()
     authority = live_approval(

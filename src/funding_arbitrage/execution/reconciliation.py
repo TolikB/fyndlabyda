@@ -52,7 +52,12 @@ class LiveReconciler:
         self.risk = risk
         self.last_result: ReconciliationResult | None = None
 
-    async def reconcile(self, *, startup: bool = False) -> ReconciliationResult:
+    async def reconcile(
+        self,
+        *,
+        startup: bool = False,
+        raise_on_failure: bool = True,
+    ) -> ReconciliationResult:
         venue_names = sorted(self.adapters)
         rows = await asyncio.gather(
             *(
@@ -263,8 +268,14 @@ class LiveReconciler:
         self.last_result = result
         if not result.passed:
             self.risk.trip("reconciliation:" + (reason or "unknown"))
-            raise LiveTradingPaused(reason or "reconciliation_failed")
+            if raise_on_failure:
+                self.raise_if_failed(result)
         return result
+
+    @staticmethod
+    def raise_if_failed(result: ReconciliationResult) -> None:
+        if not result.passed:
+            raise LiveTradingPaused(result.reason or "reconciliation_failed")
 
     @staticmethod
     async def _venue_state(

@@ -3,14 +3,21 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 
 import ccxt.pro as ccxtpro
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from funding_arbitrage.config import Settings
-from funding_arbitrage.domain.events import DataQuality, EventEnvelope, EventKind
+from funding_arbitrage.domain.events import (
+    DataQuality,
+    EventEnvelope,
+    EventKind,
+)
+from funding_arbitrage.domain.events import InstrumentType as EventInstrumentType
 from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.exchanges.private_streams import (
     CcxtPrivateEventNormalizer,
@@ -20,7 +27,7 @@ from funding_arbitrage.exchanges.private_streams import (
     PrivateStreamSupervisor,
     private_stream_profiles,
 )
-from funding_arbitrage.execution.reconciliation import ReconciliationResult
+from funding_arbitrage.execution.reconciliation import LiveReconciler, ReconciliationResult
 from funding_arbitrage.execution.trading import (
     LiveOrderStatus,
     TradingAdapter,
@@ -28,6 +35,7 @@ from funding_arbitrage.execution.trading import (
     VenueBalance,
     VenuePosition,
 )
+from funding_arbitrage.risk.live import LiveRiskController, LiveTradingPaused
 
 NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
 SWAP_MARKET: dict[str, object] = {
@@ -42,7 +50,7 @@ SWAP_MARKET: dict[str, object] = {
     "contractSize": 0.001,
 }
 SPOT_MARKET: dict[str, object] = {
-    "id": "BTCUSDT_SPOT",
+    "id": "BTCUSDT",
     "symbol": "BTC/USDT",
     "base": "BTC",
     "quote": "USDT",
@@ -57,6 +65,9 @@ SPOT_MARKET: dict[str, object] = {
 class FakeProExchange:
     def __init__(self, *, watch_positions: bool = True, fail_orders_once: bool = False) -> None:
         self.has = {
+            "spot": True,
+            "swap": True,
+            "future": True,
             "watchOrders": True,
             "watchMyTrades": True,
             "watchBalance": True,
@@ -65,6 +76,9 @@ class FakeProExchange:
         self.markets = {
             "BTC/USDT:USDT": dict(SWAP_MARKET),
             "BTC/USDT": dict(SPOT_MARKET),
+        }
+        self.markets_by_id = {
+            "BTCUSDT": [self.markets["BTC/USDT:USDT"], self.markets["BTC/USDT"]]
         }
         self.queues = {
             "orders": asyncio.Queue[object](),
@@ -119,6 +133,48 @@ class EventCollector:
 
     async def __call__(self, event: EventEnvelope[Any]) -> None:
         self.events.append(event)
+
+
+class SwitchableEventCollector(EventCollector):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure: Exception | None = None
+
+    async def __call__(self, event: EventEnvelope[Any]) -> None:
+        if self.failure is not None:
+            raise self.failure
+        await super().__call__(event)
+
+
+class ReconciliationAdapter:
+    name = "bybit"
+
+    async def fetch_balance(self) -> VenueBalance:
+        return VenueBalance(
+            exchange=self.name,
+            free={"USDT": Decimal("1000")},
+            total={"USDT": Decimal("1000")},
+            timestamp=NOW,
+        )
+
+    async def fetch_positions(self) -> list[VenuePosition]:
+        return []
+
+    async def fetch_open_orders(self) -> list[TradingOrderResult]:
+        return [
+            TradingOrderResult(
+                exchange=self.name,
+                exchange_order_id="spot-order-1",
+                client_order_id="",
+                exchange_symbol="BTCUSDT",
+                instrument_type=InstrumentType.SPOT,
+                side="BUY",
+                requested_base_quantity=Decimal("0.01"),
+                filled_base_quantity=Decimal("0"),
+                status=LiveOrderStatus.OPEN,
+                timestamp=NOW,
+            )
+        ]
 
 
 async def _wait_for_events(collector: EventCollector, count: int) -> None:
@@ -236,7 +292,16 @@ def test_malformed_private_event_fails_without_inventing_market_identity() -> No
 @pytest.mark.asyncio
 async def test_supervisor_streams_and_reconciliation_share_one_event_journal() -> None:
     exchange = FakeProExchange()
-    profile = PrivateStreamProfile("bybit", "unified", "bybit", "swap", True)
+    profile = PrivateStreamProfile(
+        "bybit",
+        "unified",
+        "bybit",
+        "swap",
+        True,
+        supported_instrument_types=frozenset(
+            {EventInstrumentType.SPOT, EventInstrumentType.PERPETUAL}
+        ),
+    )
     collector = EventCollector()
     supervisor = PrivateStreamSupervisor(
         (PrivateStreamAccount(profile, exchange),),
@@ -286,7 +351,16 @@ async def test_supervisor_streams_and_reconciliation_share_one_event_journal() -
 @pytest.mark.asyncio
 async def test_supervisor_health_fails_closed_during_reconnect_and_stale_checkpoint() -> None:
     exchange = FakeProExchange(fail_orders_once=True)
-    profile = PrivateStreamProfile("bybit", "unified", "bybit", "swap", True)
+    profile = PrivateStreamProfile(
+        "bybit",
+        "unified",
+        "bybit",
+        "swap",
+        True,
+        supported_instrument_types=frozenset(
+            {EventInstrumentType.SPOT, EventInstrumentType.PERPETUAL}
+        ),
+    )
     collector = EventCollector()
     supervisor = PrivateStreamSupervisor(
         (PrivateStreamAccount(profile, exchange),),
@@ -322,13 +396,15 @@ async def test_supervisor_health_fails_closed_during_reconnect_and_stale_checkpo
 
 @pytest.mark.asyncio
 async def test_position_stream_falls_back_to_reconciled_snapshot_when_unsupported() -> None:
+    spot_exchange = FakeProExchange()
     exchange = FakeProExchange(watch_positions=False)
-    profile = PrivateStreamProfile(
-        "mexc", "linear", "mexc", "swap", True, positions_via_reconciliation=True
-    )
+    spot_profile, profile = private_stream_profiles("mexc")
     collector = EventCollector()
     supervisor = PrivateStreamSupervisor(
-        (PrivateStreamAccount(profile, exchange),),
+        (
+            PrivateStreamAccount(spot_profile, spot_exchange),
+            PrivateStreamAccount(profile, exchange),
+        ),
         {"mexc": cast(TradingAdapter, object())},
         collector,
         reconciliation_max_age_seconds=90,
@@ -381,24 +457,453 @@ async def test_position_stream_falls_back_to_reconciled_snapshot_when_unsupporte
     await supervisor.stop()
 
 
+@pytest.mark.parametrize("venue", ["bybit", "okx", "hyperliquid"])
+@pytest.mark.asyncio
+async def test_unified_profile_reconciles_spot_orders_and_derivative_positions(
+    venue: str,
+) -> None:
+    exchange = FakeProExchange()
+    profile = private_stream_profiles(venue)[0]
+    collector = EventCollector()
+    supervisor = PrivateStreamSupervisor(
+        (PrivateStreamAccount(profile, exchange),),
+        {venue: cast(TradingAdapter, object())},
+        collector,
+        reconciliation_max_age_seconds=90,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.05,
+    )
+    await supervisor.start()
+    try:
+        await supervisor.ingest_reconciliation(
+            ReconciliationResult(
+                passed=False,
+                reason="non_terminal_live_order",
+                balances={venue: VenueBalance(exchange=venue, timestamp=NOW)},
+                positions=(
+                    VenuePosition(
+                        exchange=venue,
+                        exchange_symbol="BTCUSDT",
+                        instrument_type=InstrumentType.PERPETUAL,
+                        side="SHORT",
+                        base_quantity=Decimal("0.003"),
+                        entry_price=Decimal("62000"),
+                        mark_price=Decimal("61900"),
+                    ),
+                ),
+                open_orders=(
+                    TradingOrderResult(
+                        exchange=venue,
+                        exchange_order_id="spot-order-1",
+                        client_order_id="fa-spot-order-1",
+                        exchange_symbol="BTCUSDT",
+                        instrument_type=InstrumentType.SPOT,
+                        side="BUY",
+                        requested_base_quantity=Decimal("0.01"),
+                        filled_base_quantity=Decimal("0"),
+                        status=LiveOrderStatus.OPEN,
+                        timestamp=NOW,
+                    ),
+                ),
+                details={},
+            ),
+            observed_at=NOW,
+        )
+    finally:
+        await supervisor.stop()
+
+    reconciled_types = {
+        event.payload.instrument.instrument_type
+        for event in collector.events
+        if event.kind in {EventKind.ORDER_UPDATE, EventKind.POSITION_SNAPSHOT}
+    }
+    assert reconciled_types == {
+        EventInstrumentType.SPOT,
+        EventInstrumentType.PERPETUAL,
+    }
+
+
 def test_private_profile_matrix_covers_all_eight_cex_and_pinned_capabilities() -> None:
     venues = ("binance", "bybit", "gate", "okx", "hyperliquid", "mexc", "kucoin", "htx")
     profiles = [profile for venue in venues for profile in private_stream_profiles(venue)]
+    spot = frozenset({EventInstrumentType.SPOT})
+    perpetual = frozenset({EventInstrumentType.PERPETUAL})
+    derivatives = frozenset(
+        {EventInstrumentType.PERPETUAL, EventInstrumentType.FUTURE}
+    )
+    expected = {
+        ("binance", "spot"): spot,
+        ("binance", "linear"): derivatives,
+        ("bybit", "unified"): spot | derivatives,
+        ("gate", "spot"): spot,
+        ("gate", "linear"): perpetual,
+        ("okx", "unified"): spot | derivatives,
+        ("hyperliquid", "unified"): spot | perpetual,
+        ("mexc", "spot"): spot,
+        ("mexc", "linear"): perpetual,
+        ("kucoin", "spot"): spot,
+        ("kucoin", "linear"): derivatives,
+        ("htx", "spot"): spot,
+        ("htx", "linear"): perpetual,
+    }
 
     assert {profile.venue for profile in profiles} == set(venues)
     assert {profile.venue for profile in profiles if profile.positions_via_reconciliation} == {
         "mexc",
         "htx",
     }
+    assert {
+        (profile.venue, profile.account): profile.supported_instrument_types
+        for profile in profiles
+    } == expected
+    capability_names = {
+        EventInstrumentType.SPOT: "spot",
+        EventInstrumentType.PERPETUAL: "swap",
+        EventInstrumentType.FUTURE: "future",
+    }
     for profile in profiles:
         exchange = getattr(ccxtpro, profile.exchange_class)(
             {"options": {"defaultType": profile.default_type}}
         )
+        for instrument_type in profile.supported_instrument_types:
+            assert exchange.has.get(capability_names[instrument_type]) is True
         assert exchange.has.get("watchOrders") is True
         assert exchange.has.get("watchMyTrades") is True
         assert exchange.has.get("watchBalance") is True
         if profile.watch_positions and not profile.positions_via_reconciliation:
             assert exchange.has.get("watchPositions") is True
+
+
+def test_private_profile_topology_fails_closed_before_start() -> None:
+    with pytest.raises(ValueError, match="unsupported private stream default type"):
+        PrivateStreamProfile("bybit", "bad", "bybit", "unknown", True)
+
+    exchange = FakeProExchange()
+    spot_only = PrivateStreamProfile(
+        "bybit",
+        "spot",
+        "bybit",
+        "spot",
+        False,
+    )
+    with pytest.raises(ValueError, match="missing=PERPETUAL"):
+        PrivateStreamSupervisor(
+            (PrivateStreamAccount(spot_only, exchange),),
+            {"bybit": cast(TradingAdapter, object())},
+            EventCollector(),
+            reconciliation_max_age_seconds=90,
+            reconnect_initial_seconds=0.01,
+            reconnect_max_seconds=0.05,
+        )
+
+    unified = PrivateStreamProfile(
+        "bybit",
+        "unified",
+        "bybit",
+        "swap",
+        True,
+        supported_instrument_types=frozenset(
+            {EventInstrumentType.SPOT, EventInstrumentType.PERPETUAL}
+        ),
+    )
+    exact_supervisor = PrivateStreamSupervisor(
+        (PrivateStreamAccount(unified, exchange),),
+        {"bybit": cast(TradingAdapter, object())},
+        EventCollector(),
+        reconciliation_max_age_seconds=90,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.05,
+    )
+    assert exact_supervisor.reconciliation_coverage() == {
+        "bybit": frozenset({"SPOT", "PERPETUAL"})
+    }
+    duplicate_spot = PrivateStreamProfile(
+        "bybit",
+        "duplicate-spot",
+        "bybit",
+        "spot",
+        False,
+    )
+    with pytest.raises(ValueError, match="ambiguous=SPOT"):
+        PrivateStreamSupervisor(
+            (
+                PrivateStreamAccount(unified, exchange),
+                PrivateStreamAccount(duplicate_spot, FakeProExchange()),
+            ),
+            {"bybit": cast(TradingAdapter, object())},
+            EventCollector(),
+            reconciliation_max_age_seconds=90,
+            reconnect_initial_seconds=0.01,
+            reconnect_max_seconds=0.05,
+        )
+
+    with pytest.raises(ValueError, match="account identities must be unique"):
+        PrivateStreamSupervisor(
+            (
+                PrivateStreamAccount(unified, exchange),
+                PrivateStreamAccount(unified, FakeProExchange()),
+            ),
+            {"bybit": cast(TradingAdapter, object())},
+            EventCollector(),
+            reconciliation_max_age_seconds=90,
+            reconnect_initial_seconds=0.01,
+            reconnect_max_seconds=0.05,
+        )
+
+
+@pytest.mark.asyncio
+async def test_declared_market_capability_is_verified_before_stream_start() -> None:
+    exchange = FakeProExchange()
+    exchange.has["spot"] = False
+    supervisor = PrivateStreamSupervisor(
+        (
+            PrivateStreamAccount(
+                private_stream_profiles("bybit")[0],
+                exchange,
+            ),
+        ),
+        {"bybit": cast(TradingAdapter, object())},
+        EventCollector(),
+        reconciliation_max_age_seconds=90,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.05,
+    )
+
+    with pytest.raises(RuntimeError, match="lacks declared spot market capability"):
+        await supervisor.start()
+
+    assert exchange.closed is True
+
+
+@pytest.mark.asyncio
+async def test_missing_stream_capability_closes_clients_without_starting_tasks() -> None:
+    exchange = FakeProExchange()
+    exchange.has["watchBalance"] = False
+    supervisor = PrivateStreamSupervisor(
+        (
+            PrivateStreamAccount(
+                private_stream_profiles("bybit")[0],
+                exchange,
+            ),
+        ),
+        {"bybit": cast(TradingAdapter, object())},
+        EventCollector(),
+        reconciliation_max_age_seconds=90,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.05,
+    )
+
+    with pytest.raises(RuntimeError, match="lacks required watchBalance capability"):
+        await supervisor.start()
+
+    assert exchange.closed is True
+    assert supervisor.snapshot(NOW)["channels"] == {}
+    assert supervisor.health(NOW) == (
+        False,
+        "private_stream_supervisor_not_running",
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_live_reconciliation_journals_open_order_before_enforcement(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    tmp_path: Path,
+) -> None:
+    _, factory = database
+    settings = Settings(
+        _env_file=None,
+        LIVE_KILL_SWITCH_FILE=str(tmp_path / "LIVE_DISABLED"),
+    )
+    risk = LiveRiskController(settings)
+    adapter = ReconciliationAdapter()
+    exchange = FakeProExchange()
+    collector = EventCollector()
+    supervisor = PrivateStreamSupervisor(
+        (
+            PrivateStreamAccount(
+                private_stream_profiles("bybit")[0],
+                exchange,
+            ),
+        ),
+        {"bybit": cast(TradingAdapter, adapter)},
+        collector,
+        reconciliation_max_age_seconds=90,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.05,
+    )
+    reconciler = LiveReconciler(
+        settings,
+        {"bybit": cast(TradingAdapter, adapter)},
+        factory,
+        risk,
+    )
+
+    await supervisor.start()
+    try:
+        result = await reconciler.reconcile(raise_on_failure=False)
+        assert result.passed is False
+        assert result.reason is not None
+        assert "non_terminal_live_order" in result.reason
+        assert risk.paused
+
+        await supervisor.ingest_reconciliation(result, observed_at=NOW)
+
+        assert supervisor.health(NOW) == (
+            False,
+            "private_stream_reconciliation_failed",
+        )
+        order_events = [
+            event for event in collector.events if event.kind is EventKind.ORDER_UPDATE
+        ]
+        assert len(order_events) == 1
+        assert order_events[0].payload.client_order_id == "external:spot-order-1"
+        assert (
+            order_events[0].payload.instrument.instrument_type
+            is EventInstrumentType.SPOT
+        )
+        with pytest.raises(LiveTradingPaused, match="non_terminal_live_order"):
+            reconciler.raise_if_failed(result)
+    finally:
+        await supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_malformed_reconciliation_preserves_prior_facts_and_marks_unhealthy() -> None:
+    exchange = FakeProExchange()
+    collector = EventCollector()
+    supervisor = PrivateStreamSupervisor(
+        (
+            PrivateStreamAccount(
+                private_stream_profiles("bybit")[0],
+                exchange,
+            ),
+        ),
+        {"bybit": cast(TradingAdapter, object())},
+        collector,
+        reconciliation_max_age_seconds=90,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.05,
+    )
+    healthy = ReconciliationResult(
+        passed=True,
+        reason=None,
+        balances={
+            "bybit": VenueBalance(
+                exchange="bybit",
+                free={"USDT": Decimal("1000")},
+                total={"USDT": Decimal("1000")},
+                timestamp=NOW,
+            )
+        },
+        positions=(),
+        open_orders=(),
+        details={},
+    )
+    malformed = ReconciliationResult(
+        passed=True,
+        reason=None,
+        balances=healthy.balances,
+        positions=(),
+        open_orders=(
+            TradingOrderResult(
+                exchange="bybit",
+                exchange_order_id="   ",
+                client_order_id="   ",
+                exchange_symbol="BTCUSDT",
+                instrument_type=InstrumentType.SPOT,
+                side="BUY",
+                requested_base_quantity=Decimal("0.01"),
+                filled_base_quantity=Decimal("0"),
+                status=LiveOrderStatus.OPEN,
+                timestamp=NOW,
+            ),
+        ),
+        details={},
+    )
+
+    await supervisor.start()
+    try:
+        await supervisor.ingest_reconciliation(
+            healthy,
+            observed_at=NOW - timedelta(seconds=1),
+        )
+        prior_balance_events = sum(
+            event.kind is EventKind.BALANCE_SNAPSHOT for event in collector.events
+        )
+
+        with pytest.raises(
+            PrivateStreamNormalizationError,
+            match="no client or exchange identity",
+        ):
+            await supervisor.ingest_reconciliation(malformed, observed_at=NOW)
+
+        assert sum(
+            event.kind is EventKind.BALANCE_SNAPSHOT for event in collector.events
+        ) == prior_balance_events + 1
+        assert supervisor.health(NOW) == (
+            False,
+            "private_stream_reconciliation_failed",
+        )
+        assert supervisor.snapshot(NOW)["last_reconciliation_failure_reason"] == (
+            "reconciliation_ingest_PrivateStreamNormalizationError"
+        )
+    finally:
+        await supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_sink_failure_invalidates_previous_healthy_checkpoint() -> None:
+    exchange = FakeProExchange()
+    collector = SwitchableEventCollector()
+    supervisor = PrivateStreamSupervisor(
+        (
+            PrivateStreamAccount(
+                private_stream_profiles("bybit")[0],
+                exchange,
+            ),
+        ),
+        {"bybit": cast(TradingAdapter, object())},
+        collector,
+        reconciliation_max_age_seconds=90,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.05,
+    )
+    result = ReconciliationResult(
+        passed=True,
+        reason=None,
+        balances={
+            "bybit": VenueBalance(
+                exchange="bybit",
+                free={"USDT": Decimal("1000")},
+                total={"USDT": Decimal("1000")},
+                timestamp=NOW,
+            )
+        },
+        positions=(),
+        open_orders=(),
+        details={},
+    )
+
+    await supervisor.start()
+    try:
+        await supervisor.ingest_reconciliation(
+            result,
+            observed_at=NOW - timedelta(seconds=1),
+        )
+        collector.failure = RuntimeError("sink unavailable")
+
+        with pytest.raises(RuntimeError, match="sink unavailable"):
+            await supervisor.ingest_reconciliation(result, observed_at=NOW)
+
+        assert supervisor.health(NOW) == (
+            False,
+            "private_stream_reconciliation_failed",
+        )
+        assert supervisor.snapshot(NOW)["last_reconciliation_failure_reason"] == (
+            "reconciliation_ingest_RuntimeError"
+        )
+    finally:
+        await supervisor.stop()
 
 
 def test_private_stream_timing_configuration_is_fail_closed() -> None:

@@ -29,7 +29,7 @@ from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.exchanges.private_streams import PrivateStreamSupervisor
 from funding_arbitrage.exchanges.public_events import PublicEventSupervisor
 from funding_arbitrage.execution.live import LiveExecutionError, LiveTradingExecutor
-from funding_arbitrage.execution.reconciliation import LiveReconciler
+from funding_arbitrage.execution.reconciliation import LiveReconciler, ReconciliationResult
 from funding_arbitrage.execution.trading import (
     LivePosition,
     LivePositionState,
@@ -125,6 +125,11 @@ class LiveTradingRunner:
             metadata_registry=(
                 public_events.metadata_registry if public_events is not None else None
             ),
+            private_reconciliation_coverage=(
+                private_streams.reconciliation_coverage()
+                if private_streams is not None
+                else {}
+            ),
         )
         self.decision_pipeline = FundingLiveDecisionService(settings, self.risk)
         self.reconciler = LiveReconciler(
@@ -164,12 +169,7 @@ class LiveTradingRunner:
             if self.public_events is not None:
                 await self.public_events.start()
             await self._restore_positions()
-            result = await self.reconciler.reconcile(startup=True)
-            reconciled_at = datetime.now(UTC)
-            if self.private_streams is not None:
-                await self.private_streams.ingest_reconciliation(
-                    result, observed_at=reconciled_at
-                )
+            result, reconciled_at = await self._reconcile_and_journal(startup=True)
             live_reconciliation_healthy.set(1)
             self._balances = result.balances
             self._venue_positions = result.positions
@@ -221,6 +221,26 @@ class LiveTradingRunner:
     async def stop(self) -> None:
         self.stop_event.set()
 
+    async def _reconcile_and_journal(
+        self, *, startup: bool = False
+    ) -> tuple[ReconciliationResult, datetime]:
+        result = await self.reconciler.reconcile(
+            startup=startup,
+            raise_on_failure=False,
+        )
+        observed_at = datetime.now(UTC)
+        if self.private_streams is not None:
+            try:
+                await self.private_streams.ingest_reconciliation(
+                    result,
+                    observed_at=observed_at,
+                )
+            except Exception:
+                self.risk.trip("private_reconciliation_journal_failed")
+                raise
+        self.reconciler.raise_if_failed(result)
+        return result, observed_at
+
     async def close(self) -> None:
         await self.stop()
         await self.collector.close()
@@ -266,15 +286,11 @@ class LiveTradingRunner:
         reconciliation_due = self._reconciliation_due(snapshot.captured_at)
         if reconciliation_due:
             try:
-                result = await self.reconciler.reconcile()
+                result, _ = await self._reconcile_and_journal()
             except Exception:
                 live_reconciliation_healthy.set(0)
                 live_reconciliation_failures_total.inc()
                 raise
-            if self.private_streams is not None:
-                await self.private_streams.ingest_reconciliation(
-                    result, observed_at=snapshot.captured_at
-                )
             live_reconciliation_healthy.set(1)
             self._balances = result.balances
             self._venue_positions = result.positions

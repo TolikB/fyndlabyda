@@ -7,7 +7,11 @@ strict live-mode configuration and REST-adapter checks pass. The account topolog
 covers Binance, Bybit, Gate, OKX, Hyperliquid, MEXC, KuCoin, and HTX. Binance,
 Gate, MEXC, KuCoin, and HTX use separate spot and derivative profiles where the
 venue APIs require distinct account channels; Bybit, OKX, and Hyperliquid use
-unified private accounts.
+unified private accounts. Each profile declares the instrument types it can
+normalize instead of inheriting the client `defaultType`: Bybit and OKX cover
+spot, perpetual, and dated futures, while Hyperliquid covers its supported spot
+and perpetual markets. Separate profiles declare only the venue channels they
+actually subscribe to.
 
 Every supported WebSocket update is normalized to the immutable canonical event
 journal:
@@ -35,9 +39,18 @@ position, and open-order snapshots to the same journal. This closes reconnect
 gaps and provides the position recovery path for MEXC and HTX, whose pinned CCXT
 Pro 4.5.73 adapters do not advertise `watchPositions`.
 
+A failed reconciliation is still evidence: every venue fact successfully
+collected before the mismatch is journaled first, then the reconciliation remains
+unhealthy and the persistent live entry gate is enforced. An open order therefore
+cannot disappear from the audit trail merely because its presence is itself a
+blocking reconciliation condition.
+
 New live entries are blocked when any channel is reconnecting or stopped, the
 REST checkpoint is absent/stale, or canonical event persistence fails. Stream
 loss never triggers automatic resubmission of an order with an unknown outcome.
+Execution is also rejected before submission when the venue has no declared
+private-stream and authenticated-REST reconciliation coverage for that
+instrument type, even if its public catalogue contains the market.
 `/health/ready` fails closed and `/system/live` exposes only channel health and
 redacted error types. Prometheus, Grafana, and Alertmanager cover stream health,
 normalized event counts, and normalization failures.

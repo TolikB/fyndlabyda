@@ -105,15 +105,27 @@ class FakeReconciler:
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.error: Exception | None = None
         self.result = SimpleNamespace(
+            passed=True,
+            reason=None,
             balances=balances(),
             positions=(),
             open_orders=(),
         )
 
-    async def reconcile(self, *, startup: bool = False) -> object:
+    async def reconcile(
+        self,
+        *,
+        startup: bool = False,
+        raise_on_failure: bool = True,
+    ) -> object:
         if self.error is not None:
             raise self.error
         return self.result
+
+    @staticmethod
+    def raise_if_failed(result: SimpleNamespace) -> None:
+        if not result.passed:
+            raise LiveTradingPaused(result.reason or "reconciliation_failed")
 
 
 class FakeDailyReport:
@@ -169,6 +181,13 @@ class FakePrivateStreams:
 
     def health(self) -> tuple[bool, str | None]:
         return self.health_value
+
+    @staticmethod
+    def reconciliation_coverage() -> dict[str, frozenset[str]]:
+        return {
+            "bybit": frozenset({"SPOT", "PERPETUAL"}),
+            "gate": frozenset({"SPOT", "PERPETUAL"}),
+        }
 
 
 class FakePublicEvents:
@@ -351,6 +370,25 @@ async def test_run_cycle_pause_is_caught_without_restart(
     await runner.run()
 
     assert runner.daily_report.alerts == ["cycle_pause"]
+
+
+async def test_failed_reconciliation_is_journaled_before_pause_enforcement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    runner, _, _, private, _ = _build_runner(monkeypatch, tmp_path)
+    runner.reconciler.result = SimpleNamespace(
+        passed=False,
+        reason="non_terminal_live_order",
+        balances=balances(),
+        positions=(),
+        open_orders=(object(),),
+    )
+
+    with pytest.raises(LiveTradingPaused, match="non_terminal_live_order"):
+        await runner._reconcile_and_journal()
+
+    assert private.ingested == 1
 
 
 async def test_cycle_coordinates_snapshot_reconciliation_equity_and_entries(
