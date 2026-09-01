@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -21,6 +22,7 @@ from funding_arbitrage.database.models import (
     TickerSnapshotRecord,
 )
 from funding_arbitrage.database.repositories.market_data import (
+    load_portfolio_equity_high_water,
     save_candles,
     save_funding_history,
     save_instruments,
@@ -290,6 +292,50 @@ async def test_market_data_repository_full_idempotent_mapping(
         assert await _count(session, PortfolioSnapshotRecord) == 1
         assert await _count(session, PaperRuntimeIncidentRecord) == 2
         assert await _count(session, PaperFundingPaymentRecord) == 1
+
+
+async def test_portfolio_high_water_prefers_authoritative_combined_scope(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, factory = database
+    async with factory() as session:
+        for scope, equity, minute in (
+            ("legacy", "1600", 0),
+            ("combined", "1500", 1),
+            ("combined", "1100", 2),
+        ):
+            await save_portfolio_snapshot(
+                session,
+                PortfolioSnapshot(
+                    timestamp=NOW + timedelta(minutes=minute),
+                    simulation_version="high-water-test",
+                    equity=Decimal(equity),
+                    cash=Decimal(equity),
+                    locked_capital=Decimal("0"),
+                    total_pnl=Decimal(equity) - Decimal("1000"),
+                    funding_pnl=Decimal("0"),
+                    fees=Decimal("0"),
+                    balances={},
+                ),
+                snapshot_scope=scope,
+            )
+
+        assert await load_portfolio_equity_high_water(
+            session,
+            simulation_version="high-water-test",
+            preferred_scope="combined",
+        ) == Decimal("1500")
+        assert await load_portfolio_equity_high_water(
+            session,
+            simulation_version="high-water-test",
+            preferred_scope="legacy",
+        ) == Decimal("1600")
+        with pytest.raises(ValueError, match="snapshot scope"):
+            await load_portfolio_equity_high_water(
+                session,
+                simulation_version="high-water-test",
+                preferred_scope="unknown",
+            )
 
 
 async def test_save_instruments_bulk_upsert_avoids_n_plus_one_queries(

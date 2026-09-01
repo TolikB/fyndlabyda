@@ -26,6 +26,7 @@ class LiveRiskState:
     day_start_equity: Decimal | None = None
     equity_day: date | None = None
     current_equity: Decimal | None = None
+    current_equity_observed_at: datetime | None = None
     paused_reason: str | None = None
 
 
@@ -85,6 +86,11 @@ class LiveRiskController:
 
     def update_equity(self, equity: Decimal, now: datetime | None = None) -> None:
         observed_at = now or datetime.now(UTC)
+        observed_at = (
+            observed_at
+            if observed_at.tzinfo
+            else observed_at.replace(tzinfo=UTC)
+        ).astimezone(UTC)
         observed_day = observed_at.astimezone(self.timezone).date()
         if self.state.starting_equity is None:
             self.state.starting_equity = equity
@@ -93,6 +99,7 @@ class LiveRiskController:
             self.state.equity_day = observed_day
             self.state.day_start_equity = equity
         self.state.current_equity = equity
+        self.state.current_equity_observed_at = observed_at
         self.state.high_water_equity = max(self.state.high_water_equity or equity, equity)
         if self.state.day_start_equity is not None:
             daily_loss = self.state.day_start_equity - equity

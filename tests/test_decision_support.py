@@ -240,6 +240,20 @@ def test_support_identity_time_and_llm_binding_fail_closed() -> None:
         DecisionSupportGate().assess(intent, mismatched, NOW)
 
 
+def test_legacy_meta_label_payload_preserves_support_identity() -> None:
+    support = BoundDecisionSupport.bind(_intent(), NOW, meta_label=_meta())
+    legacy_payload = support.model_dump(mode="json")
+    meta_payload = legacy_payload["meta_label"]
+    assert isinstance(meta_payload, dict)
+    meta_payload.pop("maximum_feature_age_seconds")
+
+    restored = BoundDecisionSupport.model_validate(legacy_payload)
+
+    assert restored.support_id == support.support_id
+    assert restored.meta_label is not None
+    assert restored.meta_label.maximum_feature_age_seconds is None
+
+
 @pytest.mark.parametrize(
     ("audit_update", "message"),
     [

@@ -472,7 +472,7 @@ class LiveTradingRunner:
 
     async def _record_equity(self, snapshot: MarketSnapshot) -> None:
         total_equity = Decimal("0")
-        persist = self._last_account_snapshot is None or (
+        periodic_persist = self._last_account_snapshot is None or (
             snapshot.captured_at - self._last_account_snapshot
         ).total_seconds() >= self.settings.live_account_snapshot_interval_seconds
         account_snapshots: list[tuple[VenueBalance, Decimal, Decimal]] = []
@@ -494,9 +494,12 @@ class LiveTradingRunner:
                 )
             )
             total_equity += equity
-            if persist:
-                account_snapshots.append((balance, equity, free))
-        if persist:
+            account_snapshots.append((balance, equity, free))
+        previous_high_water = self.risk.state.high_water_equity
+        new_high_water = (
+            previous_high_water is None or total_equity > previous_high_water
+        )
+        if periodic_persist or new_high_water:
             async with self.session_factory() as session:
                 await save_live_account_snapshots(
                     session, account_snapshots, snapshot.captured_at

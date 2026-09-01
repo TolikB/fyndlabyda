@@ -185,6 +185,42 @@ class Settings(BaseSettings):
         default=Decimal("10"),
         alias="MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS",
     )
+    decision_support_enabled: bool = Field(
+        default=False, alias="DECISION_SUPPORT_ENABLED"
+    )
+    decision_support_artifact_root: str = Field(
+        default="artifacts/decision-support",
+        alias="DECISION_SUPPORT_ARTIFACT_ROOT",
+    )
+    decision_support_artifact_bundle_file: str = Field(
+        default="runtime-bundle.json",
+        alias="DECISION_SUPPORT_ARTIFACT_BUNDLE_FILE",
+    )
+    decision_support_artifact_sha256: str = Field(
+        default="", alias="DECISION_SUPPORT_ARTIFACT_SHA256"
+    )
+    decision_support_artifact_maximum_bytes: int = Field(
+        default=1_048_576,
+        alias="DECISION_SUPPORT_ARTIFACT_MAXIMUM_BYTES",
+    )
+    decision_support_meta_label_enabled: bool = Field(
+        default=False, alias="DECISION_SUPPORT_META_LABEL_ENABLED"
+    )
+    decision_support_meta_label_maximum_feature_zscore: Decimal = Field(
+        default=Decimal("6"),
+        alias="DECISION_SUPPORT_META_LABEL_MAXIMUM_FEATURE_ZSCORE",
+    )
+    decision_support_rl_enabled: bool = Field(
+        default=False, alias="DECISION_SUPPORT_RL_ENABLED"
+    )
+    decision_support_rl_maximum_state_age_seconds: Decimal = Field(
+        default=Decimal("2"),
+        alias="DECISION_SUPPORT_RL_MAXIMUM_STATE_AGE_SECONDS",
+    )
+    decision_support_rl_maximum_drawdown_fraction: Decimal = Field(
+        default=Decimal("0.10"),
+        alias="DECISION_SUPPORT_RL_MAXIMUM_DRAWDOWN_FRACTION",
+    )
     options_market_data_enabled: bool = Field(
         default=True, alias="OPTIONS_MARKET_DATA_ENABLED"
     )
@@ -1020,6 +1056,53 @@ def _validate_safe_values(settings: Settings) -> None:
         )
     if settings.canonical_event_flush_interval_seconds <= 0:
         raise ValueError("CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS must be positive")
+    if settings.decision_support_enabled and not settings.multi_regime_enabled:
+        raise ValueError("DECISION_SUPPORT_ENABLED requires MULTI_REGIME_ENABLED=true")
+    decision_support_components_enabled = (
+        settings.decision_support_meta_label_enabled
+        or settings.decision_support_rl_enabled
+    )
+    if decision_support_components_enabled and not settings.decision_support_enabled:
+        raise ValueError(
+            "decision-support components require DECISION_SUPPORT_ENABLED=true"
+        )
+    if settings.decision_support_enabled:
+        if not decision_support_components_enabled:
+            raise ValueError("DECISION_SUPPORT_ENABLED requires an ML or RL component")
+        if not settings.decision_support_artifact_root.strip():
+            raise ValueError("DECISION_SUPPORT_ARTIFACT_ROOT cannot be empty")
+        bundle_path = Path(settings.decision_support_artifact_bundle_file.strip())
+        if (
+            not bundle_path.parts
+            or bundle_path.is_absolute()
+            or ".." in bundle_path.parts
+        ):
+            raise ValueError(
+                "DECISION_SUPPORT_ARTIFACT_BUNDLE_FILE must be a relative path"
+            )
+        artifact_hash = settings.decision_support_artifact_sha256.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", artifact_hash):
+            raise ValueError(
+                "DECISION_SUPPORT_ARTIFACT_SHA256 must be a 64-character hex hash"
+            )
+        if settings.decision_support_artifact_maximum_bytes <= 0:
+            raise ValueError("DECISION_SUPPORT_ARTIFACT_MAXIMUM_BYTES must be positive")
+        if settings.decision_support_meta_label_maximum_feature_zscore <= 0:
+            raise ValueError(
+                "DECISION_SUPPORT_META_LABEL_MAXIMUM_FEATURE_ZSCORE must be positive"
+            )
+        if settings.decision_support_rl_maximum_state_age_seconds <= 0:
+            raise ValueError(
+                "DECISION_SUPPORT_RL_MAXIMUM_STATE_AGE_SECONDS must be positive"
+            )
+        if not (
+            Decimal("0")
+            < settings.decision_support_rl_maximum_drawdown_fraction
+            <= Decimal("1")
+        ):
+            raise ValueError(
+                "DECISION_SUPPORT_RL_MAXIMUM_DRAWDOWN_FRACTION must be in (0, 1]"
+            )
     if settings.multi_regime_enabled:
         if not settings.multi_regime_asset_values:
             raise ValueError("MULTI_REGIME_ASSETS cannot be empty")

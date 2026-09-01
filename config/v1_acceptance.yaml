@@ -370,10 +370,15 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/ai/meta_labeling.py
+      - src/funding_arbitrage/ai/artifacts.py
       - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/runtime_decision_support.py
       - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/main.py
+      - docs/V1_DECISION_SUPPORT_RUNTIME.md
       - tests/test_meta_labeling.py
       - tests/test_decision_support.py
+      - tests/test_runtime_decision_support.py
       - tests/test_multi_regime_runtime.py
   - id: AI-002
     category: strategies
@@ -381,11 +386,18 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/ai/rl_policy.py
+      - src/funding_arbitrage/ai/artifacts.py
       - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/runtime_decision_support.py
       - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/database/repositories/market_data.py
+      - src/funding_arbitrage/main.py
+      - docs/V1_DECISION_SUPPORT_RUNTIME.md
       - tests/test_rl_policy.py
       - tests/test_decision_support.py
+      - tests/test_runtime_decision_support.py
       - tests/test_multi_regime_runtime.py
+      - tests/test_market_data_repository.py
   - id: AI-003
     category: strategies
     title: LLM decisions use versioned schemas, bounded latency and spend, audit, and deterministic fallback

@@ -70,8 +70,8 @@ def test_rl_policy_is_disabled_by_default_and_has_no_execution_authority() -> No
         _state(), NOW, TradingMode.PAPER, _artifact()
     )
 
-    assert decision.action is RLAction.HOLD
-    assert decision.requested_position_fraction_change == Decimal("0")
+    assert decision.action is RLAction.CLOSE
+    assert decision.requested_position_fraction_change == Decimal("-1")
     assert decision.used_fallback is True
     assert decision.reason == "rl_policy_disabled"
     assert decision.execution_authorized is False
@@ -99,7 +99,9 @@ def test_rl_guardrails_block_unpermitted_risk_increase_and_live_use() -> None:
     stress = GuardedRLPolicy(
         RLPolicyConfig(
             enabled=True,
-            permitted_actions=frozenset({RLAction.HOLD, RLAction.INCREASE_10}),
+            permitted_actions=frozenset(
+                {RLAction.HOLD, RLAction.INCREASE_10, RLAction.CLOSE}
+            ),
         )
     ).decide(
         _state(regime=MarketRegime.STRESS),
@@ -119,7 +121,7 @@ def test_rl_guardrails_block_unpermitted_risk_increase_and_live_use() -> None:
     )
 
     assert unpermitted.reason == "rl_action_not_permitted"
-    assert unpermitted.action is RLAction.HOLD
+    assert unpermitted.action is RLAction.CLOSE
     assert stress.reason == "rl_risk_increase_blocked"
     assert live.reason == "rl_live_not_authorized"
     assert live_authorized.action is RLAction.REDUCE_25
@@ -141,6 +143,15 @@ def test_rl_state_artifact_and_reconciliation_fail_closed() -> None:
         TradingMode.PAPER,
         artifact,
     ).reason == "rl_reconciliation_unhealthy"
+    excessive_drawdown = policy.decide(
+        _state(portfolio_drawdown_fraction=Decimal("0.10")),
+        NOW,
+        TradingMode.PAPER,
+        artifact,
+    )
+    assert excessive_drawdown.reason == "rl_drawdown_guardrail"
+    assert excessive_drawdown.used_fallback is True
+    assert excessive_drawdown.action is RLAction.CLOSE
     assert policy.decide(
         _state(schema_version="risk-state-v2"),
         NOW,

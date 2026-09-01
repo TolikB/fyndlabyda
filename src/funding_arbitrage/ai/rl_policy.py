@@ -64,11 +64,11 @@ class RLState(BaseModel):
 
 
 class RLPolicyArtifact(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     policy_version: str = Field(min_length=1)
     dataset_id: str = Field(min_length=1)
-    dataset_checksum: str = Field(min_length=1)
+    dataset_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
     state_schema_version: str = Field(min_length=1)
     feature_names: tuple[str, ...] = Field(min_length=1)
     action_space: tuple[RLAction, ...] = Field(min_length=1)
@@ -76,7 +76,15 @@ class RLPolicyArtifact(BaseModel):
     action_intercepts: dict[RLAction, Decimal]
     trained_at: datetime
     valid_until: datetime
-    artifact_checksum: str = Field(min_length=1)
+    artifact_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("feature_names")
+    @classmethod
+    def normalize_feature_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(name.strip().lower() for name in value)
+        if any(not name for name in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("RL feature names must be unique and nonblank")
+        return normalized
 
     @field_validator("trained_at", "valid_until")
     @classmethod
@@ -93,8 +101,21 @@ class RLPolicyArtifact(BaseModel):
         expected_features = set(self.feature_names)
         if any(set(weights) != expected_features for weights in self.action_weights.values()):
             raise ValueError("RL action weights must match feature schema")
+        parameters = (
+            *self.action_intercepts.values(),
+            *(
+                value
+                for weights in self.action_weights.values()
+                for value in weights.values()
+            ),
+        )
+        if any(not value.is_finite() for value in parameters):
+            raise ValueError("RL policy artifact contains non-finite parameters")
         if self.valid_until <= self.trained_at:
             raise ValueError("RL policy validity must end after training")
+        expected_checksum = _hash_json(_rl_artifact_payload(self))
+        if self.artifact_checksum != expected_checksum:
+            raise ValueError("RL policy artifact checksum mismatch")
         return self
 
     @classmethod
@@ -112,18 +133,21 @@ class RLPolicyArtifact(BaseModel):
         trained_at: datetime,
         valid_until: datetime,
     ) -> RLPolicyArtifact:
-        payload = {
-            "action_intercepts": action_intercepts,
-            "action_space": action_space,
-            "action_weights": action_weights,
-            "dataset_checksum": dataset_checksum,
-            "dataset_id": dataset_id,
-            "feature_names": feature_names,
-            "policy_version": policy_version,
-            "state_schema_version": state_schema_version,
-            "trained_at": _utc(trained_at),
-            "valid_until": _utc(valid_until),
-        }
+        normalized_trained_at = _utc(trained_at)
+        normalized_valid_until = _utc(valid_until)
+        provisional = cls.model_construct(
+            policy_version=policy_version,
+            dataset_id=dataset_id,
+            dataset_checksum=dataset_checksum,
+            state_schema_version=state_schema_version,
+            feature_names=feature_names,
+            action_space=action_space,
+            action_weights=action_weights,
+            action_intercepts=action_intercepts,
+            trained_at=normalized_trained_at,
+            valid_until=normalized_valid_until,
+            artifact_checksum="",
+        )
         return cls(
             policy_version=policy_version,
             dataset_id=dataset_id,
@@ -133,9 +157,9 @@ class RLPolicyArtifact(BaseModel):
             action_space=action_space,
             action_weights=action_weights,
             action_intercepts=action_intercepts,
-            trained_at=trained_at,
-            valid_until=valid_until,
-            artifact_checksum=_hash_json(payload),
+            trained_at=normalized_trained_at,
+            valid_until=normalized_valid_until,
+            artifact_checksum=_hash_json(_rl_artifact_payload(provisional)),
         )
 
 
@@ -149,7 +173,7 @@ class RLPolicyConfig(BaseModel):
     permitted_actions: frozenset[RLAction] = frozenset(
         {RLAction.HOLD, RLAction.REDUCE_25, RLAction.REDUCE_50, RLAction.CLOSE}
     )
-    fallback_action: RLAction = RLAction.HOLD
+    fallback_action: RLAction = RLAction.CLOSE
 
     @model_validator(mode="after")
     def validate_actions(self) -> RLPolicyConfig:
@@ -226,11 +250,6 @@ class GuardedRLPolicy:
             selected.position_fraction_change > 0
         ):
             return self._fallback(state, now, artifact, "rl_risk_increase_blocked")
-        if (
-            state.portfolio_drawdown_fraction > self.config.maximum_drawdown_fraction
-            and selected.position_fraction_change >= 0
-        ):
-            return self._fallback(state, now, artifact, "rl_drawdown_guardrail")
         return RLDecision(
             decision_id=_decision_id(state, now, artifact.policy_version, selected.value),
             action=selected,
@@ -264,6 +283,8 @@ class GuardedRLPolicy:
             return "rl_state_stale"
         if not state.reconciliation_healthy:
             return "rl_reconciliation_unhealthy"
+        if state.portfolio_drawdown_fraction >= self.config.maximum_drawdown_fraction:
+            return "rl_drawdown_guardrail"
         if artifact is None:
             return "rl_artifact_missing"
         if artifact.trained_at > timestamp or artifact.valid_until <= timestamp:
@@ -448,6 +469,13 @@ def _artifact_action(artifact: RLPolicyArtifact, state: RLState) -> RLAction:
         for action in artifact.action_space
     }
     return min(artifact.action_space, key=lambda action: (-scores[action], action.value))
+
+
+def _rl_artifact_payload(artifact: RLPolicyArtifact) -> dict[str, object]:
+    return artifact.model_dump(
+        mode="json",
+        exclude={"artifact_checksum"},
+    )
 
 
 def _decision_id(state: RLState, timestamp: datetime, version: str, reason: str) -> str:

@@ -40,8 +40,14 @@ Historical startup replay never calls an AI provider. Feature state is rebuilt
 without evaluating strategies, then persisted source-event-bound decision batches
 restore signal deduplication and active allocation state. A mismatch in mode,
 signal identity, priority, correlation group, or allocation fails startup. The main
-application currently leaves model providers unwired until versioned artifact
-loading and synchronized inference features are available.
+application now wires optional local meta-label and constrained RL inference through
+a checksummed JSON artifact bundle and a synchronized canonical feature projection.
+Both remain disabled by default and fail closed: stale/invalid ML features veto,
+every RL guardrail fallback closes the candidate intent, drawdown uses the durable
+portfolio high-water mark, and persisted support names the exact bundle checksum.
+LLM inference remains asynchronous upstream; the event engine accepts only an
+already schema-, budget-, latency-, and audit-checked result and never makes an
+implicit network model call.
 
 The active runtime rebuilds a strict as-of multi-instrument view for every canonical
 decision. Rows newer than the source event, stale/crossed books, incomplete venues,

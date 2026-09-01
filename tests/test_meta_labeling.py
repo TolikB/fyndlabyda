@@ -162,6 +162,11 @@ def test_inference_is_calibrated_drift_gated_and_fail_closed() -> None:
         artifact,
     )
     stale = policy.decide(features, AS_OF + timedelta(days=8), artifact)
+    stale_features = policy.decide(
+        features,
+        AS_OF + timedelta(seconds=301),
+        artifact,
+    )
 
     assert decision.model_dump() == repeated.model_dump()
     assert decision.used_fallback is False
@@ -171,6 +176,8 @@ def test_inference_is_calibrated_drift_gated_and_fail_closed() -> None:
     assert drifted.reason == "meta_label_feature_drift"
     assert stale.accepted is False
     assert stale.reason == "meta_label_artifact_stale"
+    assert stale_features.accepted is False
+    assert stale_features.reason == "inference_feature_stale"
 
 
 def test_disabled_or_missing_model_uses_explicit_deterministic_fallback() -> None:

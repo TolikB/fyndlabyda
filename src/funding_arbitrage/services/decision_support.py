@@ -31,6 +31,10 @@ class BoundDecisionSupport(BaseModel):
     support_id: str = Field(min_length=1)
     signal_id: str = Field(min_length=1)
     intent_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_bundle_checksum: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     evaluated_at: datetime
     meta_label: MetaLabelDecision | None = None
     rl: RLDecision | None = None
@@ -76,6 +80,7 @@ class BoundDecisionSupport(BaseModel):
         expected = _support_id(
             signal_id=self.signal_id,
             intent_fingerprint=self.intent_fingerprint,
+            artifact_bundle_checksum=self.artifact_bundle_checksum,
             evaluated_at=self.evaluated_at,
             meta_label=self.meta_label,
             rl=self.rl,
@@ -92,6 +97,7 @@ class BoundDecisionSupport(BaseModel):
         intent: SignalIntent,
         evaluated_at: datetime,
         *,
+        artifact_bundle_checksum: str | None = None,
         meta_label: MetaLabelDecision | None = None,
         rl: RLDecision | None = None,
         llm_request: LLMDecisionRequest | None = None,
@@ -103,6 +109,7 @@ class BoundDecisionSupport(BaseModel):
             support_id=_support_id(
                 signal_id=intent.signal_id,
                 intent_fingerprint=fingerprint,
+                artifact_bundle_checksum=artifact_bundle_checksum,
                 evaluated_at=timestamp,
                 meta_label=meta_label,
                 rl=rl,
@@ -111,6 +118,7 @@ class BoundDecisionSupport(BaseModel):
             ),
             signal_id=intent.signal_id,
             intent_fingerprint=fingerprint,
+            artifact_bundle_checksum=artifact_bundle_checksum,
             evaluated_at=timestamp,
             meta_label=meta_label,
             rl=rl,
@@ -272,13 +280,14 @@ def _support_id(
     *,
     signal_id: str,
     intent_fingerprint: str,
+    artifact_bundle_checksum: str | None,
     evaluated_at: datetime,
     meta_label: MetaLabelDecision | None,
     rl: RLDecision | None,
     llm_request: LLMDecisionRequest | None,
     llm_result: LLMGatewayResult | None,
 ) -> str:
-    payload = {
+    payload: dict[str, object] = {
         "signal_id": signal_id,
         "intent_fingerprint": intent_fingerprint,
         "evaluated_at": _utc(evaluated_at).isoformat(),
@@ -287,6 +296,8 @@ def _support_id(
         "llm_request": _dump(llm_request),
         "llm_result": _dump(llm_result),
     }
+    if artifact_bundle_checksum is not None:
+        payload["artifact_bundle_checksum"] = artifact_bundle_checksum
     return _stable_id("support", payload)
 
 
@@ -308,7 +319,15 @@ def _assessment_id(
 
 
 def _dump(model: BaseModel | None) -> dict[str, object] | None:
-    return model.model_dump(mode="json") if model is not None else None
+    if model is None:
+        return None
+    payload: dict[str, object] = model.model_dump(mode="json")
+    if (
+        isinstance(model, MetaLabelDecision)
+        and model.maximum_feature_age_seconds is None
+    ):
+        payload.pop("maximum_feature_age_seconds", None)
+    return payload
 
 
 def _stable_id(prefix: str, payload: object) -> str:

@@ -194,12 +194,12 @@ class MetaLabelTrainerConfig(BaseModel):
 
 
 class MetaLabelArtifact(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model_version: str
-    dataset_id: str
-    dataset_checksum: str
-    feature_names: tuple[str, ...]
+    model_version: str = Field(min_length=1)
+    dataset_id: str = Field(min_length=1)
+    dataset_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
+    feature_names: tuple[str, ...] = Field(min_length=1)
     feature_means: dict[str, Decimal]
     feature_standard_deviations: dict[str, Decimal]
     coefficients: dict[str, Decimal]
@@ -210,7 +210,15 @@ class MetaLabelArtifact(BaseModel):
     validation_brier_score: Decimal = Field(ge=0, le=1)
     trained_at: datetime
     valid_until: datetime
-    artifact_checksum: str
+    artifact_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("feature_names")
+    @classmethod
+    def normalize_feature_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(name.strip().lower() for name in value)
+        if any(not name for name in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("artifact feature names must be unique and nonblank")
+        return normalized
 
     @field_validator("trained_at", "valid_until")
     @classmethod
@@ -231,9 +239,82 @@ class MetaLabelArtifact(BaseModel):
             raise ValueError("artifact feature maps must match feature_names")
         if any(value <= 0 for value in self.feature_standard_deviations.values()):
             raise ValueError("artifact feature deviations must be positive")
+        numeric_values = (
+            *self.feature_means.values(),
+            *self.feature_standard_deviations.values(),
+            *self.coefficients.values(),
+            self.intercept,
+            self.calibration_slope,
+            self.calibration_intercept,
+            self.decision_threshold,
+            self.validation_brier_score,
+        )
+        if any(not value.is_finite() for value in numeric_values):
+            raise ValueError("meta-label artifact contains non-finite parameters")
         if self.valid_until <= self.trained_at:
             raise ValueError("model validity must end after training")
+        expected_checksum = _hash_json(_meta_label_artifact_payload(self))
+        if self.artifact_checksum != expected_checksum:
+            raise ValueError("meta-label artifact checksum mismatch")
         return self
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        model_version: str,
+        dataset_id: str,
+        dataset_checksum: str,
+        feature_names: tuple[str, ...],
+        feature_means: dict[str, Decimal],
+        feature_standard_deviations: dict[str, Decimal],
+        coefficients: dict[str, Decimal],
+        intercept: Decimal,
+        calibration_slope: Decimal,
+        calibration_intercept: Decimal,
+        decision_threshold: Decimal,
+        validation_brier_score: Decimal,
+        trained_at: datetime,
+        valid_until: datetime,
+    ) -> MetaLabelArtifact:
+        normalized_trained_at = _utc(trained_at)
+        normalized_valid_until = _utc(valid_until)
+        provisional = cls.model_construct(
+            model_version=model_version,
+            dataset_id=dataset_id,
+            dataset_checksum=dataset_checksum,
+            feature_names=feature_names,
+            feature_means=feature_means,
+            feature_standard_deviations=feature_standard_deviations,
+            coefficients=coefficients,
+            intercept=intercept,
+            calibration_slope=calibration_slope,
+            calibration_intercept=calibration_intercept,
+            decision_threshold=decision_threshold,
+            validation_brier_score=validation_brier_score,
+            trained_at=normalized_trained_at,
+            valid_until=normalized_valid_until,
+            artifact_checksum="",
+        )
+        return cls(
+            model_version=model_version,
+            dataset_id=dataset_id,
+            dataset_checksum=dataset_checksum,
+            feature_names=feature_names,
+            feature_means=feature_means,
+            feature_standard_deviations=feature_standard_deviations,
+            coefficients=coefficients,
+            intercept=intercept,
+            calibration_slope=calibration_slope,
+            calibration_intercept=calibration_intercept,
+            decision_threshold=decision_threshold,
+            validation_brier_score=validation_brier_score,
+            trained_at=normalized_trained_at,
+            valid_until=normalized_valid_until,
+            artifact_checksum=_hash_json(
+                _meta_label_artifact_payload(provisional)
+            ),
+        )
 
 
 class CalibratedMetaLabelTrainer:
@@ -336,18 +417,7 @@ class CalibratedMetaLabelTrainer:
             ),
             ZERO,
         ) / validation_count
-        payload = {
-            "coefficients": coefficients,
-            "dataset_checksum": dataset.checksum,
-            "dataset_id": dataset.dataset_id,
-            "feature_means": means,
-            "feature_standard_deviations": deviations,
-            "intercept": intercept,
-            "model_version": model_version,
-            "calibration_slope": calibration_slope,
-            "calibration_intercept": calibration_intercept,
-        }
-        return MetaLabelArtifact(
+        return MetaLabelArtifact.create(
             model_version=model_version,
             dataset_id=dataset.dataset_id,
             dataset_checksum=dataset.checksum,
@@ -362,7 +432,6 @@ class CalibratedMetaLabelTrainer:
             validation_brier_score=brier,
             trained_at=trained_at,
             valid_until=valid_until,
-            artifact_checksum=_hash_json(payload),
         )
 
 
@@ -376,6 +445,7 @@ class MetaLabelInferenceConfig(BaseModel):
 
     enabled: bool = False
     maximum_feature_zscore: Decimal = Field(default=Decimal("6"), gt=0)
+    maximum_feature_age_seconds: Decimal = Field(default=Decimal("300"), gt=0)
     fallback: MetaLabelFallback = MetaLabelFallback.REJECT
 
 
@@ -389,6 +459,7 @@ class MetaLabelDecision(BaseModel):
     reason: str
     model_version: str | None = None
     maximum_feature_zscore: Decimal | None = Field(default=None, ge=0)
+    maximum_feature_age_seconds: Decimal | None = Field(default=None, gt=0)
 
 
 class MetaLabelPolicy:
@@ -416,6 +487,12 @@ class MetaLabelPolicy:
             fallback_reason = "meta_label_artifact_stale"
         elif set(feature_map) != set(artifact.feature_names):
             fallback_reason = "meta_label_schema_mismatch"
+        elif any(
+            Decimal(str((now - feature.available_at).total_seconds()))
+            > self.config.maximum_feature_age_seconds
+            for feature in features
+        ):
+            fallback_reason = "inference_feature_stale"
         if fallback_reason is not None:
             return self._fallback(fallback_reason, features, now, artifact)
         assert artifact is not None
@@ -449,6 +526,9 @@ class MetaLabelPolicy:
             reason=reason,
             model_version=artifact.model_version,
             maximum_feature_zscore=maximum_zscore,
+            maximum_feature_age_seconds=(
+                self.config.maximum_feature_age_seconds
+            ),
         )
 
     def _fallback(
@@ -466,6 +546,9 @@ class MetaLabelPolicy:
             used_fallback=True,
             reason=reason,
             model_version=version,
+            maximum_feature_age_seconds=(
+                self.config.maximum_feature_age_seconds
+            ),
         )
 
 
@@ -479,6 +562,15 @@ def _standardize(
         name: (values[name] - means[name]) / deviations[name]
         for name in names
     }
+
+
+def _meta_label_artifact_payload(
+    artifact: MetaLabelArtifact,
+) -> dict[str, object]:
+    return artifact.model_dump(
+        mode="json",
+        exclude={"artifact_checksum"},
+    )
 
 
 def _sigmoid(value: Decimal) -> Decimal:

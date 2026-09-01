@@ -1,5 +1,11 @@
 """Guarded decision-support components; none can authorize execution size."""
 
+from funding_arbitrage.ai.artifacts import (
+    ARTIFACT_BUNDLE_SCHEMA_VERSION,
+    DecisionSupportArtifactBundle,
+    DecisionSupportArtifactError,
+    load_decision_support_artifacts,
+)
 from funding_arbitrage.ai.llm_gateway import (
     GuardedLLMGateway,
     LLMAction,
@@ -43,7 +49,10 @@ from funding_arbitrage.ai.rl_policy import (
 )
 
 __all__ = [
+    "ARTIFACT_BUNDLE_SCHEMA_VERSION",
     "CalibratedMetaLabelTrainer",
+    "DecisionSupportArtifactBundle",
+    "DecisionSupportArtifactError",
     "GuardedRLPolicy",
     "GuardedLLMGateway",
     "LLMAuditRecord",
@@ -78,4 +87,5 @@ __all__ = [
     "TemporalDatasetSplit",
     "TemporalSplitConfig",
     "TimedFeature",
+    "load_decision_support_artifacts",
 ]

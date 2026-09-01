@@ -90,11 +90,15 @@ seen and active state, and current policy/config must reproduce their priority,
 correlation, and allocation projections. This keeps restart behavior deterministic
 and prevents changed model artifacts or exhausted budgets from rewriting history.
 
-The application does not yet instantiate a live meta-label, RL, or LLM provider.
-Their typed policies, audit gateway, bounded support contract, persistence, and
-restart path are implemented, but runtime activation still requires versioned model
-artifact loading and synchronized feature projection. Until then assessments are
-empty rather than fabricated, and no AI claim is made for deployed behavior.
+The application can now instantiate local meta-label and constrained RL providers
+from one explicitly enabled, file-hash-pinned, internally checksummed JSON bundle.
+The feature projection is fixed, timestamped, and bound to the exact canonical
+strategy snapshot and signal. Missing or incompatible input follows deterministic
+rejecting fallback rather than being fabricated; feature TTL, durable portfolio
+high-water drawdown, and the exact artifact-bundle checksum are retained in the
+decision path. LLM inference remains an asynchronous upstream boundary; the
+synchronous engine consumes only an audited result and never performs an implicit
+network call. All components remain disabled by default.
 
 ## Runtime projection
 

@@ -7,6 +7,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from time import perf_counter
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import make_asgi_app
 
+from funding_arbitrage.ai import load_decision_support_artifacts
 from funding_arbitrage.api.routes.analytics import router as analytics_router
 from funding_arbitrage.api.routes.backtests import (
     market_backtest_recovery_loop,
@@ -37,6 +39,9 @@ from funding_arbitrage.database.repositories.backtest_jobs import (
 )
 from funding_arbitrage.database.repositories.control_plane import (
     DatabaseControlPlaneIdempotencyStore,
+)
+from funding_arbitrage.database.repositories.market_data import (
+    load_portfolio_equity_high_water,
 )
 from funding_arbitrage.database.session import create_database, init_database
 from funding_arbitrage.domain.decisions import SignalType
@@ -77,6 +82,12 @@ from funding_arbitrage.services.paper_runner import (
     SharedMarketPaperComparisonRunner,
 )
 from funding_arbitrage.services.runtime import RuntimeState
+from funding_arbitrage.services.runtime_decision_support import (
+    EquityHighWaterDrawdown,
+    RuntimeDecisionSupportConfig,
+    RuntimeDecisionSupportProvider,
+    fresh_equity_drawdown,
+)
 from funding_arbitrage.services.runtime_universe import RuntimeUniversePublisher
 from funding_arbitrage.services.strategy_suite import PAPER_EXECUTABLE_SIGNAL_TYPES
 from funding_arbitrage.storage.clickhouse import (
@@ -181,6 +192,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     event_router = CanonicalEventRouter(event_writer, event_quality_monitor)
     multi_regime_runtime: DurableMultiRegimeRuntime | None = None
+    decision_support_provider: RuntimeDecisionSupportProvider | None = None
+    decision_support_drawdown_tracker: EquityHighWaterDrawdown | None = None
+    live_runner_for_decision_support: LiveTradingRunner | None = None
     universe_publisher: RuntimeUniversePublisher | None = None
     paper_broker: DirectionalPaperBroker | None = None
     advanced_paper_broker: AdvancedStrategyPaperBroker | None = None
@@ -287,6 +301,91 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             paper_broker,
             advanced_paper_broker,
         )
+        if active_settings.decision_support_enabled:
+            artifacts = load_decision_support_artifacts(
+                active_settings.decision_support_artifact_root,
+                active_settings.decision_support_artifact_bundle_file,
+                expected_file_sha256=(
+                    active_settings.decision_support_artifact_sha256
+                ),
+                maximum_bytes=(
+                    active_settings.decision_support_artifact_maximum_bytes
+                ),
+            )
+
+            if active_settings.run_mode != "live":
+                decision_support_drawdown_tracker = EquityHighWaterDrawdown(
+                    active_settings.paper_initial_balance_usd
+                )
+
+            def decision_support_drawdown(timestamp: datetime) -> Decimal:
+                if active_settings.run_mode == "live":
+                    live_runner = live_runner_for_decision_support
+                    if live_runner is None or not live_runner.initialized:
+                        raise RuntimeError(
+                            "live decision-support equity is not initialized"
+                        )
+                    live_state = live_runner.risk.state
+                    return fresh_equity_drawdown(
+                        current_equity=live_state.current_equity,
+                        high_water_equity=live_state.high_water_equity,
+                        observed_at=live_state.current_equity_observed_at,
+                        evaluated_at=timestamp,
+                        maximum_age_seconds=Decimal(
+                            str(
+                                max(
+                                    active_settings.live_loop_interval_seconds * 3,
+                                    active_settings.request_timeout_seconds * 2,
+                                )
+                            )
+                        ),
+                    )
+                combined = (
+                    multi_regime_runtime.combined_portfolio_snapshot(timestamp)
+                    if multi_regime_runtime is not None
+                    else None
+                )
+                portfolio = combined or runtime.portfolio.snapshot(timestamp)
+                assert decision_support_drawdown_tracker is not None
+                return decision_support_drawdown_tracker.observe(portfolio.equity)
+
+            decision_support_provider = RuntimeDecisionSupportProvider(
+                artifacts,
+                RuntimeDecisionSupportConfig(
+                    meta_label_enabled=(
+                        active_settings.decision_support_meta_label_enabled
+                    ),
+                    rl_enabled=active_settings.decision_support_rl_enabled,
+                    meta_label_maximum_feature_zscore=(
+                        active_settings.decision_support_meta_label_maximum_feature_zscore
+                    ),
+                    intent_feature_maximum_age_seconds=Decimal(
+                        active_settings.multi_regime_stale_after_seconds
+                    ),
+                    technical_feature_maximum_age_seconds=Decimal(
+                        active_settings.multi_regime_strategy_interval_seconds
+                        + active_settings.multi_regime_source_interval_seconds
+                    ),
+                    orderflow_feature_maximum_age_seconds=Decimal(
+                        active_settings.multi_regime_stale_after_seconds
+                    ),
+                    regime_feature_maximum_age_seconds=Decimal(
+                        active_settings.multi_regime_regime_interval_seconds
+                        + active_settings.multi_regime_source_interval_seconds
+                    ),
+                    derivatives_feature_maximum_age_seconds=Decimal(
+                        active_settings.funding_snapshot_stale_seconds
+                    ),
+                    rl_maximum_state_age_seconds=(
+                        active_settings.decision_support_rl_maximum_state_age_seconds
+                    ),
+                    rl_maximum_drawdown_fraction=(
+                        active_settings.decision_support_rl_maximum_drawdown_fraction
+                    ),
+                ),
+                drawdown_provider=decision_support_drawdown,
+                reconciliation_health_provider=lambda: entry_health()[0],
+            )
         multi_regime_engine = MultiRegimeEngine(
             MultiRegimeEngineConfig(
                 mode=runtime_mode,
@@ -313,6 +412,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 PAPER_EXECUTABLE_SIGNAL_TYPES - {SignalType.FUNDING_BASIS}
             ),
             supplemental_context_provider=supplemental_provider,
+            decision_support_provider=decision_support_provider,
             execution_snapshot_provider=execution_snapshot_provider,
             advanced_risk_context_provider=advanced_risk_provider,
         )
@@ -392,6 +492,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        nonlocal live_runner_for_decision_support
         configure_logging(active_settings.log_level)
         app.state.adapters = adapters
         app.state.adapter = adapters["bybit"]
@@ -401,6 +502,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_router = event_router
         app.state.event_quality_monitor = event_quality_monitor
         app.state.multi_regime_runtime = multi_regime_runtime
+        app.state.decision_support_provider = decision_support_provider
+        app.state.decision_support_drawdown_tracker = (
+            decision_support_drawdown_tracker
+        )
         app.state.universe_publisher = universe_publisher
         app.state.clickhouse_replicator = clickhouse_replicator
         app.state.clickhouse_decision_replicator = clickhouse_decision_replicator
@@ -496,6 +601,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     start=datetime.now(UTC)
                     - timedelta(hours=active_settings.multi_regime_restore_hours)
                 )
+            if decision_support_drawdown_tracker is not None:
+                preferred_scope = "combined" if paper_broker is not None else "legacy"
+                async with session_factory() as session:
+                    high_water = await load_portfolio_equity_high_water(
+                        session,
+                        simulation_version=active_settings.paper_simulation_version,
+                        preferred_scope=preferred_scope,
+                    )
+                if high_water is not None:
+                    decision_support_drawdown_tracker.restore(high_water)
+                current = (
+                    multi_regime_runtime.combined_portfolio_snapshot(
+                        datetime.now(UTC)
+                    )
+                    if multi_regime_runtime is not None
+                    else None
+                ) or runtime.portfolio.snapshot(datetime.now(UTC))
+                decision_support_drawdown_tracker.observe(current.equity)
             if (
                 isinstance(runner, PaperTestRunner)
                 and runner.acceptance_collector is not None
@@ -522,6 +645,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 canonical_book_event_sink=event_router.publish,
                 canonical_option_event_sink=event_router.publish,
             )
+            live_runner_for_decision_support = runner
             app.state.live_runner = runner
             task = asyncio.create_task(runner.run(), name="live-trading-runner")
         primary_error: BaseException | None = None

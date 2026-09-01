@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +43,32 @@ from ..models import (
     TickerSnapshotRecord,
 )
 from .ledger import append_funding_cashflow
+
+
+async def load_portfolio_equity_high_water(
+    session: AsyncSession,
+    *,
+    simulation_version: str,
+    preferred_scope: str,
+) -> Decimal | None:
+    """Load the durable peak equity, preferring the authoritative scope."""
+
+    if preferred_scope not in {"legacy", "combined"}:
+        raise ValueError("portfolio snapshot scope must be legacy or combined")
+
+    async def maximum_for(scope: str) -> Decimal | None:
+        value = await session.scalar(
+            select(func.max(PortfolioSnapshotRecord.equity)).where(
+                PortfolioSnapshotRecord.simulation_version == simulation_version,
+                PortfolioSnapshotRecord.snapshot_scope == scope,
+            )
+        )
+        return Decimal(str(value)) if value is not None else None
+
+    preferred = await maximum_for(preferred_scope)
+    if preferred is not None or preferred_scope == "legacy":
+        return preferred
+    return await maximum_for("legacy")
 
 
 async def save_instruments(session: AsyncSession, instruments: list[NormalizedInstrument]) -> None:

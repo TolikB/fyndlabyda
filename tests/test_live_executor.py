@@ -986,6 +986,7 @@ def test_restored_daily_risk_baseline_cannot_be_reset_by_restart(
     risk.update_equity(Decimal("990"), now)
 
     assert risk.paused_reason == "daily_loss_limit"
+    assert risk.state.current_equity_observed_at == now
 
 
 def test_live_equity_valuation_pauses_on_unpriced_non_stable_asset(

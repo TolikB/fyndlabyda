@@ -46,6 +46,7 @@ class FakeRisk:
             high_water_equity=None,
             day_start_equity=None,
             current_equity=None,
+            current_equity_observed_at=None,
         )
         self.restored: dict[str, object] | None = None
 
@@ -62,6 +63,7 @@ class FakeRisk:
             self.state.starting_equity = equity
             self.state.high_water_equity = equity
         self.state.current_equity = equity
+        self.state.current_equity_observed_at = now
         self.state.high_water_equity = max(self.state.high_water_equity, equity)
 
     def restore_baselines(self, **values: object) -> None:
@@ -577,7 +579,29 @@ async def test_persist_market_obeys_interval_and_record_equity_uses_real_balance
 
     assert "accounts" in saves
     assert runner.risk.state.current_equity == Decimal("325")
+    assert runner.risk.state.current_equity_observed_at == snapshot.captured_at
     assert runner._last_account_snapshot == snapshot.captured_at
+
+    higher_snapshot = replace(
+        snapshot,
+        captured_at=snapshot.captured_at + timedelta(seconds=10),
+    )
+    runner._balances["gate"] = runner._balances["gate"].model_copy(
+        update={"equity_usd": Decimal("150")}
+    )
+    await runner._record_equity(higher_snapshot)
+
+    lower_snapshot = replace(
+        snapshot,
+        captured_at=snapshot.captured_at + timedelta(seconds=20),
+    )
+    runner._balances["gate"] = runner._balances["gate"].model_copy(
+        update={"equity_usd": Decimal("140")}
+    )
+    await runner._record_equity(lower_snapshot)
+
+    assert saves.count("accounts") == 2
+    assert runner._last_account_snapshot == higher_snapshot.captured_at
 
 
 class BalanceAdapter:

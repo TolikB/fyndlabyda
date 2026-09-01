@@ -108,6 +108,26 @@ paper_runner_stage_duration_seconds = Histogram(
     "Paper runner stage duration",
     ["stage"],
 )
+decision_support_artifact_loaded = Gauge(
+    "funding_decision_support_artifact_loaded",
+    "Whether a checksummed decision-support artifact is active",
+    ["component"],
+)
+decision_support_decisions_total = Counter(
+    "funding_decision_support_decisions_total",
+    "Local decision-support outcomes",
+    ["component", "outcome", "fallback"],
+)
+decision_support_projection_failures_total = Counter(
+    "funding_decision_support_projection_failures_total",
+    "Decision-support feature projections that were incomplete or invalid",
+    ["component"],
+)
+decision_support_inference_duration_seconds = Histogram(
+    "funding_decision_support_inference_duration_seconds",
+    "Local decision-support inference duration",
+    ["component"],
+)
 paper_trade_rejections_total = Counter(
     "funding_paper_trade_rejections_total",
     "Paper trade rejections",
