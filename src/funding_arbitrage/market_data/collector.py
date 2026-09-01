@@ -11,7 +11,9 @@ from decimal import Decimal
 
 from funding_arbitrage.domain.events import (
     BookEvent,
+    EventEnvelope,
     InstrumentKey,
+    OptionQuoteSnapshot,
 )
 from funding_arbitrage.domain.events import (
     InstrumentType as CanonicalInstrumentType,
@@ -28,6 +30,10 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.canonical_snapshot import canonical_snapshot_event
 from funding_arbitrage.market_data.health import CircuitBreaker
+from funding_arbitrage.market_data.option_quotes import (
+    bounded_option_chain,
+    canonical_option_quote_event,
+)
 from funding_arbitrage.monitoring.metrics import (
     exchange_stream_last_message_timestamp,
     funding_history_coverage_ratio,
@@ -41,6 +47,9 @@ from funding_arbitrage.monitoring.metrics import (
 logger = logging.getLogger(__name__)
 
 CanonicalBookEventSink = Callable[[BookEvent], Awaitable[None]]
+CanonicalOptionEventSink = Callable[
+    [EventEnvelope[OptionQuoteSnapshot]], Awaitable[None]
+]
 
 
 class _CanonicalBookPublicationError(RuntimeError):
@@ -60,6 +69,7 @@ class MarketSnapshot:
     stale_after_seconds: int = 30
     incomplete_venues: tuple[str, ...] = ()
     funding_history_refreshed: dict[tuple[str, str], datetime] = field(default_factory=dict)
+    option_quotes: tuple[OptionQuoteSnapshot, ...] = ()
     _ticker_index: dict[tuple[str, str, InstrumentType], Ticker] = field(
         init=False, repr=False, compare=False
     )
@@ -69,6 +79,9 @@ class MarketSnapshot:
     _instrument_index: dict[
         tuple[str, str, InstrumentType], NormalizedInstrument
     ] = field(
+        init=False, repr=False, compare=False
+    )
+    _option_index: dict[str, OptionQuoteSnapshot] = field(
         init=False, repr=False, compare=False
     )
 
@@ -92,6 +105,14 @@ class MarketSnapshot:
             {
                 (item.exchange, item.exchange_symbol, item.instrument_type): item
                 for item in self.instruments
+            },
+        )
+        object.__setattr__(
+            self,
+            "_option_index",
+            {
+                item.instrument.canonical_id: item
+                for item in self.option_quotes
             },
         )
 
@@ -123,6 +144,9 @@ class MarketSnapshot:
     ) -> OrderBook | None:
         return self.orderbooks.get((exchange, symbol, instrument_type))
 
+    def option_quote(self, instrument: InstrumentKey) -> OptionQuoteSnapshot | None:
+        return self._option_index.get(instrument.canonical_id)
+
 
 @dataclass(frozen=True)
 class _VenueCollection:
@@ -135,6 +159,7 @@ class _VenueCollection:
     funding_history_refreshed: dict[tuple[str, str], datetime] = field(
         default_factory=dict
     )
+    option_quotes: tuple[OptionQuoteSnapshot, ...] = ()
 
 
 class MarketDataCollector:
@@ -148,7 +173,13 @@ class MarketDataCollector:
         enable_streams: bool = False,
         rest_validation_seconds: int = 60,
         *,
+        option_assets: Iterable[str] = (),
+        option_refresh_seconds: float = 5.0,
+        option_maximum_expiries: int = 2,
+        option_strikes_per_expiry: int = 3,
         canonical_book_event_sink: CanonicalBookEventSink | None = None,
+        canonical_option_event_sink: CanonicalOptionEventSink | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.adapters = tuple(adapters)
         if orderbook_symbol_limit <= 0:
@@ -157,13 +188,27 @@ class MarketDataCollector:
             raise ValueError("market_asset_limit must be positive")
         if history_symbol_limit <= 0:
             raise ValueError("history_symbol_limit must be positive")
+        if option_refresh_seconds <= 0:
+            raise ValueError("option_refresh_seconds must be positive")
+        if option_maximum_expiries <= 0 or option_strikes_per_expiry <= 0:
+            raise ValueError("option chain bounds must be positive")
         self.orderbook_symbol_limit = orderbook_symbol_limit
         self.market_asset_limit = market_asset_limit
         self.history_symbol_limit = history_symbol_limit
         self.stale_after_seconds = stale_after_seconds
         self.enable_streams = enable_streams
         self.rest_validation_seconds = rest_validation_seconds
+        self.option_assets = tuple(
+            dict.fromkeys(
+                asset.strip().upper() for asset in option_assets if asset.strip()
+            )
+        )
+        self.option_refresh_seconds = option_refresh_seconds
+        self.option_maximum_expiries = option_maximum_expiries
+        self.option_strikes_per_expiry = option_strikes_per_expiry
         self.canonical_book_event_sink = canonical_book_event_sink
+        self.canonical_option_event_sink = canonical_option_event_sink
+        self._clock = clock
         self.health = {adapter.name: CircuitBreaker() for adapter in self.adapters}
         self._funding_history_cache: dict[tuple[str, str], list[FundingHistoryPoint]] = {}
         self._instrument_cache: dict[str, list[NormalizedInstrument]] = {}
@@ -171,6 +216,8 @@ class MarketDataCollector:
         self._funding_cache: dict[str, list[FundingSnapshot]] = {}
         self._last_rest_ticker_fetch: dict[str, datetime] = {}
         self._last_funding_fetch: dict[str, datetime] = {}
+        self._option_quote_cache: dict[str, tuple[OptionQuoteSnapshot, ...]] = {}
+        self._last_option_fetch: dict[str, datetime] = {}
         self._stream_ticker_cache: dict[tuple[str, str, InstrumentType], Ticker] = {}
         self._stream_tasks: dict[str, asyncio.Task[None]] = {}
         self._stream_ticker_requests: dict[
@@ -274,6 +321,9 @@ class MarketDataCollector:
             for result in collections
             for item in result.funding_history_refreshed.items()
         )
+        option_quotes = tuple(
+            item for result in collections for item in result.option_quotes
+        )
         collection_by_venue = {
             adapter.name: result
             for adapter, result in zip(active_adapters, collections, strict=True)
@@ -302,6 +352,7 @@ class MarketDataCollector:
             stale_after_seconds=self.stale_after_seconds,
             incomplete_venues=incomplete_venues,
             funding_history_refreshed=funding_history_refreshed,
+            option_quotes=option_quotes,
         )
 
     async def _refresh_funding_aged_during_collection(
@@ -340,6 +391,7 @@ class MarketDataCollector:
                     current.funding_history,
                     False,
                     current.funding_history_refreshed,
+                    current.option_quotes,
                 )
                 logger.warning(
                     "stale_funding_refresh_failed",
@@ -367,6 +419,7 @@ class MarketDataCollector:
                 current.funding_history,
                 current.operationally_complete,
                 current.funding_history_refreshed,
+                current.option_quotes,
             )
             self._funding_cache[adapter.name] = value
             self._last_funding_fetch[adapter.name] = refreshed_at
@@ -397,6 +450,7 @@ class MarketDataCollector:
                 current.funding_history,
                 current.operationally_complete,
                 current.funding_history_refreshed,
+                current.option_quotes,
             )
             if not _required_tickers_are_fresh(
                 adapter.name,
@@ -424,6 +478,7 @@ class MarketDataCollector:
                         current.funding_history,
                         False,
                         current.funding_history_refreshed,
+                        current.option_quotes,
                     )
                     logger.warning(
                         "stale_required_ticker_refresh_failed",
@@ -475,6 +530,7 @@ class MarketDataCollector:
                     current.funding_history,
                     operationally_complete,
                     current.funding_history_refreshed,
+                    current.option_quotes,
                 )
                 self._rest_ticker_cache[adapter.name] = value
                 self._last_rest_ticker_fetch[adapter.name] = refreshed_at
@@ -692,6 +748,7 @@ class MarketDataCollector:
                     len(covered) / len(selected) if selected else 0
                 )
                 history_complete = len(covered) == len(selected)
+            option_quotes = await self._load_option_quotes(adapter, self._clock())
             operationally_complete = (
                 bool(valid_tickers)
                 and bool(venue_funding)
@@ -713,6 +770,7 @@ class MarketDataCollector:
                 funding_history,
                 operationally_complete,
                 funding_history_refreshed,
+                option_quotes,
             )
         except _CanonicalBookPublicationError:
             raise
@@ -727,6 +785,84 @@ class MarketDataCollector:
                 extra={"exchange": adapter.name, "event": "market_data_collection"},
             )
             return _VenueCollection([], [], [], {}, {}, False)
+
+    async def _load_option_quotes(
+        self,
+        adapter: ExchangeAdapter,
+        now: datetime,
+    ) -> tuple[OptionQuoteSnapshot, ...]:
+        if not self.option_assets:
+            return ()
+        cached = self._option_quote_cache.get(adapter.name, ())
+        last_fetch = self._last_option_fetch.get(adapter.name)
+        if (
+            last_fetch is not None
+            and (now - last_fetch).total_seconds() < self.option_refresh_seconds
+        ):
+            return _fresh_option_quotes(cached, now, self.stale_after_seconds)
+        try:
+            raw_quotes = await adapter.get_option_chain(self.option_assets)
+            observed_at = max(now, self._clock())
+            bounded = bounded_option_chain(
+                raw_quotes,
+                as_of=observed_at,
+                maximum_expiries=self.option_maximum_expiries,
+                strikes_per_expiry=self.option_strikes_per_expiry,
+            )
+            identities: set[str] = set()
+            valid: list[OptionQuoteSnapshot] = []
+            for quote in bounded:
+                identity = quote.instrument.canonical_id
+                age = (observed_at - quote.exchange_timestamp).total_seconds()
+                if (
+                    quote.instrument.venue.lower() != adapter.name.lower()
+                    or identity in identities
+                    or age < 0
+                    or age > self.stale_after_seconds
+                ):
+                    continue
+                identities.add(identity)
+                valid.append(quote)
+            quotes = tuple(valid)
+            await self._publish_option_quote_events(
+                adapter.name,
+                quotes,
+                observed_at,
+            )
+        except Exception:
+            failed_at = max(now, self._clock())
+            logger.warning(
+                "option_chain_refresh_failed",
+                extra={
+                    "exchange": adapter.name,
+                    "event": "option_market_data_recovery",
+                },
+                exc_info=True,
+            )
+            return _fresh_option_quotes(cached, failed_at, self.stale_after_seconds)
+        self._option_quote_cache[adapter.name] = quotes
+        self._last_option_fetch[adapter.name] = observed_at
+        return quotes
+
+    async def _publish_option_quote_events(
+        self,
+        exchange: str,
+        quotes: tuple[OptionQuoteSnapshot, ...],
+        observed_at: datetime,
+    ) -> None:
+        sink = self.canonical_option_event_sink
+        if sink is None or not quotes:
+            return
+        events = tuple(
+            canonical_option_quote_event(
+                quote,
+                source=f"{exchange}.PUBLIC.OPTION.REST",
+                receive_timestamp=observed_at,
+            )
+            for quote in quotes
+        )
+        for event in events:
+            await sink(event)
 
     async def _publish_rest_book_events(
         self,
@@ -1041,6 +1177,20 @@ def _is_valid_ticker(ticker: Ticker) -> bool:
         ticker.best_bid is not None
         and ticker.best_ask is not None
         and ticker.best_bid > ticker.best_ask
+    )
+
+
+def _fresh_option_quotes(
+    quotes: tuple[OptionQuoteSnapshot, ...],
+    now: datetime,
+    stale_after_seconds: int,
+) -> tuple[OptionQuoteSnapshot, ...]:
+    return tuple(
+        quote
+        for quote in quotes
+        if 0
+        <= (now - quote.exchange_timestamp).total_seconds()
+        <= stale_after_seconds
     )
 
 

@@ -377,6 +377,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session_factory,
                 public_events=public_events,
                 canonical_book_event_sink=event_router.publish,
+                canonical_option_event_sink=event_router.publish,
                 combined_snapshot_provider=(
                     multi_regime_runtime.combined_portfolio_snapshot
                     if paper_broker is not None
@@ -450,6 +451,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 private_streams,
                 public_events,
                 canonical_book_event_sink=event_router.publish,
+                canonical_option_event_sink=event_router.publish,
             )
             app.state.live_runner = runner
             task = asyncio.create_task(runner.run(), name="live-trading-runner")

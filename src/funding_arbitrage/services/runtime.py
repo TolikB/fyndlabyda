@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from collections.abc import Callable
+from datetime import datetime
 from decimal import Decimal
 from statistics import median
 
 from funding_arbitrage.backtest.engine import BacktestResult
 from funding_arbitrage.config import Settings
+from funding_arbitrage.domain.events import InstrumentKey, OptionQuoteSnapshot
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.monitoring.metrics import (
@@ -87,6 +89,7 @@ class RuntimeState:
         )
         self.latest_snapshot: MarketSnapshot | None = None
         self.last_completed_snapshot: MarketSnapshot | None = None
+        self._option_quotes: dict[str, OptionQuoteSnapshot] = {}
         self.opportunities: list[Opportunity] = []
         self.backtests: dict[str, BacktestResult] = {}
         self.market_replay_jobs: dict[str, dict[str, object]] = {}
@@ -193,6 +196,46 @@ class RuntimeState:
 
     def portfolio_value(self) -> Decimal:
         return self.portfolio.snapshot().equity
+
+    def observe_option_quote(self, quote: OptionQuoteSnapshot) -> None:
+        """Keep the latest canonical option quote for immediate plan binding."""
+
+        identity = quote.instrument.canonical_id
+        current = self._option_quotes.get(identity)
+        if current is None or quote.exchange_timestamp >= current.exchange_timestamp:
+            self._option_quotes[identity] = quote
+
+    def option_quote(
+        self,
+        instrument: InstrumentKey,
+        *,
+        as_of: datetime | None = None,
+    ) -> OptionQuoteSnapshot | None:
+        quote = self._option_quotes.get(instrument.canonical_id)
+        if quote is None or as_of is None:
+            return quote
+        return quote if quote.exchange_timestamp <= as_of else None
+
+    def option_quotes(
+        self,
+        *,
+        as_of: datetime,
+        maximum_age_seconds: int,
+    ) -> tuple[OptionQuoteSnapshot, ...]:
+        if maximum_age_seconds <= 0:
+            raise ValueError("option quote maximum age must be positive")
+        return tuple(
+            sorted(
+                (
+                    quote
+                    for quote in self._option_quotes.values()
+                    if 0
+                    <= (as_of - quote.exchange_timestamp).total_seconds()
+                    <= maximum_age_seconds
+                ),
+                key=lambda quote: quote.instrument.canonical_id,
+            )
+        )
 
     def entries_allowed(self) -> bool:
         if (

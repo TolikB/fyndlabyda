@@ -314,13 +314,24 @@ requirements:
       - tests/test_strategy_suite.py
   - id: STRAT-006
     category: strategies
-    title: Options volatility strategies and options risk models are implemented
+    title: Options volatility has canonical public data, risk, and PAPER execution
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/options_volatility.py
       - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/domain/events.py
+      - src/funding_arbitrage/exchanges/bybit/client.py
+      - src/funding_arbitrage/exchanges/okx/client.py
+      - src/funding_arbitrage/market_data/option_quotes.py
+      - src/funding_arbitrage/services/runtime_strategy_contexts.py
+      - src/funding_arbitrage/execution/advanced_paper.py
+      - src/funding_arbitrage/execution/option_fees.py
+      - scripts/option_chain_probe.py
       - tests/test_options_volatility.py
       - tests/test_strategy_suite.py
+      - tests/test_option_market_data.py
+      - tests/test_runtime_strategy_contexts.py
+      - tests/test_advanced_paper.py
   - id: STRAT-007
     category: strategies
     title: Passive market making is inventory-, adverse-selection-, and fee-aware

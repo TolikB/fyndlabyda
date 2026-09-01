@@ -20,7 +20,10 @@ from funding_arbitrage.domain.events import (
     DataQuality,
     InstrumentKey,
     InstrumentType,
+    OptionQuoteSnapshot,
+    OptionRight,
     Side,
+    TradingMode,
 )
 from funding_arbitrage.exchanges.base.models import (
     FundingSnapshot,
@@ -30,6 +33,7 @@ from funding_arbitrage.exchanges.base.models import (
 from funding_arbitrage.exchanges.base.models import (
     InstrumentType as LegacyInstrumentType,
 )
+from funding_arbitrage.execution.option_fees import option_trade_fee
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.market_data.funding import (
     funding_statistics,
@@ -53,7 +57,10 @@ from funding_arbitrage.strategies import (
     FundingLegForecast,
     FundingMarketLeg,
     LeadLagCostModel,
+    OptionQuote,
+    OptionsVolatilityContext,
     VenueFairValueInput,
+    option_quote_assets_compatible,
 )
 
 if TYPE_CHECKING:
@@ -109,17 +116,26 @@ class RuntimeSynchronizedContextBuilder:
         market = self.runtime.last_completed_snapshot or self.runtime.latest_snapshot
         if market is None:
             return SupplementalStrategyContexts()
-        as_of = self._as_of_market(market, snapshot.timestamp)
+        if snapshot.trigger_option_quote is not None:
+            self.runtime.observe_option_quote(snapshot.trigger_option_quote)
+        as_of = self._as_of_market(
+            market,
+            snapshot.timestamp,
+            trigger_option_quote=snapshot.trigger_option_quote,
+        )
         return SupplementalStrategyContexts(
             funding_basis=self._funding_contexts(snapshot, as_of),
             lead_lag=self._lead_lag_contexts(snapshot, as_of),
             dated_basis=self._dated_basis_contexts(snapshot, as_of),
+            options_volatility=self._options_contexts(snapshot, as_of),
         )
 
     def _as_of_market(
         self,
         market: MarketSnapshot,
         timestamp: datetime,
+        *,
+        trigger_option_quote: OptionQuoteSnapshot | None = None,
     ) -> MarketSnapshot:
         stale_after = min(
             market.stale_after_seconds,
@@ -152,6 +168,33 @@ class RuntimeSynchronizedContextBuilder:
             for key, value in refresh_markers.items()
             if key in history
         }
+        option_by_identity = {
+            quote.instrument.canonical_id: quote
+            for quote in market.option_quotes
+            if usable(quote.exchange_timestamp)
+        }
+        option_by_identity.update(
+            {
+                quote.instrument.canonical_id: quote
+                for quote in self.runtime.option_quotes(
+                    as_of=timestamp,
+                    maximum_age_seconds=stale_after,
+                )
+            }
+        )
+        if (
+            trigger_option_quote is not None
+            and usable(trigger_option_quote.exchange_timestamp)
+        ):
+            option_by_identity[
+                trigger_option_quote.instrument.canonical_id
+            ] = trigger_option_quote
+        option_quotes = tuple(
+            sorted(
+                option_by_identity.values(),
+                key=lambda quote: quote.instrument.canonical_id,
+            )
+        )
         return MarketSnapshot(
             instruments=market.instruments,
             tickers=tickers,
@@ -162,6 +205,7 @@ class RuntimeSynchronizedContextBuilder:
             stale_after_seconds=stale_after,
             incomplete_venues=market.incomplete_venues,
             funding_history_refreshed=refreshed,
+            option_quotes=option_quotes,
         )
 
     def _funding_contexts(
@@ -528,6 +572,127 @@ class RuntimeSynchronizedContextBuilder:
         )
         return (context,)
 
+    def _options_contexts(
+        self,
+        snapshot: MultiRegimeStrategySnapshot,
+        market: MarketSnapshot,
+    ) -> tuple[OptionsVolatilityContext, ...]:
+        if snapshot.instrument.instrument_type not in {
+            InstrumentType.SPOT,
+            InstrumentType.PERPETUAL,
+            InstrumentType.FUTURE,
+        }:
+            return ()
+        technical = snapshot.technical
+        if (
+            technical.data_quality is not DataQuality.VALID
+            or technical.atr is None
+            or technical.atr <= ZERO
+            or technical.sample_count < 14
+            or technical.timestamp > snapshot.timestamp
+        ):
+            return ()
+        forecast_volatility = _annualized_atr_volatility(
+            technical.atr,
+            technical.close,
+            self.runtime.settings.multi_regime_strategy_interval_seconds,
+        )
+        candidates = [
+            quote
+            for quote in market.option_quotes
+            if quote.instrument.venue == snapshot.instrument.venue
+            and quote.instrument.base_asset == snapshot.instrument.base_asset
+            and option_quote_assets_compatible(
+                quote.instrument.quote_asset,
+                snapshot.instrument.quote_asset,
+            )
+            and quote.instrument.expiry is not None
+            and quote.instrument.expiry > snapshot.timestamp
+        ]
+        if not candidates or snapshot.instrument.venue.lower() in {
+            venue.lower() for venue in market.incomplete_venues
+        }:
+            return ()
+        by_contract: dict[
+            tuple[datetime, Decimal, str, str | None],
+            dict[OptionRight, OptionQuoteSnapshot],
+        ] = {}
+        for quote in candidates:
+            expiry = quote.instrument.expiry
+            strike = quote.instrument.strike_price
+            right = quote.instrument.option_right
+            if expiry is None or strike is None or right is None:
+                continue
+            by_contract.setdefault(
+                (
+                    expiry,
+                    strike,
+                    quote.instrument.quote_asset,
+                    quote.instrument.settlement_asset,
+                ),
+                {},
+            )[right] = quote
+        fee = self.runtime.settings.option_fee_schedules.get(
+            snapshot.instrument.venue.lower()
+        )
+        if fee is None:
+            return ()
+        complete = [
+            (identity, pair)
+            for identity, pair in by_contract.items()
+            if OptionRight.CALL in pair and OptionRight.PUT in pair
+        ]
+        ranked = sorted(
+            complete,
+            key=lambda item: (
+                item[0][0],
+                abs(
+                    item[0][1]
+                    - (
+                        item[1][OptionRight.CALL].underlying_price
+                        + item[1][OptionRight.PUT].underlying_price
+                    )
+                    / Decimal("2")
+                ),
+                item[0][1],
+            ),
+        )
+        for _identity, pair in ranked:
+            call_market = pair[OptionRight.CALL]
+            put_market = pair[OptionRight.PUT]
+            call = _strategy_option_quote(call_market)
+            put = _strategy_option_quote(put_market)
+            if call is None or put is None:
+                continue
+            estimated_cost_bps = _option_roundtrip_cost_bps(
+                (call_market, put_market),
+                fee[1],
+                fee[2],
+            )
+            return (
+                OptionsVolatilityContext(
+                    call=call,
+                    put=put,
+                    hedge_instrument=snapshot.instrument,
+                    forecast_realized_volatility=forecast_volatility,
+                    estimated_cost_bps=estimated_cost_bps,
+                    timestamp=snapshot.timestamp,
+                    mode=snapshot.mode,
+                    regime=snapshot.regime.regime,
+                    margin_available=snapshot.mode
+                    not in {TradingMode.LIMITED_LIVE, TradingMode.LIVE},
+                    short_volatility_operator_authorized=False,
+                    live_operator_authorized=False,
+                    hedge_quote_conversion_rate=(
+                        ONE
+                        if call.instrument.quote_asset
+                        != snapshot.instrument.quote_asset
+                        else None
+                    ),
+                ),
+            )
+        return ()
+
     def _view(
         self,
         snapshot: MultiRegimeStrategySnapshot,
@@ -683,6 +848,105 @@ class RuntimeSynchronizedContextBuilder:
             balances.get(venue, ZERO) >= amount
             for venue, amount in requirements.items()
         )
+
+
+def _annualized_atr_volatility(
+    atr: Decimal,
+    close: Decimal,
+    interval_seconds: int,
+) -> Decimal:
+    if atr <= ZERO or close <= ZERO or interval_seconds <= 0:
+        raise ValueError("ATR volatility inputs must be positive")
+    periods_per_year = Decimal("31536000") / Decimal(interval_seconds)
+    estimate = atr / close * periods_per_year.sqrt()
+    return min(Decimal("5"), max(Decimal("0.01"), estimate))
+
+
+def _strategy_option_quote(
+    quote: OptionQuoteSnapshot,
+) -> OptionQuote | None:
+    liquidity_score = _option_liquidity_score(quote)
+    if liquidity_score <= ZERO:
+        return None
+    return OptionQuote(
+        instrument=quote.instrument,
+        underlying_price=quote.underlying_price,
+        bid_price=quote.bid_price,
+        ask_price=quote.ask_price,
+        market_implied_volatility=quote.mark_implied_volatility,
+        contract_multiplier=quote.contract_multiplier,
+        open_interest_contracts=quote.open_interest_contracts,
+        volume_contracts=quote.volume_contracts,
+        liquidity_score=liquidity_score,
+        timestamp=quote.exchange_timestamp,
+        data_quality=DataQuality.VALID,
+    )
+
+
+def _option_liquidity_score(quote: OptionQuoteSnapshot) -> Decimal:
+    midpoint = (quote.bid_price + quote.ask_price) / Decimal("2")
+    spread_bps = (quote.ask_price - quote.bid_price) / midpoint * BPS
+    spread_score = max(
+        ZERO,
+        ONE - min(ONE, spread_bps / Decimal("1000")),
+    )
+    visible_depth_usd = (
+        min(quote.bid_quantity, quote.ask_quantity)
+        * quote.contract_multiplier
+        * quote.underlying_price
+    )
+    depth_score = min(ONE, visible_depth_usd / Decimal("5000"))
+    activity_usd = (
+        (quote.volume_contracts + quote.open_interest_contracts)
+        * quote.contract_multiplier
+        * quote.underlying_price
+    )
+    activity_score = min(ONE, activity_usd / Decimal("100000"))
+    return (
+        spread_score * Decimal("0.55")
+        + depth_score * Decimal("0.30")
+        + activity_score * Decimal("0.15")
+    )
+
+
+def _option_roundtrip_cost_bps(
+    quotes: tuple[OptionQuoteSnapshot, OptionQuoteSnapshot],
+    taker_fee_rate: Decimal,
+    fee_cap_rate: Decimal,
+) -> Decimal:
+    package_mid = sum(
+        (
+            (quote.bid_price + quote.ask_price)
+            / Decimal("2")
+            * quote.contract_multiplier
+            for quote in quotes
+        ),
+        ZERO,
+    )
+    if package_mid <= ZERO:
+        raise ValueError("option package mid price must be positive")
+    roundtrip_spread = sum(
+        (
+            (quote.ask_price - quote.bid_price) * quote.contract_multiplier
+            for quote in quotes
+        ),
+        ZERO,
+    )
+    one_way_fees = sum(
+        (
+            option_trade_fee(
+                option_price=(quote.bid_price + quote.ask_price) / Decimal("2"),
+                underlying_price=quote.underlying_price,
+                quantity_contracts=Decimal("1"),
+                contract_multiplier=quote.contract_multiplier,
+                fee_rate=taker_fee_rate,
+                fee_cap_rate=fee_cap_rate,
+            )
+            for quote in quotes
+        ),
+        ZERO,
+    )
+    return (roundtrip_spread + one_way_fees * Decimal("2")) / package_mid * BPS
 
 
 def _metadata(

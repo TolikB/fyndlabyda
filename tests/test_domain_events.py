@@ -322,7 +322,7 @@ def test_all_specified_canonical_payloads_validate() -> None:
     assert all(payload.exchange_timestamp.tzinfo is UTC for payload in payloads)
 
 
-def test_option_identity_includes_expiry_strike_and_right() -> None:
+def test_option_identity_includes_expiry_strike_right_and_settlement() -> None:
     expiry = datetime(2026, 9, 25, 8, tzinfo=UTC)
     call = InstrumentKey(
         venue="deribit",
@@ -342,9 +342,16 @@ def test_option_identity_includes_expiry_strike_and_right() -> None:
         }
     )
 
-    assert call.canonical_id.endswith(":OPTION:2026-09-25T08:00:00+00:00:60000:CALL")
-    assert put.canonical_id.endswith(":OPTION:2026-09-25T08:00:00+00:00:60000:PUT")
+    assert call.canonical_id.endswith(
+        ":OPTION:2026-09-25T08:00:00+00:00:60000:CALL:BTC"
+    )
+    assert put.canonical_id.endswith(
+        ":OPTION:2026-09-25T08:00:00+00:00:60000:PUT:BTC"
+    )
     assert call.canonical_id != put.canonical_id
+    assert call.canonical_id != call.model_copy(
+        update={"settlement_asset": "USDC"}
+    ).canonical_id
 
     with pytest.raises(ValidationError, match="option identity requires"):
         InstrumentKey(
@@ -353,4 +360,15 @@ def test_option_identity_includes_expiry_strike_and_right() -> None:
             base_asset="BTC",
             quote_asset="USD",
             instrument_type=InstrumentType.OPTION,
+        )
+    with pytest.raises(ValidationError, match="settlement_asset"):
+        InstrumentKey(
+            venue="DERIBIT",
+            exchange_symbol="BTC-25SEP26-60000-C",
+            base_asset="BTC",
+            quote_asset="USD",
+            instrument_type=InstrumentType.OPTION,
+            expiry=expiry,
+            strike_price=Decimal("60000"),
+            option_right=OptionRight.CALL,
         )

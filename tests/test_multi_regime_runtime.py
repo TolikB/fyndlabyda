@@ -38,6 +38,8 @@ from funding_arbitrage.domain.events import (
     EventMetadata,
     InstrumentKey,
     InstrumentType,
+    OptionQuoteSnapshot,
+    OptionRight,
     Side,
     TradingMode,
 )
@@ -93,6 +95,8 @@ from funding_arbitrage.strategies import (
     DirectionalStrategyContext,
     DirectionalStrategyEvaluation,
     LeadLagCostModel,
+    OptionQuote,
+    OptionsVolatilityContext,
     VenueFairValueInput,
 )
 
@@ -454,7 +458,7 @@ def _advanced_risk_context(
 
 def _envelope(
     kind: EventKind,
-    payload: BookSnapshot | BookDelta | Candle,
+    payload: BookSnapshot | BookDelta | Candle | OptionQuoteSnapshot,
     sequence: int,
 ) -> EventEnvelope:
     timestamp = payload.exchange_timestamp
@@ -590,7 +594,6 @@ def test_supplemental_strategy_shares_orchestration_but_cannot_bypass_planner() 
     restored = MultiRegimeDecisionBatch.model_validate(result.model_dump(mode="json"))
     assert restored.model_dump(mode="json") == result.model_dump(mode="json")
 
-
 def test_advanced_strategy_requires_snapshot_then_reaches_risk_and_planner() -> None:
     batches = _replay(
         _engine(
@@ -632,6 +635,117 @@ def test_advanced_strategy_requires_snapshot_then_reaches_risk_and_planner() -> 
     unbound["execution_snapshots"] = []
     with pytest.raises(ValidationError, match="not snapshot-bound"):
         MultiRegimeDecisionBatch.model_validate(unbound)
+
+
+def test_option_events_trigger_only_after_fresh_call_put_pair_without_directional_rerun() -> None:
+    observed: dict[OptionRight, OptionQuoteSnapshot] = {}
+
+    def supplemental(
+        snapshot: MultiRegimeStrategySnapshot,
+    ) -> SupplementalStrategyContexts:
+        trigger = snapshot.trigger_option_quote
+        if trigger is not None and trigger.instrument.option_right is not None:
+            observed[trigger.instrument.option_right] = trigger
+        if OptionRight.CALL not in observed or OptionRight.PUT not in observed:
+            return SupplementalStrategyContexts()
+
+        def strategy_quote(raw: OptionQuoteSnapshot) -> OptionQuote:
+            return OptionQuote(
+                instrument=raw.instrument,
+                underlying_price=raw.underlying_price,
+                bid_price=raw.bid_price,
+                ask_price=raw.ask_price,
+                market_implied_volatility=raw.mark_implied_volatility,
+                contract_multiplier=raw.contract_multiplier,
+                open_interest_contracts=raw.open_interest_contracts,
+                volume_contracts=raw.volume_contracts,
+                liquidity_score=Decimal("1"),
+                timestamp=raw.exchange_timestamp,
+                data_quality=DataQuality.VALID,
+            )
+
+        return SupplementalStrategyContexts(
+            options_volatility=(
+                OptionsVolatilityContext(
+                    call=strategy_quote(observed[OptionRight.CALL]),
+                    put=strategy_quote(observed[OptionRight.PUT]),
+                    hedge_instrument=snapshot.instrument,
+                    forecast_realized_volatility=Decimal("1"),
+                    estimated_cost_bps=Decimal("1"),
+                    timestamp=snapshot.timestamp,
+                    mode=snapshot.mode,
+                    regime=snapshot.regime.regime,
+                    margin_available=True,
+                    hedge_quote_conversion_rate=Decimal("1"),
+                ),
+            )
+        )
+
+    engine = _engine(supplemental_context_provider=supplemental)
+    events = _events()
+    for event in events:
+        engine.restore_event(event)
+    timestamp = events[-1].metadata.exchange_timestamp + timedelta(seconds=1)
+
+    def market_quote(
+        right: OptionRight,
+        observed_at: datetime,
+    ) -> OptionQuoteSnapshot:
+        code = "C" if right is OptionRight.CALL else "P"
+        return OptionQuoteSnapshot(
+            instrument=InstrumentKey(
+                venue="BYBIT",
+                exchange_symbol=f"BTC-30SEP26-86-{code}",
+                base_asset="BTC",
+                quote_asset="USD",
+                settlement_asset="USDC",
+                instrument_type=InstrumentType.OPTION,
+                expiry=timestamp + timedelta(days=30),
+                strike_price=Decimal("86"),
+                option_right=right,
+            ),
+            underlying_price=Decimal("86"),
+            bid_price=Decimal("3"),
+            bid_quantity=Decimal("100"),
+            ask_price=Decimal("3.01"),
+            ask_quantity=Decimal("100"),
+            mark_implied_volatility=Decimal("0.2"),
+            contract_multiplier=Decimal("0.1"),
+            price_tick=Decimal("0.01"),
+            quantity_step=Decimal("1"),
+            minimum_quantity=Decimal("1"),
+            open_interest_contracts=Decimal("10000"),
+            volume_contracts=Decimal("1000"),
+            exchange_timestamp=observed_at,
+        )
+
+    first = engine.process(
+        _envelope(
+            EventKind.OPTION_QUOTE_SNAPSHOT,
+            market_quote(OptionRight.CALL, timestamp),
+            10001,
+        )
+    )
+    second = engine.process(
+        _envelope(
+            EventKind.OPTION_QUOTE_SNAPSHOT,
+            market_quote(OptionRight.PUT, timestamp + timedelta(seconds=1)),
+            10002,
+        )
+    )
+
+    assert first is None
+    assert second is not None and second.strategy_suite is not None
+    assert second.evaluations == ()
+    option_intent = next(
+        intent
+        for intent in second.strategy_suite.intents
+        if intent.signal_type is SignalType.OPTIONS_VOLATILITY
+    )
+    assert option_intent.primary_instrument.option_right is OptionRight.CALL
+    assert second.execution_plans == ()
+    assert second.execution_blocks[0].signal_id == option_intent.signal_id
+    assert second.execution_blocks[0].reason == "execution_snapshot_provider_unavailable"
 
 
 @pytest.mark.asyncio

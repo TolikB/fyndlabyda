@@ -75,6 +75,7 @@ from funding_arbitrage.strategies.options_volatility import (
     OptionsVolatilityEvaluation,
     OptionsVolatilityStrategy,
     OptionValuation,
+    option_quote_assets_compatible,
 )
 from funding_arbitrage.strategies.universe import (
     LiquidAltcoinUniverseSelector,
@@ -145,6 +146,7 @@ __all__ = [
     "OptionsVolatilityEvaluation",
     "OptionsVolatilityStrategy",
     "OptionValuation",
+    "option_quote_assets_compatible",
     "PassiveMarketMakingStrategy",
     "PassiveQuoteProposal",
     "SpotBorrowQuote",

@@ -39,6 +39,7 @@ from funding_arbitrage.execution.trading import (
 )
 from funding_arbitrage.market_data.collector import (
     CanonicalBookEventSink,
+    CanonicalOptionEventSink,
     MarketDataCollector,
     MarketSnapshot,
 )
@@ -85,6 +86,7 @@ class LiveTradingRunner:
         private_streams: PrivateStreamSupervisor | None = None,
         public_events: PublicEventSupervisor | None = None,
         canonical_book_event_sink: CanonicalBookEventSink | None = None,
+        canonical_option_event_sink: CanonicalOptionEventSink | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -103,7 +105,16 @@ class LiveTradingRunner:
             settings.paper_history_symbol_limit,
             settings.market_data_stale_seconds,
             True,
+            option_assets=(
+                settings.multi_regime_asset_values
+                if settings.options_market_data_enabled
+                else ()
+            ),
+            option_refresh_seconds=settings.options_refresh_seconds,
+            option_maximum_expiries=settings.options_maximum_expiries,
+            option_strikes_per_expiry=settings.options_strikes_per_expiry,
             canonical_book_event_sink=canonical_book_event_sink,
+            canonical_option_event_sink=canonical_option_event_sink,
         )
         self.risk = LiveRiskController(settings)
         self.executor = LiveTradingExecutor(

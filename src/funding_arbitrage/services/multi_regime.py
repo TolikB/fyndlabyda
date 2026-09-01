@@ -28,6 +28,7 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     InstrumentType,
     OpenInterestSnapshot,
+    OptionQuoteSnapshot,
     OrderType,
     TradeTick,
     TradingMode,
@@ -92,6 +93,7 @@ from funding_arbitrage.strategies import (
     DirectionalStrategyEvaluation,
     LiquiditySweepReversionStrategy,
     OrderFlowBreakoutStrategy,
+    option_quote_assets_compatible,
 )
 
 ZERO = Decimal("0")
@@ -142,6 +144,7 @@ class MultiRegimeStrategySnapshot(BaseModel):
     structure: MarketStructureSnapshot
     derivatives: DerivativesFeatureSnapshot | None = None
     regime: RegimeSnapshot
+    trigger_option_quote: OptionQuoteSnapshot | None = None
 
     @field_validator("timestamp")
     @classmethod
@@ -161,6 +164,18 @@ class MultiRegimeStrategySnapshot(BaseModel):
             raise ValueError("multi-regime strategy snapshot instrument mismatch")
         if self.derivatives is not None and self.derivatives.instrument != self.instrument:
             raise ValueError("multi-regime derivatives instrument mismatch")
+        if self.trigger_option_quote is not None:
+            option = self.trigger_option_quote.instrument
+            if (
+                option.instrument_type is not InstrumentType.OPTION
+                or option.venue != self.instrument.venue
+                or option.base_asset != self.instrument.base_asset
+                or not option_quote_assets_compatible(
+                    option.quote_asset,
+                    self.instrument.quote_asset,
+                )
+            ):
+                raise ValueError("trigger option quote does not match strategy underlying")
         return self
 
 
@@ -649,7 +664,12 @@ class MultiRegimeEngine:
         if self._duplicate(event):
             return None
         instrument = getattr(event.payload, "instrument", None)
-        if not isinstance(instrument, InstrumentKey) or not self._eligible(instrument):
+        if not isinstance(instrument, InstrumentKey):
+            return None
+        option_event = isinstance(event.payload, OptionQuoteSnapshot)
+        if not option_event and not self._eligible(instrument):
+            return None
+        if option_event and instrument.base_asset not in self.config.assets:
             return None
         payload = event.payload
         stream_name = (
@@ -667,6 +687,15 @@ class MultiRegimeEngine:
         ):
             self.skipped_out_of_order_events += 1
             return None
+        if option_event:
+            if event.metadata.quality is not DataQuality.VALID:
+                return None
+            self._latest_stream_timestamp[stream_key] = (
+                event.metadata.exchange_timestamp
+            )
+            if not evaluate_strategies:
+                return None
+            return self._decide_option_event(event)
         state = self._state(instrument)
         if event.metadata.quality is not DataQuality.VALID:
             if isinstance(payload, (BookSnapshot, BookDelta)):
@@ -720,6 +749,42 @@ class MultiRegimeEngine:
             return None
         return self._decide(state, event)
 
+    def _decide_option_event(
+        self,
+        event: EventEnvelope[BaseModel],
+    ) -> MultiRegimeDecisionBatch | None:
+        option = event.payload
+        if not isinstance(option, OptionQuoteSnapshot):
+            raise TypeError("option decision requires an option quote event")
+        matching = [
+            state
+            for state in self._states.values()
+            if state.local_book.instrument.venue == option.instrument.venue
+            and state.local_book.instrument.base_asset
+            == option.instrument.base_asset
+            and option_quote_assets_compatible(
+                option.instrument.quote_asset,
+                state.local_book.instrument.quote_asset,
+            )
+            and state.technical is not None
+            and state.structure is not None
+            and state.regime is not None
+            and state.latest_book is not None
+        ]
+        state = max(
+            matching,
+            key=lambda item: (
+                item.technical.timestamp
+                if item.technical is not None
+                else datetime.min.replace(tzinfo=UTC),
+                item.local_book.instrument.canonical_id,
+            ),
+            default=None,
+        )
+        if state is None:
+            return None
+        return self._decide(state, event, include_directional=False)
+
     def _update_regime(self, state: _InstrumentState, timestamp: datetime) -> None:
         technical = state.regime_technical
         structure = state.regime_structure
@@ -744,7 +809,11 @@ class MultiRegimeEngine:
         state.regime = state.regime_classifier.update(observation)
 
     def _decide(
-        self, state: _InstrumentState, event: EventEnvelope[BaseModel]
+        self,
+        state: _InstrumentState,
+        event: EventEnvelope[BaseModel],
+        *,
+        include_directional: bool = True,
     ) -> MultiRegimeDecisionBatch | None:
         technical = state.technical
         structure = state.structure
@@ -779,12 +848,19 @@ class MultiRegimeEngine:
             structure=structure,
             derivatives=state.derivatives,
             regime=regime,
+            trigger_option_quote=(
+                event.payload
+                if isinstance(event.payload, OptionQuoteSnapshot)
+                else None
+            ),
         )
         supplemental = (
             self.supplemental_context_provider(snapshot)
             if self.supplemental_context_provider is not None
             else None
-        )
+        ) or SupplementalStrategyContexts()
+        if not include_directional and not _has_supplemental_contexts(supplemental):
+            return None
         suite_request = StrategySuiteRequest(
             request_id=_stable_id(
                 "srq",
@@ -795,8 +871,8 @@ class MultiRegimeEngine:
             source_event_id=event.metadata.event_id,
             mode=self.config.mode,
             timestamp=decision_time,
-            directional=(context,),
-            supplemental=supplemental or SupplementalStrategyContexts(),
+            directional=(context,) if include_directional else (),
+            supplemental=supplemental,
         )
         suite_result = self.strategy_suite.evaluate(suite_request)
         evaluations = suite_result.directional_evaluations
@@ -1076,6 +1152,19 @@ class MultiRegimeEngine:
 def _stable_id(prefix: str, *parts: str) -> str:
     encoded = json.dumps(parts, separators=(",", ":")).encode()
     return f"{prefix}_" + hashlib.sha256(encoded).hexdigest()[:32]
+
+
+def _has_supplemental_contexts(contexts: SupplementalStrategyContexts) -> bool:
+    return any(
+        (
+            contexts.funding_basis,
+            contexts.lead_lag,
+            contexts.dated_basis,
+            contexts.options_volatility,
+            contexts.passive_market_making,
+            contexts.dangerous_research,
+        )
+    )
 
 
 def _utc(value: datetime) -> datetime:

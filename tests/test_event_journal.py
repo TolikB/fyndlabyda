@@ -24,12 +24,15 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     InstrumentType,
     LiquidationTick,
+    OptionQuoteSnapshot,
+    OptionRight,
     Side,
     TradeTick,
     deterministic_event_id,
     snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.hyperliquid.orderbook import HyperliquidOrderBookNormalizer
+from funding_arbitrage.market_data.option_quotes import canonical_option_quote_event
 
 NOW = datetime(2026, 8, 15, 12, tzinfo=UTC)
 INSTRUMENT = InstrumentKey(
@@ -491,3 +494,53 @@ async def test_liquidation_event_round_trips_through_canonical_journal() -> None
     assert len(replay) == 1
     assert isinstance(replay[0].payload, LiquidationTick)
     assert replay[0].payload.quantity == Decimal("0.25")
+
+
+async def test_option_quote_round_trips_through_canonical_journal() -> None:
+    timestamp = NOW + timedelta(seconds=2)
+    option = InstrumentKey(
+        venue="BYBIT",
+        exchange_symbol="BTC-30SEP26-62000-C",
+        base_asset="BTC",
+        quote_asset="USDT",
+        settlement_asset="USDT",
+        instrument_type=InstrumentType.OPTION,
+        expiry=NOW + timedelta(days=30),
+        strike_price=Decimal("62000"),
+        option_right=OptionRight.CALL,
+    )
+    payload = OptionQuoteSnapshot(
+        instrument=option,
+        underlying_price=Decimal("62000"),
+        bid_price=Decimal("1000"),
+        bid_quantity=Decimal("2"),
+        ask_price=Decimal("1001"),
+        ask_quantity=Decimal("3"),
+        mark_implied_volatility=Decimal("0.5"),
+        contract_multiplier=Decimal("0.1"),
+        price_tick=Decimal("0.1"),
+        quantity_step=Decimal("0.01"),
+        minimum_quantity=Decimal("0.01"),
+        exchange_timestamp=timestamp,
+    )
+    event = canonical_option_quote_event(
+        payload,
+        source="bybit.public.option.rest",
+        receive_timestamp=timestamp + timedelta(milliseconds=2),
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        assert await append_event(session, event)
+        replay = await load_events(
+            session,
+            kinds=(EventKind.OPTION_QUOTE_SNAPSHOT,),
+        )
+
+    await engine.dispose()
+    assert len(replay) == 1
+    assert isinstance(replay[0].payload, OptionQuoteSnapshot)
+    assert replay[0].payload == payload

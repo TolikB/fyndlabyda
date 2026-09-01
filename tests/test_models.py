@@ -32,6 +32,29 @@ def test_default_paper_safety_and_namespaces_are_cost_gated() -> None:
     assert settings.paper_max_open_positions == 8
     assert settings.paper_simulation_version == "v34-cost-gated-candidate"
     assert settings.paper_baseline_simulation_version == "v34-cost-gated-baseline"
+    assert settings.options_market_data_enabled is True
+    assert settings.options_refresh_seconds == 5
+    assert settings.options_maximum_expiries == 2
+    assert settings.options_strikes_per_expiry == 3
+    assert settings.option_fee_schedules["bybit"] == (
+        Decimal("0.0002"),
+        Decimal("0.0003"),
+        Decimal("0.07"),
+    )
+
+
+def test_option_market_data_bounds_and_fees_fail_closed() -> None:
+    for updates in (
+        {"OPTIONS_REFRESH_SECONDS": 0},
+        {"OPTIONS_MAXIMUM_EXPIRIES": 0},
+        {"OPTIONS_STRIKES_PER_EXPIRY": 0},
+        {"BYBIT_OPTION_TAKER_FEE": "0.11"},
+        {"OKX_OPTION_MAKER_FEE": "-0.11"},
+        {"BYBIT_OPTION_FEE_CAP_RATE": "0"},
+        {"OKX_OPTION_FEE_CAP_RATE": "1.01"},
+    ):
+        with pytest.raises(ValueError):
+            Settings(_env_file=None, **updates)
 
 
 def test_stream_timeouts_cannot_relax_below_market_timeout() -> None:

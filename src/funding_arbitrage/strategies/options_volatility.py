@@ -29,6 +29,18 @@ ONE = Decimal("1")
 BPS = Decimal("10000")
 YEAR_SECONDS = Decimal("31536000")
 MIN_VOLATILITY = Decimal("0.0001")
+USD_STABLE_QUOTE_ASSETS = frozenset({"USD", "USDC", "USDT"})
+
+
+def option_quote_assets_compatible(option_quote: str, hedge_quote: str) -> bool:
+    """Allow only identical quotes or the explicit USD-stable valuation group."""
+
+    normalized_option = option_quote.strip().upper()
+    normalized_hedge = hedge_quote.strip().upper()
+    return normalized_option == normalized_hedge or {
+        normalized_option,
+        normalized_hedge,
+    }.issubset(USD_STABLE_QUOTE_ASSETS)
 
 
 class OptionValuation(BaseModel):
@@ -392,7 +404,8 @@ class OptionsVolatilityConfig(BaseModel):
     minimum_edge_to_cost_ratio: Decimal = Field(default=Decimal("2.5"), gt=0)
     delta_hedge_threshold: Decimal = Field(default=Decimal("0.01"), ge=0)
     maximum_holding_seconds: int = Field(default=86400, gt=0)
-    ttl_seconds: int = Field(default=10, gt=0)
+    expiry_exit_buffer_seconds: int = Field(default=900, gt=0)
+    ttl_seconds: int = Field(default=120, gt=0)
     short_volatility_enabled: bool = False
     live_options_enabled: bool = False
 
@@ -413,6 +426,7 @@ class OptionsVolatilityContext(BaseModel):
     live_operator_authorized: bool = False
     risk_free_rate: Decimal = ZERO
     carry_yield: Decimal = ZERO
+    hedge_quote_conversion_rate: Decimal | None = Field(default=None, gt=0)
     risk_limits: OptionsRiskLimits = OptionsRiskLimits()
 
     @field_validator("timestamp")
@@ -428,6 +442,7 @@ class OptionsVolatilityContext(BaseModel):
             self.call.instrument.venue,
             self.call.instrument.base_asset,
             self.call.instrument.quote_asset,
+            self.call.instrument.settlement_asset,
             self.call.instrument.expiry,
             self.call.instrument.strike_price,
         )
@@ -435,22 +450,33 @@ class OptionsVolatilityContext(BaseModel):
             self.put.instrument.venue,
             self.put.instrument.base_asset,
             self.put.instrument.quote_asset,
+            self.put.instrument.settlement_asset,
             self.put.instrument.expiry,
             self.put.instrument.strike_price,
         )
         if call_identity != put_identity:
-            raise ValueError("call and put must share venue, underlying, strike, and expiry")
+            raise ValueError(
+                "call and put must share venue, underlying, settlement, strike, and expiry"
+            )
         if self.hedge_instrument.instrument_type not in {
             InstrumentType.SPOT,
             InstrumentType.PERPETUAL,
             InstrumentType.FUTURE,
         }:
             raise ValueError("option delta hedge requires spot or futures exposure")
-        if (
-            self.hedge_instrument.base_asset != self.call.instrument.base_asset
-            or self.hedge_instrument.quote_asset != self.call.instrument.quote_asset
-        ):
-            raise ValueError("option hedge must share base and quote assets")
+        if self.hedge_instrument.base_asset != self.call.instrument.base_asset:
+            raise ValueError("option hedge must share the base asset")
+        option_quote = self.call.instrument.quote_asset
+        hedge_quote = self.hedge_instrument.quote_asset
+        if not option_quote_assets_compatible(option_quote, hedge_quote):
+            raise ValueError("option hedge quote assets are incompatible")
+        if option_quote == hedge_quote:
+            if self.hedge_quote_conversion_rate not in (None, ONE):
+                raise ValueError("same-quote option hedge conversion must be one")
+        elif self.hedge_quote_conversion_rate is None:
+            raise ValueError("cross-quote option hedge requires an explicit conversion rate")
+        elif self.hedge_quote_conversion_rate != ONE:
+            raise ValueError("cross-quote option hedge currently requires parity conversion")
         return self
 
 
@@ -556,6 +582,13 @@ class OptionsVolatilityStrategy:
             )
         expiry = context.call.instrument.expiry
         assert expiry is not None
+        seconds_to_expiry = Decimal(
+            str((expiry - context.timestamp).total_seconds())
+        )
+        holding_budget_seconds = int(
+            seconds_to_expiry - Decimal(self.config.expiry_exit_buffer_seconds)
+        )
+        assert holding_budget_seconds > 0
         confidence = min(ONE, abs(volatility_edge) / self.config.minimum_volatility_edge)
         signal_id = _signal_id(
             self.config.strategy_id,
@@ -579,7 +612,7 @@ class OptionsVolatilityStrategy:
                 1,
                 min(
                     self.config.maximum_holding_seconds,
-                    int((expiry - context.timestamp).total_seconds()),
+                    holding_budget_seconds,
                 ),
             ),
             expected_move_bps=expected_move_bps,
@@ -593,7 +626,14 @@ class OptionsVolatilityStrategy:
                 ),
                 "volatility_edge": str(volatility_edge),
                 "delta_hedge_underlying": str(hedge_quantity),
+                "hedge_quote_conversion_rate": str(
+                    context.hedge_quote_conversion_rate or ONE
+                ),
+                "expiry_exit_buffer_seconds": str(
+                    self.config.expiry_exit_buffer_seconds
+                ),
                 "risk": risk.snapshot.model_dump(mode="json"),
+                "risk_limits": context.risk_limits.model_dump(mode="json"),
             },
         )
         return OptionsVolatilityEvaluation(
@@ -635,6 +675,11 @@ class OptionsVolatilityStrategy:
         seconds_to_expiry = Decimal(str((expiry - context.timestamp).total_seconds()))
         if seconds_to_expiry <= 0:
             return "option_expired"
+        holding_budget_seconds = int(
+            seconds_to_expiry - Decimal(self.config.expiry_exit_buffer_seconds)
+        )
+        if holding_budget_seconds < 1:
+            return "option_expiry_exit_window"
         if seconds_to_expiry > self.config.maximum_days_to_expiry * Decimal("86400"):
             return "option_expiry_too_distant"
         if min(quote.liquidity_score for quote in quotes) < self.config.minimum_liquidity_score:

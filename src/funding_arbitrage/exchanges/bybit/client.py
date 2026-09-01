@@ -19,6 +19,7 @@ import websockets
 
 from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
 from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
+from funding_arbitrage.domain.events import OptionQuoteSnapshot, OptionRight
 from funding_arbitrage.exchanges.base.exceptions import (
     InvalidResponseError,
     NetworkError,
@@ -71,6 +72,23 @@ def _required_expiry_from_ms(value: object, field: str) -> datetime:
         return datetime.fromtimestamp(float(milliseconds / Decimal("1000")), tz=UTC)
     except (OSError, OverflowError, ValueError) as exc:
         raise InvalidResponseError(f"{field} is out of range") from exc
+
+
+def _bybit_option_strike(symbol: str, right: OptionRight) -> Decimal:
+    right_code = "C" if right is OptionRight.CALL else "P"
+    parts = symbol.upper().split("-")
+    try:
+        right_index = max(
+            index for index, value in enumerate(parts) if value == right_code
+        )
+        if right_index < 2:
+            raise ValueError("strike token is missing")
+        strike = decimal(parts[right_index - 1], "strikePrice")
+    except (ValueError, StopIteration) as exc:
+        raise InvalidResponseError(f"invalid Bybit option symbol: {symbol}") from exc
+    if strike <= 0:
+        raise InvalidResponseError("Bybit option strike must be positive")
+    return strike
 
 
 class BybitPublicAdapter(ExchangeAdapter):
@@ -236,6 +254,181 @@ class BybitPublicAdapter(ExchangeAdapter):
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidResponseError(f"invalid Bybit instrument: {row!r}") from exc
+
+    async def get_option_chain(
+        self, base_assets: tuple[str, ...]
+    ) -> list[OptionQuoteSnapshot]:
+        assets = tuple(
+            dict.fromkeys(
+                asset.strip().upper() for asset in base_assets if asset.strip()
+            )
+        )
+        if not assets:
+            return []
+        results = await asyncio.gather(
+            *(self._get_option_asset(asset) for asset in assets),
+            return_exceptions=True,
+        )
+        quotes: list[OptionQuoteSnapshot] = []
+        failures: list[BaseException] = []
+        for asset, result in zip(assets, results, strict=True):
+            if isinstance(result, BaseException):
+                failures.append(result)
+                logger.warning(
+                    "bybit_option_asset_failed",
+                    extra={
+                        "exchange": self.name,
+                        "asset": asset,
+                        "error_type": type(result).__name__,
+                    },
+                )
+            else:
+                quotes.extend(result)
+        if failures and not quotes:
+            raise NetworkError("Bybit option chain unavailable for every requested asset")
+        return sorted(quotes, key=lambda quote: quote.instrument.canonical_id)
+
+    async def _get_option_asset(self, base_asset: str) -> list[OptionQuoteSnapshot]:
+        instruments_task = asyncio.create_task(
+            self._get_option_instruments(base_asset)
+        )
+        tickers_task = asyncio.create_task(
+            self._request(
+                "/v5/market/tickers",
+                {"category": "option", "baseCoin": base_asset},
+            )
+        )
+        try:
+            instrument_rows, ticker_result = await asyncio.gather(
+                instruments_task, tickers_task
+            )
+        except BaseException:
+            for task in (instruments_task, tickers_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                instruments_task, tickers_task, return_exceptions=True
+            )
+            raise
+        ticker_rows = ticker_result.get("list")
+        if not isinstance(ticker_rows, list):
+            raise InvalidResponseError("Bybit option ticker list is missing")
+        tickers = {
+            str(row.get("symbol", "")): row
+            for row in ticker_rows
+            if isinstance(row, dict) and row.get("symbol")
+        }
+        response_time = ticker_result.get("_response_time")
+        if response_time in (None, ""):
+            raise InvalidResponseError("Bybit option response timestamp is missing")
+        timestamp = _utc_from_ms(response_time, "response_time")
+        quotes: list[OptionQuoteSnapshot] = []
+        skipped_quotes = 0
+        for instrument_row in instrument_rows:
+            ticker_row = tickers.get(str(instrument_row.get("symbol", "")))
+            if ticker_row is None:
+                continue
+            try:
+                quotes.append(
+                    self._parse_option_quote(instrument_row, ticker_row, timestamp)
+                )
+            except (InvalidResponseError, KeyError, TypeError, ValueError):
+                skipped_quotes += 1
+        if skipped_quotes:
+            logger.warning(
+                "bybit_option_quotes_skipped",
+                extra={
+                    "exchange": self.name,
+                    "skipped_count": skipped_quotes,
+                    "accepted_count": len(quotes),
+                },
+            )
+        return quotes
+
+    async def _get_option_instruments(
+        self, base_asset: str
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, str | int] = {
+                "category": "option",
+                "baseCoin": base_asset,
+                "status": "Trading",
+                "limit": 1000,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            result = await self._request("/v5/market/instruments-info", params)
+            page = result.get("list")
+            if not isinstance(page, list):
+                raise InvalidResponseError("Bybit option instrument list is missing")
+            rows.extend(row for row in page if isinstance(row, dict))
+            next_cursor = result.get("nextPageCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                return rows
+            cursor = next_cursor
+
+    def _parse_option_quote(
+        self,
+        instrument_row: dict[str, Any],
+        ticker_row: dict[str, Any],
+        timestamp: datetime,
+    ) -> OptionQuoteSnapshot:
+        try:
+            symbol = str(instrument_row["symbol"])
+            if str(instrument_row.get("status", "")) != "Trading":
+                raise InvalidResponseError("Bybit option is not trading")
+            right = {
+                "Call": OptionRight.CALL,
+                "Put": OptionRight.PUT,
+            }[str(instrument_row["optionsType"])]
+            strike = _bybit_option_strike(symbol, right)
+            price_filter = instrument_row["priceFilter"]
+            lot_filter = instrument_row["lotSizeFilter"]
+            if not isinstance(price_filter, dict) or not isinstance(lot_filter, dict):
+                raise InvalidResponseError("Bybit option filters are missing")
+            instrument = DomainInstrumentKey(
+                venue=self.name,
+                exchange_symbol=symbol,
+                base_asset=str(instrument_row["baseCoin"]),
+                quote_asset=str(instrument_row["quoteCoin"]),
+                instrument_type=DomainInstrumentType.OPTION,
+                settlement_asset=str(instrument_row["settleCoin"]),
+                expiry=_required_expiry_from_ms(
+                    instrument_row.get("deliveryTime"), "deliveryTime"
+                ),
+                strike_price=strike,
+                option_right=right,
+            )
+            return OptionQuoteSnapshot(
+                instrument=instrument,
+                underlying_price=decimal(
+                    ticker_row["underlyingPrice"], "underlyingPrice"
+                ),
+                bid_price=decimal(ticker_row["bid1Price"], "bid1Price"),
+                bid_quantity=decimal(ticker_row["bid1Size"], "bid1Size"),
+                ask_price=decimal(ticker_row["ask1Price"], "ask1Price"),
+                ask_quantity=decimal(ticker_row["ask1Size"], "ask1Size"),
+                mark_implied_volatility=decimal(ticker_row["markIv"], "markIv"),
+                contract_multiplier=Decimal("1"),
+                price_tick=decimal(price_filter["tickSize"], "tickSize"),
+                quantity_step=decimal(lot_filter["qtyStep"], "qtyStep"),
+                minimum_quantity=decimal(
+                    lot_filter["minOrderQty"], "minOrderQty"
+                ),
+                open_interest_contracts=decimal(
+                    ticker_row.get("openInterest", "0"), "openInterest"
+                ),
+                volume_contracts=decimal(
+                    ticker_row.get("volume24h", "0"), "volume24h"
+                ),
+                exchange_timestamp=timestamp,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidResponseError(
+                f"invalid Bybit option quote: {symbol if 'symbol' in locals() else 'unknown'}"
+            ) from exc
 
     async def get_tickers(self) -> list[Ticker]:
         tickers: list[Ticker] = []

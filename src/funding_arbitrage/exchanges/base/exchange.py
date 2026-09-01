@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import datetime
 
+from funding_arbitrage.domain.events import OptionQuoteSnapshot
+
 from .models import (
     Candle,
     FundingHistoryPoint,
@@ -67,3 +69,15 @@ class ExchangeAdapter(ABC):
         interval_minutes: int = 60,
     ) -> list[Candle]:
         raise NotImplementedError("historical candles are not implemented by this adapter")
+
+    async def get_option_chain(
+        self, base_assets: tuple[str, ...]
+    ) -> list[OptionQuoteSnapshot]:
+        """Return normalized executable option quotes when the venue supports them.
+
+        Unsupported venues intentionally return an empty capability result. The
+        method is public-data only and must never require account credentials.
+        """
+
+        del base_assets
+        return []

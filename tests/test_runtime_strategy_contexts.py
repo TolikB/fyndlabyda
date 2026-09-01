@@ -11,6 +11,8 @@ from funding_arbitrage.domain.events import (
     DataQuality,
     InstrumentKey,
     InstrumentType,
+    OptionQuoteSnapshot,
+    OptionRight,
     TradingMode,
 )
 from funding_arbitrage.exchanges.base.models import (
@@ -46,6 +48,7 @@ from funding_arbitrage.strategies import (
     CrossExchangeLeadLagStrategy,
     DatedFuturesBasisStrategy,
     FundingBasisHarvestStrategy,
+    OptionsVolatilityStrategy,
 )
 
 NOW = datetime(2026, 8, 31, 12, tzinfo=UTC)
@@ -76,6 +79,9 @@ def _settings(venues: str) -> Settings:
         gate_taker_fee=ZERO,
         okx_maker_fee=ZERO,
         okx_taker_fee=ZERO,
+        bybit_option_maker_fee=ZERO,
+        bybit_option_taker_fee=ZERO,
+        multi_regime_stale_after_seconds=5,
     )
 
 
@@ -206,6 +212,41 @@ def _strategy_snapshot(
     )
 
 
+def _option_quote(
+    right: OptionRight,
+    *,
+    timestamp: datetime = NOW,
+) -> OptionQuoteSnapshot:
+    code = "C" if right is OptionRight.CALL else "P"
+    bid = Decimal("4") if right is OptionRight.CALL else Decimal("3.8")
+    return OptionQuoteSnapshot(
+        instrument=InstrumentKey(
+            venue="bybit",
+            exchange_symbol=f"BTC-25SEP26-100-{code}",
+            base_asset="BTC",
+            quote_asset="USD",
+            settlement_asset="USDC",
+            instrument_type=InstrumentType.OPTION,
+            expiry=NOW + timedelta(days=25),
+            strike_price=Decimal("100"),
+            option_right=right,
+        ),
+        underlying_price=Decimal("100"),
+        bid_price=bid,
+        bid_quantity=Decimal("100"),
+        ask_price=bid + Decimal("0.01"),
+        ask_quantity=Decimal("100"),
+        mark_implied_volatility=Decimal("0.20"),
+        contract_multiplier=Decimal("0.1"),
+        price_tick=Decimal("0.01"),
+        quantity_step=Decimal("1"),
+        minimum_quantity=Decimal("1"),
+        open_interest_contracts=Decimal("10000"),
+        volume_contracts=Decimal("1000"),
+        exchange_timestamp=timestamp,
+    )
+
+
 def _ticker(metadata: NormalizedInstrument, timestamp: datetime) -> Ticker:
     return Ticker(
         exchange=metadata.exchange,
@@ -304,6 +345,141 @@ def test_lead_lag_is_as_of_deterministic_and_survives_missing_atr() -> None:
     )
 
     assert provider(snapshot).lead_lag == ()
+
+
+def test_option_context_requires_fresh_pair_and_preserves_execution_contract() -> None:
+    underlying = _instrument("bybit")
+    market = MarketSnapshot(
+        instruments=[underlying],
+        tickers=[],
+        funding=[],
+        orderbooks={
+            ("bybit", "BTCUSDT", LegacyInstrumentType.PERPETUAL): (
+                _legacy_book(underlying, NOW)
+            )
+        },
+        captured_at=NOW,
+        stale_after_seconds=5,
+    )
+    runtime = RuntimeState(_settings("bybit"), {}, emit_metrics=False)
+    runtime.last_completed_snapshot = market
+    builder = RuntimeSynchronizedContextBuilder(runtime)
+    base = _strategy_snapshot(underlying)
+    call = _option_quote(OptionRight.CALL)
+    put = _option_quote(OptionRight.PUT)
+
+    call_only = builder.build(
+        base.model_copy(update={"trigger_option_quote": call})
+    )
+    paired = builder.build(
+        base.model_copy(update={"trigger_option_quote": put})
+    )
+
+    assert call_only.options_volatility == ()
+    assert len(paired.options_volatility) == 1
+    context = paired.options_volatility[0]
+    assert context.call.instrument == call.instrument
+    assert context.put.instrument == put.instrument
+    assert context.call.contract_multiplier == Decimal("0.1")
+    assert context.put.contract_multiplier == Decimal("0.1")
+    assert context.call.bid_price == call.bid_price
+    assert context.call.ask_price == call.ask_price
+    assert context.hedge_quote_conversion_rate == Decimal("1")
+    evaluation = OptionsVolatilityStrategy().evaluate(context)
+    assert evaluation.intent is not None
+
+    execution = RuntimeStrategyExecutionSnapshotProvider(runtime)(
+        evaluation.intent,
+        base.source_event_id,
+        NOW,
+        base.book,
+    )
+    assert execution is not None
+    option_quotes = {
+        item.instrument.option_right: item
+        for item in execution.quotes
+        if item.instrument.instrument_type is InstrumentType.OPTION
+    }
+    assert set(option_quotes) == {OptionRight.CALL, OptionRight.PUT}
+    assert option_quotes[OptionRight.CALL].best_bid == call.bid_price
+    assert option_quotes[OptionRight.CALL].best_ask == call.ask_price
+    assert option_quotes[OptionRight.CALL].contract_multiplier == Decimal("0.1")
+    assert option_quotes[OptionRight.CALL].quantity_step == Decimal("1")
+    risk_provider = RuntimeAdvancedRiskContextProvider(runtime)
+    risk_context = risk_provider(evaluation.intent, execution, NOW)
+    assert risk_context is not None
+    risk_evidence = evaluation.intent.evidence["risk"]
+    risk_limits = evaluation.intent.evidence["risk_limits"]
+    assert isinstance(risk_evidence, dict)
+    assert isinstance(risk_limits, dict)
+    gamma_cash = abs(Decimal(str(risk_evidence["gamma_cash_usd"])))
+    assert gamma_cash > 0
+    bounded_limits = dict(risk_limits)
+    bounded_limits["maximum_abs_gamma_cash_usd"] = str(
+        gamma_cash * Decimal("2")
+    )
+    bounded_evidence = dict(evaluation.intent.evidence)
+    bounded_evidence["risk_limits"] = bounded_limits
+    bounded_context = risk_provider(
+        evaluation.intent.model_copy(update={"evidence": bounded_evidence}),
+        execution,
+        NOW,
+    )
+    assert bounded_context is not None
+    assert (
+        bounded_context.available_liquidity_usd
+        <= bounded_context.reference_price * Decimal("2")
+    )
+    missing_limit = dict(risk_limits)
+    missing_limit.pop("maximum_abs_gamma_cash_usd")
+    incomplete_evidence = dict(evaluation.intent.evidence)
+    incomplete_evidence["risk_limits"] = missing_limit
+    assert (
+        risk_provider(
+            evaluation.intent.model_copy(update={"evidence": incomplete_evidence}),
+            execution,
+            NOW,
+        )
+        is None
+    )
+    assert (
+        risk_provider(
+            evaluation.intent.model_copy(update={"evidence": {}}),
+            execution,
+            NOW,
+        )
+        is None
+    )
+    assert (
+        risk_provider(
+            evaluation.intent.model_copy(
+                update={"evidence": {"risk": {"delta_notional_usd": "NaN"}}}
+            ),
+            execution,
+            NOW,
+        )
+        is None
+    )
+
+    stale_runtime = RuntimeState(_settings("bybit"), {}, emit_metrics=False)
+    stale_runtime.last_completed_snapshot = market
+    stale_builder = RuntimeSynchronizedContextBuilder(stale_runtime)
+    stale_call = _option_quote(
+        OptionRight.CALL,
+        timestamp=NOW - timedelta(seconds=6),
+    )
+    assert (
+        stale_builder.build(
+            base.model_copy(update={"trigger_option_quote": stale_call})
+        ).options_volatility
+        == ()
+    )
+    assert (
+        stale_builder.build(
+            base.model_copy(update={"trigger_option_quote": put})
+        ).options_volatility
+        == ()
+    )
 
 
 def test_funding_context_uses_exact_intervals_cap_and_as_of_history() -> None:

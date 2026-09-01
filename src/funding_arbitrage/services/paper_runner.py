@@ -45,6 +45,7 @@ from funding_arbitrage.execution.base import PaperFill
 from funding_arbitrage.execution.paper import PaperTradingExecutor
 from funding_arbitrage.market_data.collector import (
     CanonicalBookEventSink,
+    CanonicalOptionEventSink,
     MarketDataCollector,
     MarketSnapshot,
 )
@@ -168,6 +169,7 @@ class PaperTestRunner:
         collector: MarketDataCollector | None = None,
         public_events: PublicEventSupervisor | None = None,
         canonical_book_event_sink: CanonicalBookEventSink | None = None,
+        canonical_option_event_sink: CanonicalOptionEventSink | None = None,
         combined_snapshot_provider: (
             Callable[[datetime], PortfolioSnapshot | None] | None
         ) = None,
@@ -188,7 +190,16 @@ class PaperTestRunner:
             settings.paper_history_symbol_limit,
             settings.market_data_stale_seconds,
             settings.market_data_mode == "live_public",
+            option_assets=(
+                settings.multi_regime_asset_values
+                if settings.options_market_data_enabled
+                else ()
+            ),
+            option_refresh_seconds=settings.options_refresh_seconds,
+            option_maximum_expiries=settings.options_maximum_expiries,
+            option_strikes_per_expiry=settings.options_strikes_per_expiry,
             canonical_book_event_sink=canonical_book_event_sink,
+            canonical_option_event_sink=canonical_option_event_sink,
         )
         self.executor = PaperTradingExecutor(
             fees={venue: schedule[1] for venue, schedule in settings.fee_schedules.items()},

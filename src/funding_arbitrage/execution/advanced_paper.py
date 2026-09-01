@@ -35,14 +35,18 @@ from funding_arbitrage.domain.decisions import (
     SignalType,
 )
 from funding_arbitrage.domain.events import (
+    BookLevel,
     BookSnapshot,
     DataQuality,
     EventEnvelope,
     InstrumentKey,
+    InstrumentType,
+    OptionQuoteSnapshot,
     Side,
     TradeTick,
     TradingMode,
 )
+from funding_arbitrage.execution.option_fees import option_trade_fee
 from funding_arbitrage.services.decision_support import intent_fingerprint
 from funding_arbitrage.services.multi_regime import MultiRegimeDecisionBatch
 from funding_arbitrage.services.strategy_execution import (
@@ -105,6 +109,11 @@ class AdvancedPaperOrder(BaseModel):
     state: SimulatedOrderState = SimulatedOrderState.OPEN
     fills: tuple[SimulatedFill, ...] = ()
     rejection_reason: str | None = None
+    contract_multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    maker_fee_bps: Decimal | None = None
+    taker_fee_bps: Decimal | None = None
+    option_underlying_price: Decimal | None = Field(default=None, gt=0)
+    option_fee_cap_rate: Decimal | None = Field(default=None, gt=0, le=1)
     version: int = Field(default=1, ge=1)
 
     @field_validator("submitted_at", "expires_at")
@@ -121,6 +130,19 @@ class AdvancedPaperOrder(BaseModel):
             SimulatedOrderType.POST_ONLY,
         } and self.limit_price is None:
             raise ValueError("advanced paper limit order requires a price")
+        if any(
+            fee is not None and abs(fee) > Decimal("1000")
+            for fee in (self.maker_fee_bps, self.taker_fee_bps)
+        ):
+            raise ValueError("advanced paper fee is outside the supported bps range")
+        has_option_fee_model = (
+            self.option_underlying_price is not None
+            and self.option_fee_cap_rate is not None
+        )
+        if (
+            self.instrument.instrument_type is InstrumentType.OPTION
+        ) != has_option_fee_model:
+            raise ValueError("option paper order requires its exact fee model")
         return self
 
     @property
@@ -131,7 +153,10 @@ class AdvancedPaperOrder(BaseModel):
     def average_fill_price(self) -> Decimal | None:
         if self.filled_quantity <= ZERO:
             return None
-        return sum((fill.notional for fill in self.fills), ZERO) / self.filled_quantity
+        return (
+            sum((fill.price * fill.quantity for fill in self.fills), ZERO)
+            / self.filled_quantity
+        )
 
     @property
     def fee(self) -> Decimal:
@@ -240,6 +265,7 @@ class AdvancedPaperPosition(BaseModel):
         return sum(
             (
                 order.requested_quantity * (order.limit_price or ZERO)
+                * order.contract_multiplier
                 for order in self.entry_orders
             ),
             ZERO,
@@ -298,6 +324,7 @@ class AdvancedStrategyPaperBroker:
         self.simulation_version = simulation_version
         self._positions: dict[str, AdvancedPaperPosition] = {}
         self._books: dict[str, tuple[BookSnapshot, DataQuality]] = {}
+        self._option_underlying_prices: dict[str, Decimal] = {}
         self._latest_instrument_timestamp: dict[str, datetime] = {}
         self._seen: OrderedDict[str, str] = OrderedDict()
         self._seen_event_limit = seen_event_limit
@@ -442,6 +469,7 @@ class AdvancedStrategyPaperBroker:
             plan,
             intent,
             decision.approved_notional,
+            snapshot,
         )
         if self._has_active_instrument_conflict(position):
             position = self._reject_new_position(
@@ -476,6 +504,20 @@ class AdvancedStrategyPaperBroker:
                         event.metadata.quality,
                     )
                     frame = _frame(payload, event.metadata.quality)
+        elif isinstance(payload, OptionQuoteSnapshot):
+            instrument = payload.instrument
+            option_book = _option_book(payload)
+            if self._accept_instrument_time(
+                instrument, payload.exchange_timestamp
+            ):
+                self._books[instrument.canonical_id] = (
+                    option_book,
+                    event.metadata.quality,
+                )
+                self._option_underlying_prices[instrument.canonical_id] = (
+                    payload.underlying_price
+                )
+                frame = _frame(option_book, event.metadata.quality)
         elif isinstance(payload, TradeTick):
             instrument = payload.instrument
             cached = self._books.get(instrument.canonical_id)
@@ -551,14 +593,37 @@ class AdvancedStrategyPaperBroker:
         )
 
     def net_delta(self) -> Decimal:
-        return sum(
-            (
-                position.signed_quantity(order.leg_index)
-                * self._mark_price(position, order)
-                for position in self.active_positions
-                for order in position.entry_orders
-            ),
-            ZERO,
+        signed_non_option_delta = ZERO
+        option_delta_bound = ZERO
+        for position in self.active_positions:
+            for order in position.entry_orders:
+                signed_quantity = position.signed_quantity(order.leg_index)
+                if position.signal_type is SignalType.OPTIONS_VOLATILITY:
+                    reference_price = (
+                        self._option_underlying_prices.get(
+                            order.instrument.canonical_id,
+                            order.option_underlying_price or ZERO,
+                        )
+                        if order.instrument.instrument_type is InstrumentType.OPTION
+                        else self._mark_price(position, order)
+                    )
+                    option_delta_bound += (
+                        abs(signed_quantity)
+                        * reference_price
+                        * order.contract_multiplier
+                    )
+                    continue
+                signed_non_option_delta += (
+                    signed_quantity
+                    * self._mark_price(position, order)
+                    * order.contract_multiplier
+                )
+        if option_delta_bound <= ZERO:
+            return signed_non_option_delta
+        return (
+            signed_non_option_delta - option_delta_bound
+            if signed_non_option_delta < ZERO
+            else signed_non_option_delta + option_delta_bound
         )
 
     def instrument_signed_quantity(self, instrument: InstrumentKey) -> Decimal:
@@ -694,6 +759,7 @@ class AdvancedStrategyPaperBroker:
             realized += sum(
                 (
                     (fill.price - entry_price) * fill.quantity * direction
+                    * entry.contract_multiplier
                     for fill in fills
                 ),
                 ZERO,
@@ -890,6 +956,11 @@ class AdvancedStrategyPaperBroker:
             requested_quantity=quantity,
             submitted_at=timestamp,
             reduce_only=True,
+            contract_multiplier=entry.contract_multiplier,
+            maker_fee_bps=entry.maker_fee_bps,
+            taker_fee_bps=entry.taker_fee_bps,
+            option_underlying_price=entry.option_underlying_price,
+            option_fee_cap_rate=entry.option_fee_cap_rate,
         )
 
     def _simulate(
@@ -912,6 +983,26 @@ class AdvancedStrategyPaperBroker:
             expires_at=order.expires_at,
         )
         result = model.simulate(simulated, (frame,))
+        fee_bps = (
+            order.maker_fee_bps
+            if order.order_type is SimulatedOrderType.POST_ONLY
+            else order.taker_fee_bps
+        )
+        scaled_fills = _scale_fills(
+            result.fills,
+            order.contract_multiplier,
+            fee_bps,
+            option_underlying_price=(
+                self._option_underlying_prices.get(
+                    order.instrument.canonical_id,
+                    order.option_underlying_price or ZERO,
+                )
+                if order.instrument.instrument_type is InstrumentType.OPTION
+                else None
+            ),
+            option_fee_cap_rate=order.option_fee_cap_rate,
+        )
+        result = result.model_copy(update={"fills": scaled_fills})
         total_filled = order.filled_quantity + result.filled_quantity
         state = result.state
         if total_filled >= order.requested_quantity:
@@ -923,7 +1014,7 @@ class AdvancedStrategyPaperBroker:
             update={
                 "filled_quantity": total_filled,
                 "state": state,
-                "fills": order.fills + result.fills,
+                "fills": order.fills + scaled_fills,
                 "rejection_reason": (
                     result.rejection_reason.value
                     if result.rejection_reason is not None
@@ -932,7 +1023,7 @@ class AdvancedStrategyPaperBroker:
                 "version": order.version + 1,
             }
         )
-        return updated, result.fills, result
+        return updated, scaled_fills, result
 
     def _mark(
         self,
@@ -955,7 +1046,12 @@ class AdvancedStrategyPaperBroker:
             if quantity <= ZERO or entry_price is None or mark is None:
                 continue
             direction = Decimal("1") if order.side is Side.BUY else Decimal("-1")
-            unrealized += (mark - entry_price) * quantity * direction
+            unrealized += (
+                (mark - entry_price)
+                * quantity
+                * direction
+                * order.contract_multiplier
+            )
         return position.model_copy(
             update={
                 "marks": marks,
@@ -970,10 +1066,14 @@ class AdvancedStrategyPaperBroker:
         plan: ExecutionPlan,
         intent: SignalIntent,
         approved_notional: Decimal,
+        snapshot: StrategyExecutionSnapshot,
     ) -> AdvancedPaperPosition:
         if len(plan.instructions) != len(intent.legs):
             raise ValueError("advanced paper plan does not cover every intent leg")
         instructions = {item.leg_index: item for item in plan.instructions}
+        quotes = {
+            quote.instrument.canonical_id: quote for quote in snapshot.quotes
+        }
         orders: list[AdvancedPaperOrder] = []
         for index, leg in enumerate(intent.legs):
             instruction = instructions.get(index)
@@ -1006,6 +1106,21 @@ class AdvancedStrategyPaperBroker:
                     limit_price=instruction.limit_price,
                     submitted_at=plan.created_at,
                     expires_at=plan.expires_at,
+                    contract_multiplier=quotes[
+                        instruction.instrument.canonical_id
+                    ].contract_multiplier,
+                    maker_fee_bps=quotes[
+                        instruction.instrument.canonical_id
+                    ].maker_fee_bps,
+                    taker_fee_bps=quotes[
+                        instruction.instrument.canonical_id
+                    ].taker_fee_bps,
+                    option_underlying_price=quotes[
+                        instruction.instrument.canonical_id
+                    ].option_underlying_price,
+                    option_fee_cap_rate=quotes[
+                        instruction.instrument.canonical_id
+                    ].option_fee_cap_rate,
                 )
             )
         return AdvancedPaperPosition(
@@ -1075,6 +1190,7 @@ class AdvancedStrategyPaperBroker:
             (
                 abs(position.signed_quantity(order.leg_index))
                 * self._mark_price(position, order)
+                * order.contract_multiplier
                 for order in position.entry_orders
                 if (asset is None or order.instrument.base_asset == asset)
                 and (venue is None or order.instrument.venue == venue)
@@ -1147,6 +1263,74 @@ def _frame(
         high_price=trade.price if trade is not None else None,
         stale=quality is not DataQuality.VALID,
         venue_available=quality is not DataQuality.UNAVAILABLE,
+    )
+
+
+def _option_book(quote: OptionQuoteSnapshot) -> BookSnapshot:
+    return BookSnapshot(
+        instrument=quote.instrument,
+        bids=(
+            BookLevel(price=quote.bid_price, quantity=quote.bid_quantity),
+        ),
+        asks=(
+            BookLevel(price=quote.ask_price, quantity=quote.ask_quantity),
+        ),
+        sequence=int(quote.exchange_timestamp.timestamp() * 1000),
+        exchange_timestamp=quote.exchange_timestamp,
+    )
+
+
+def _scale_fills(
+    fills: tuple[SimulatedFill, ...],
+    contract_multiplier: Decimal,
+    fee_bps: Decimal | None,
+    *,
+    option_underlying_price: Decimal | None,
+    option_fee_cap_rate: Decimal | None,
+) -> tuple[SimulatedFill, ...]:
+    if contract_multiplier <= ZERO:
+        raise ValueError("advanced paper contract multiplier must be positive")
+    return tuple(
+        fill.model_copy(
+            update={
+                "notional": fill.notional * contract_multiplier,
+                "fee": _scaled_fee(
+                    fill,
+                    contract_multiplier,
+                    fee_bps,
+                    option_underlying_price=option_underlying_price,
+                    option_fee_cap_rate=option_fee_cap_rate,
+                ),
+                "spread_cost": fill.spread_cost * contract_multiplier,
+                "impact_cost": fill.impact_cost * contract_multiplier,
+            }
+        )
+        for fill in fills
+    )
+
+
+def _scaled_fee(
+    fill: SimulatedFill,
+    contract_multiplier: Decimal,
+    fee_bps: Decimal | None,
+    *,
+    option_underlying_price: Decimal | None,
+    option_fee_cap_rate: Decimal | None,
+) -> Decimal:
+    if fee_bps is None:
+        return fill.fee * contract_multiplier
+    normalized_rate = max(ZERO, fee_bps) / Decimal("10000")
+    if option_underlying_price is None and option_fee_cap_rate is None:
+        return fill.notional * contract_multiplier * normalized_rate
+    if option_underlying_price is None or option_fee_cap_rate is None:
+        raise ValueError("incomplete option fee model")
+    return option_trade_fee(
+        option_price=fill.price,
+        underlying_price=option_underlying_price,
+        quantity_contracts=fill.quantity,
+        contract_multiplier=contract_multiplier,
+        fee_rate=normalized_rate,
+        fee_cap_rate=option_fee_cap_rate,
     )
 
 

@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 import websockets
 
-from funding_arbitrage.domain.events import BookEvent
+from funding_arbitrage.domain.events import BookEvent, OptionQuoteSnapshot, OptionRight
 from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
 from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
@@ -229,6 +229,192 @@ class OkxPublicAdapter(ExchangeAdapter):
             )
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise InvalidResponseError(f"invalid OKX instrument: {row!r}") from exc
+
+    async def get_option_chain(
+        self, base_assets: tuple[str, ...]
+    ) -> list[OptionQuoteSnapshot]:
+        assets = tuple(
+            dict.fromkeys(asset.strip().upper() for asset in base_assets if asset.strip())
+        )
+        if not assets:
+            return []
+        results = await asyncio.gather(
+            *(self._get_option_asset(asset) for asset in assets),
+            return_exceptions=True,
+        )
+        quotes: list[OptionQuoteSnapshot] = []
+        failures: list[BaseException] = []
+        for asset, result in zip(assets, results, strict=True):
+            if isinstance(result, BaseException):
+                failures.append(result)
+                logger.warning(
+                    "okx_option_asset_failed",
+                    extra={
+                        "exchange": self.name,
+                        "asset": asset,
+                        "error_type": type(result).__name__,
+                    },
+                )
+            else:
+                quotes.extend(result)
+        if failures and not quotes:
+            raise NetworkError("OKX option chain unavailable for every requested asset")
+        return sorted(quotes, key=lambda quote: quote.instrument.canonical_id)
+
+    async def _get_option_asset(self, base_asset: str) -> list[OptionQuoteSnapshot]:
+        family = f"{base_asset}-USD"
+        responses = await asyncio.gather(
+            self._request(
+                "/api/v5/public/instruments",
+                {"instType": "OPTION", "instFamily": family},
+            ),
+            self._request(
+                "/api/v5/market/tickers",
+                {"instType": "OPTION", "instFamily": family},
+            ),
+            self._request(
+                "/api/v5/public/opt-summary",
+                {"instFamily": family},
+            ),
+            self._request(
+                "/api/v5/market/index-tickers",
+                {"instId": family},
+            ),
+            self._request(
+                "/api/v5/public/open-interest",
+                {"instType": "OPTION", "instFamily": family},
+            ),
+        )
+        instrument_rows, ticker_rows, summary_rows, index_rows, open_interest_rows = responses
+        index_row = next(
+            (row for row in index_rows if str(row.get("instId", "")) == family),
+            None,
+        )
+        if index_row is None:
+            raise InvalidResponseError(f"OKX option index is missing for {family}")
+        underlying_price = decimal(index_row.get("idxPx"), "idxPx")
+        index_timestamp = _ms(index_row.get("ts"))
+        tickers = {
+            str(row.get("instId", "")): row
+            for row in ticker_rows
+            if row.get("instId")
+        }
+        summaries = {
+            str(row.get("instId", "")): row
+            for row in summary_rows
+            if row.get("instId")
+        }
+        open_interest = {
+            str(row.get("instId", "")): row
+            for row in open_interest_rows
+            if row.get("instId")
+        }
+        quotes: list[OptionQuoteSnapshot] = []
+        skipped_quotes = 0
+        for instrument_row in instrument_rows:
+            symbol = str(instrument_row.get("instId", ""))
+            ticker_row = tickers.get(symbol)
+            summary_row = summaries.get(symbol)
+            if ticker_row is None or summary_row is None:
+                continue
+            try:
+                quotes.append(
+                    self._parse_option_quote(
+                        instrument_row,
+                        ticker_row,
+                        summary_row,
+                        open_interest.get(symbol),
+                        underlying_price,
+                        index_timestamp,
+                    )
+                )
+            except (InvalidResponseError, KeyError, TypeError, ValueError):
+                skipped_quotes += 1
+        if skipped_quotes:
+            logger.warning(
+                "okx_option_quotes_skipped",
+                extra={
+                    "exchange": self.name,
+                    "skipped_count": skipped_quotes,
+                    "accepted_count": len(quotes),
+                },
+            )
+        return quotes
+
+    def _parse_option_quote(
+        self,
+        instrument_row: dict[str, Any],
+        ticker_row: dict[str, Any],
+        summary_row: dict[str, Any],
+        open_interest_row: dict[str, Any] | None,
+        underlying_price: Decimal,
+        index_timestamp: datetime,
+    ) -> OptionQuoteSnapshot:
+        try:
+            if str(instrument_row.get("state", "")) != "live":
+                raise InvalidResponseError("OKX option is not live")
+            symbol = str(instrument_row["instId"])
+            family = str(instrument_row.get("instFamily") or instrument_row["uly"])
+            base_asset, quote_asset = family.split("-", maxsplit=1)
+            right = {
+                "C": OptionRight.CALL,
+                "P": OptionRight.PUT,
+            }[str(instrument_row["optType"])]
+            contract_value_currency = str(
+                instrument_row.get("ctValCcy", base_asset)
+            ).upper()
+            if contract_value_currency != base_asset.upper():
+                raise InvalidResponseError(
+                    "OKX option contract value is not underlying-denominated"
+                )
+            contract_multiplier = decimal(
+                instrument_row["ctVal"], "ctVal"
+            ) * decimal(instrument_row.get("ctMult") or "1", "ctMult")
+            ticker_timestamp = _ms(ticker_row.get("ts"))
+            summary_timestamp = _ms(summary_row.get("ts"))
+            timestamps = [ticker_timestamp, summary_timestamp, index_timestamp]
+            oi_value = Decimal("0")
+            if open_interest_row is not None:
+                oi_value = decimal(open_interest_row.get("oi", "0"), "oi")
+                if open_interest_row.get("ts") not in (None, ""):
+                    timestamps.append(_ms(open_interest_row["ts"]))
+            instrument = DomainInstrumentKey(
+                venue=self.name,
+                exchange_symbol=symbol,
+                base_asset=base_asset,
+                quote_asset=quote_asset,
+                instrument_type=DomainInstrumentType.OPTION,
+                settlement_asset=str(instrument_row["settleCcy"]),
+                expiry=_ms(instrument_row["expTime"]),
+                strike_price=decimal(instrument_row["stk"], "stk"),
+                option_right=right,
+            )
+            return OptionQuoteSnapshot(
+                instrument=instrument,
+                underlying_price=underlying_price,
+                bid_price=decimal(ticker_row["bidPx"], "bidPx")
+                * underlying_price,
+                bid_quantity=decimal(ticker_row["bidSz"], "bidSz"),
+                ask_price=decimal(ticker_row["askPx"], "askPx")
+                * underlying_price,
+                ask_quantity=decimal(ticker_row["askSz"], "askSz"),
+                mark_implied_volatility=decimal(
+                    summary_row["markVol"], "markVol"
+                ),
+                contract_multiplier=contract_multiplier,
+                price_tick=decimal(instrument_row["tickSz"], "tickSz")
+                * underlying_price,
+                quantity_step=decimal(instrument_row["lotSz"], "lotSz"),
+                minimum_quantity=decimal(instrument_row["minSz"], "minSz"),
+                native_price_multiplier=underlying_price,
+                open_interest_contracts=oi_value,
+                volume_contracts=decimal(ticker_row.get("vol24h", "0"), "vol24h"),
+                exchange_timestamp=min(timestamps),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidResponseError(
+                f"invalid OKX option quote: {instrument_row.get('instId', 'unknown')}"
+            ) from exc
 
     async def get_tickers(self) -> list[Ticker]:
         result: list[Ticker] = []

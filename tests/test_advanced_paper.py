@@ -36,6 +36,8 @@ from funding_arbitrage.domain.events import (
     InstrumentKey,
     InstrumentType,
     LiquidityRole,
+    OptionQuoteSnapshot,
+    OptionRight,
     Side,
     TradeTick,
     TradingMode,
@@ -179,7 +181,7 @@ def _broker(*, participation: str = "1") -> AdvancedStrategyPaperBroker:
 
 
 def _event(
-    payload: BookSnapshot | TradeTick,
+    payload: BookSnapshot | TradeTick | OptionQuoteSnapshot,
     sequence: int,
 ) -> EventEnvelope:
     timestamp = payload.exchange_timestamp
@@ -187,7 +189,11 @@ def _event(
         kind=(
             EventKind.BOOK_SNAPSHOT
             if isinstance(payload, BookSnapshot)
-            else EventKind.TRADE_TICK
+            else (
+                EventKind.OPTION_QUOTE_SNAPSHOT
+                if isinstance(payload, OptionQuoteSnapshot)
+                else EventKind.TRADE_TICK
+            )
         ),
         metadata=EventMetadata(
             event_id=f"advanced-paper-event-{sequence}",
@@ -318,6 +324,164 @@ def test_advanced_paper_rejects_tampered_post_only_instruction() -> None:
         match="advanced paper instruction and intent mismatch",
     ):
         _broker().submit_authorized(tampered, intent, decision, snapshot)
+
+
+def test_option_contract_multiplier_scales_fills_fees_pnl_and_exposure() -> None:
+    expiry = NOW + timedelta(days=30)
+
+    def option_instrument(right: OptionRight) -> InstrumentKey:
+        code = "C" if right is OptionRight.CALL else "P"
+        return InstrumentKey(
+            venue="BYBIT",
+            exchange_symbol=f"BTC-30SEP26-100-{code}",
+            base_asset="BTC",
+            quote_asset="USDT",
+            settlement_asset="USDT",
+            instrument_type=InstrumentType.OPTION,
+            expiry=expiry,
+            strike_price=Decimal("100"),
+            option_right=right,
+        )
+
+    call = option_instrument(OptionRight.CALL)
+    put = option_instrument(OptionRight.PUT)
+    intent = SignalIntent(
+        signal_id="option-straddle-signal",
+        strategy_id="options-volatility-v1",
+        mode=TradingMode.PAPER,
+        signal_type=SignalType.OPTIONS_VOLATILITY,
+        primary_instrument=call,
+        side=Side.BUY,
+        legs=(
+            SignalLeg(instrument=call, side=Side.BUY),
+            SignalLeg(instrument=put, side=Side.BUY),
+        ),
+        regime=MarketRegime.RANGE,
+        quality_score=Decimal("90"),
+        confidence=Decimal("0.9"),
+        expected_holding_seconds=30,
+        expected_move_bps=Decimal("100"),
+        estimated_cost_bps=Decimal("10"),
+        created_at=NOW,
+        expires_at=NOW + timedelta(seconds=120),
+    )
+    decision = RiskDecision(
+        signal_id=intent.signal_id,
+        decision_id="risk-option-straddle",
+        decided_at=NOW,
+        approved=True,
+        approved_risk_usdt=Decimal("1"),
+        approved_quantity=Decimal("1"),
+        approved_notional=Decimal("1"),
+        max_slippage_bps=Decimal("20"),
+        max_execution_seconds=120,
+        correlation_multiplier=Decimal("1"),
+        drawdown_multiplier=Decimal("1"),
+        regime_multiplier=Decimal("1"),
+    )
+    option_books = {
+        call.canonical_id: _book(call, NOW, bid="5", ask="5.01"),
+        put.canonical_id: _book(put, NOW, bid="4", ask="4.01"),
+    }
+    snapshot = build_strategy_execution_snapshot(
+        intent=intent,
+        source_event_id="source-option-event",
+        captured_at=NOW,
+        quotes=tuple(
+            InstrumentExecutionQuote(
+                instrument=instrument,
+                book=option_books[instrument.canonical_id],
+                data_quality=DataQuality.VALID,
+                quantity_step=Decimal("1"),
+                price_tick=Decimal("0.01"),
+                minimum_quantity=Decimal("1"),
+                contract_multiplier=Decimal("0.1"),
+                maker_fee_bps=Decimal("0"),
+                taker_fee_bps=Decimal("3"),
+                option_underlying_price=Decimal("100"),
+                option_fee_cap_rate=Decimal("0.07"),
+            )
+            for instrument in (call, put)
+        ),
+    )
+    plan = AdvancedStrategyExecutionPlanner().build(
+        intent,
+        decision,
+        snapshot,
+        NOW,
+    )
+    broker = _broker()
+    submitted = broker.submit_authorized(plan, intent, decision, snapshot)
+    assert submitted is not None
+
+    def option_event(
+        instrument: InstrumentKey,
+        timestamp: datetime,
+        sequence: int,
+        *,
+        bid: str,
+        ask: str,
+        underlying: str = "100",
+    ) -> EventEnvelope:
+        quote = OptionQuoteSnapshot(
+            instrument=instrument,
+            underlying_price=Decimal(underlying),
+            bid_price=Decimal(bid),
+            bid_quantity=Decimal("10"),
+            ask_price=Decimal(ask),
+            ask_quantity=Decimal("10"),
+            mark_implied_volatility=Decimal("0.2"),
+            contract_multiplier=Decimal("0.1"),
+            price_tick=Decimal("0.01"),
+            quantity_step=Decimal("1"),
+            minimum_quantity=Decimal("1"),
+            exchange_timestamp=timestamp,
+        )
+        return _event(quote, sequence)
+
+    broker.advance(
+        option_event(call, NOW + timedelta(seconds=1), 1, bid="5", ask="5.01")
+    )
+    opened = broker.advance(
+        option_event(put, NOW + timedelta(seconds=2), 2, bid="4", ask="4.01")
+    )[-1].position
+
+    assert opened.status is AdvancedPaperStatus.OPEN
+    assert opened.entry_order(0).fills[0].notional == Decimal("0.501")
+    assert opened.entry_order(1).fills[0].notional == Decimal("0.401")
+    assert opened.entry_order(0).fills[0].fee == Decimal("0.00300")
+    assert opened.entry_order(1).fills[0].fee == Decimal("0.00300")
+    assert opened.total_fee == Decimal("0.00600")
+    assert opened.reserved_notional < Decimal("1")
+    assert broker.gross_exposure == Decimal("0.9")
+    assert broker.net_delta() == Decimal("20")
+
+    broker.advance(
+        option_event(
+            call,
+            NOW + timedelta(seconds=31),
+            3,
+            bid="5",
+            ask="5.01",
+            underlying="200",
+        )
+    )
+    closed = broker.advance(
+        option_event(
+            put,
+            NOW + timedelta(seconds=32),
+            4,
+            bid="4",
+            ask="4.01",
+            underlying="200",
+        )
+    )[-1].position
+
+    assert closed.status is AdvancedPaperStatus.CLOSED
+    assert closed.realized_gross_pnl == Decimal("-0.002")
+    assert closed.total_fee == Decimal("0.01800")
+    assert closed.net_pnl == Decimal("-0.02000")
+    assert broker.gross_exposure == 0
 
 
 @pytest.mark.asyncio

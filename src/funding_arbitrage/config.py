@@ -122,6 +122,18 @@ class Settings(BaseSettings):
         default=Decimal("10"),
         alias="MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS",
     )
+    options_market_data_enabled: bool = Field(
+        default=True, alias="OPTIONS_MARKET_DATA_ENABLED"
+    )
+    options_refresh_seconds: float = Field(
+        default=5.0, alias="OPTIONS_REFRESH_SECONDS"
+    )
+    options_maximum_expiries: int = Field(
+        default=2, alias="OPTIONS_MAXIMUM_EXPIRIES"
+    )
+    options_strikes_per_expiry: int = Field(
+        default=3, alias="OPTIONS_STRIKES_PER_EXPIRY"
+    )
     public_event_symbol_limit_per_profile: int = Field(
         default=3, alias="PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE"
     )
@@ -504,10 +516,28 @@ class Settings(BaseSettings):
     )
     bybit_maker_fee: Decimal = Field(default=Decimal("0.0002"), alias="BYBIT_MAKER_FEE")
     bybit_taker_fee: Decimal = Field(default=Decimal("0.00055"), alias="BYBIT_TAKER_FEE")
+    bybit_option_maker_fee: Decimal = Field(
+        default=Decimal("0.0002"), alias="BYBIT_OPTION_MAKER_FEE"
+    )
+    bybit_option_taker_fee: Decimal = Field(
+        default=Decimal("0.0003"), alias="BYBIT_OPTION_TAKER_FEE"
+    )
+    bybit_option_fee_cap_rate: Decimal = Field(
+        default=Decimal("0.07"), alias="BYBIT_OPTION_FEE_CAP_RATE"
+    )
     gate_maker_fee: Decimal = Field(default=Decimal("0.00015"), alias="GATE_MAKER_FEE")
     gate_taker_fee: Decimal = Field(default=Decimal("0.0005"), alias="GATE_TAKER_FEE")
     okx_maker_fee: Decimal = Field(default=Decimal("0.0002"), alias="OKX_MAKER_FEE")
     okx_taker_fee: Decimal = Field(default=Decimal("0.0005"), alias="OKX_TAKER_FEE")
+    okx_option_maker_fee: Decimal = Field(
+        default=Decimal("0.0002"), alias="OKX_OPTION_MAKER_FEE"
+    )
+    okx_option_taker_fee: Decimal = Field(
+        default=Decimal("0.0003"), alias="OKX_OPTION_TAKER_FEE"
+    )
+    okx_option_fee_cap_rate: Decimal = Field(
+        default=Decimal("0.07"), alias="OKX_OPTION_FEE_CAP_RATE"
+    )
     binance_maker_fee: Decimal = Field(default=Decimal("0.0002"), alias="BINANCE_MAKER_FEE")
     binance_taker_fee: Decimal = Field(default=Decimal("0.0004"), alias="BINANCE_TAKER_FEE")
     hyperliquid_maker_fee: Decimal = Field(
@@ -707,6 +737,23 @@ class Settings(BaseSettings):
             "mexc": (self.mexc_maker_fee, self.mexc_taker_fee),
             "kucoin": (self.kucoin_maker_fee, self.kucoin_taker_fee),
             "htx": (self.htx_maker_fee, self.htx_taker_fee),
+        }
+
+    @property
+    def option_fee_schedules(
+        self,
+    ) -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+        return {
+            "bybit": (
+                self.bybit_option_maker_fee,
+                self.bybit_option_taker_fee,
+                self.bybit_option_fee_cap_rate,
+            ),
+            "okx": (
+                self.okx_option_maker_fee,
+                self.okx_option_taker_fee,
+                self.okx_option_fee_cap_rate,
+            ),
         }
 
 
@@ -950,6 +997,24 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError(
                 "MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS cannot be negative"
             )
+        if settings.options_market_data_enabled:
+            if settings.options_refresh_seconds <= 0:
+                raise ValueError("OPTIONS_REFRESH_SECONDS must be positive")
+            if (
+                settings.options_maximum_expiries <= 0
+                or settings.options_strikes_per_expiry <= 0
+            ):
+                raise ValueError("option chain bounds must be positive")
+            if any(
+                maker < 0
+                or taker < 0
+                or maker > Decimal("0.10")
+                or taker > Decimal("0.10")
+                or cap <= 0
+                or cap > 1
+                for maker, taker, cap in settings.option_fee_schedules.values()
+            ):
+                raise ValueError("option fee configuration is outside safe bounds")
     if settings.public_event_symbol_limit_per_profile <= 0:
         raise ValueError("PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE must be positive")
     if settings.public_event_rest_interval_seconds <= 0:

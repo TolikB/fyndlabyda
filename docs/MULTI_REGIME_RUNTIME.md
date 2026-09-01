@@ -48,9 +48,17 @@ decision. Rows newer than the source event, stale/crossed books, incomplete venu
 funding history fetched after decision time, missing settlement timestamps, missing
 depth, and insufficient virtual venue balances fail closed. That view supplies exact
 funding schedules, two-independent-venue lead-lag fair value, perpetual-versus-dated
-future carry, and passive market-making inputs. Options remain absent from the runtime
-until an actual synchronized public options-chain source exists; no option quote is
-fabricated from perpetual data.
+future carry, passive market-making inputs, and executable public option top-of-book
+data. Bybit and OKX option instruments, quotes, implied volatility, visible size,
+open interest, volume, contract multipliers, and trading increments are normalized at
+typed adapter boundaries. The collector keeps only complete call/put pairs across a
+bounded nearest-expiry/nearest-ATM universe and publishes every accepted quote to the
+canonical journal before exposing it to the runtime. Missing, stale, future, crossed,
+duplicate-conflicting, or incomplete option data produces no context; no option quote
+is fabricated from perpetual data.
+USD-quoted options may use a USD, USDC, or USDT underlying hedge only with an
+explicit parity conversion rate retained in the signal evidence. Non-parity and any
+other cross-quote pair are rejected; advanced live option execution remains disabled.
 
 The mature legacy paper pipeline remains the sole funding execution and settlement
 owner. Canonical funding contexts are evaluated and retained as evidence, but their
@@ -107,7 +115,23 @@ Post-only instructions require an explicit non-crossing limit price and simulate
 maker fills require matching trade evidence; a book snapshot alone cannot fill a
 passive quote. Entry expiry cancels unfilled quantities and automatically flattens
 every filled orphan leg. Orders, fills, positions, and the event-consumer checkpoint
-are committed atomically and restored without resubmitting historical plans.
+are committed atomically and restored without resubmitting historical plans. Option
+quotes directly trigger only the options family after the underlying feature state is
+ready; an individual call or put is ignored until its matching fresh pair exists.
+Matching requires the same venue, quote, settlement asset, expiry, and strike.
+PAPER fills use the actual option bid/ask, visible quantity, venue fee schedule, and
+contract multiplier for notional, fees, exposure, and PnL. Bybit and OKX option
+trading fees use the venue formula
+`min(account fee rate * underlying index, fee cap * option premium) * size`;
+the default non-VIP maker/taker rates and 7% cap are configurable because the
+effective account tier and region can differ. Every entry and exit fill uses the
+underlying index observed for that fill, rather than reusing the entry index. The
+approved package size is capped by the most restrictive scaled delta, gamma, vega,
+daily-theta, stress-loss, and visible-liquidity limit retained in the intent. The
+runtime does not represent an
+expiry exercise/delivery charge as zero: new entries without the configured
+pre-expiry exit buffer are rejected, and PAPER holding time ends at least 15 minutes
+before expiry by default.
 
 For RUN_MODE=live, the multi-regime pipeline is forcibly downgraded to
 SHADOW. It cannot construct a paper broker or submit exchange orders. Existing
@@ -121,10 +145,11 @@ PAPER. Runtime funding execution is additionally suppressed while the legacy fun
 pipeline owns settlement. An advanced intent cannot reach planning without
 an exact execution snapshot and an approved multi-leg portfolio-risk decision; a
 post-risk planning failure is stored as an explicit execution block. The default
-runtime projects funding, lead-lag, dated-basis, and passive-market-making contexts
-from synchronized evidence; options remain absent without a real chain. LIMITED_LIVE
-and LIVE continue to suppress advanced execution, and SAFE_MODE suppresses every
-intent. Research-only Martingale, grid, and loss-averaging strategies remain
+runtime projects funding, lead-lag, dated-basis, options-volatility, and
+passive-market-making contexts from synchronized evidence. Public option collection
+does not grant account authority: LIMITED_LIVE and LIVE suppress advanced execution,
+the options strategy receives no live operator authorization, and SAFE_MODE suppresses
+every intent. Research-only Martingale, grid, and loss-averaging strategies remain
 non-executable in every mode.
 
 Read-only inspection endpoints:

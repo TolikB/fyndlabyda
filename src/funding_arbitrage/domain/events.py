@@ -97,6 +97,7 @@ class EventKind(StrEnum):
     CANDLE = "CANDLE"
     FUNDING_SNAPSHOT = "FUNDING_SNAPSHOT"
     OPEN_INTEREST_SNAPSHOT = "OPEN_INTEREST_SNAPSHOT"
+    OPTION_QUOTE_SNAPSHOT = "OPTION_QUOTE_SNAPSHOT"
     LIQUIDATION_TICK = "LIQUIDATION_TICK"
     ORDER_UPDATE = "ORDER_UPDATE"
     FILL = "FILL"
@@ -144,6 +145,8 @@ class InstrumentKey(BaseModel):
         if self.instrument_type is InstrumentType.OPTION:
             if any(value is None for value in option_fields):
                 raise ValueError("option identity requires expiry, strike_price, and option_right")
+            if self.settlement_asset is None:
+                raise ValueError("option identity requires settlement_asset")
         elif self.strike_price is not None or self.option_right is not None:
             raise ValueError("option identity fields are only valid for options")
         return self
@@ -157,7 +160,8 @@ class InstrumentKey(BaseModel):
             assert self.option_right is not None
             strike = format(self.strike_price.normalize(), "f")
             suffix = (
-                f"{suffix}:{self.expiry.isoformat()}:{strike}:{self.option_right.value}"
+                f"{suffix}:{self.expiry.isoformat()}:{strike}:"
+                f"{self.option_right.value}:{self.settlement_asset}"
             )
         elif self.expiry is not None:
             suffix = f"{suffix}:{self.expiry.isoformat()}"
@@ -322,6 +326,40 @@ class OpenInterestSnapshot(ExchangeTimedModel):
         return self
 
 
+class OptionQuoteSnapshot(ExchangeTimedModel):
+    """Executable normalized option top-of-book and contract specification.
+
+    Prices are expressed in ``instrument.quote_asset`` per one unit of the
+    underlying. Quantities remain venue contracts; ``contract_multiplier``
+    converts one contract into underlying units. ``native_price_multiplier``
+    records the conversion applied at ingestion (for example, coin-denominated
+    OKX option premiums converted to USD with the contemporaneous index price).
+    """
+
+    instrument: InstrumentKey
+    underlying_price: Decimal = Field(gt=0)
+    bid_price: Decimal = Field(gt=0)
+    bid_quantity: Decimal = Field(gt=0)
+    ask_price: Decimal = Field(gt=0)
+    ask_quantity: Decimal = Field(gt=0)
+    mark_implied_volatility: Decimal = Field(gt=0, le=5)
+    contract_multiplier: Decimal = Field(gt=0)
+    price_tick: Decimal = Field(gt=0)
+    quantity_step: Decimal = Field(gt=0)
+    minimum_quantity: Decimal = Field(gt=0)
+    native_price_multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    open_interest_contracts: Decimal = Field(default=Decimal("0"), ge=0)
+    volume_contracts: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @model_validator(mode="after")
+    def validate_option_quote(self) -> OptionQuoteSnapshot:
+        if self.instrument.instrument_type is not InstrumentType.OPTION:
+            raise ValueError("option quote snapshot requires an option instrument")
+        if self.bid_price >= self.ask_price:
+            raise ValueError("option quote snapshot must have a non-crossed spread")
+        return self
+
+
 class LiquidationTick(ExchangeTimedModel):
     instrument: InstrumentKey
     liquidation_id: str = Field(min_length=1)
@@ -402,6 +440,7 @@ EventPayload = (
     | Candle
     | FundingSnapshot
     | OpenInterestSnapshot
+    | OptionQuoteSnapshot
     | LiquidationTick
     | OrderUpdate
     | FillEvent
@@ -416,6 +455,7 @@ PAYLOAD_KIND: dict[type[BaseModel], EventKind] = {
     Candle: EventKind.CANDLE,
     FundingSnapshot: EventKind.FUNDING_SNAPSHOT,
     OpenInterestSnapshot: EventKind.OPEN_INTEREST_SNAPSHOT,
+    OptionQuoteSnapshot: EventKind.OPTION_QUOTE_SNAPSHOT,
     LiquidationTick: EventKind.LIQUIDATION_TICK,
     OrderUpdate: EventKind.ORDER_UPDATE,
     FillEvent: EventKind.FILL,
@@ -499,6 +539,7 @@ def deterministic_event_id(
             EventKind.BOOK_SNAPSHOT,
             EventKind.FUNDING_SNAPSHOT,
             EventKind.OPEN_INTEREST_SNAPSHOT,
+            EventKind.OPTION_QUOTE_SNAPSHOT,
         }:
             raise ValueError("occurrence_id is only valid for observation snapshots")
         normalized_occurrence = occurrence_id.strip()

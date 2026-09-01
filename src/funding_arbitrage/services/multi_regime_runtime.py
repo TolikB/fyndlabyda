@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import logging
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -16,6 +16,7 @@ from funding_arbitrage.domain.events import (
     BookLevel,
     BookSnapshot,
     DataQuality,
+    InstrumentType,
     Side,
     TradingMode,
 )
@@ -172,6 +173,59 @@ class RuntimeStrategyExecutionSnapshotProvider:
         }
         quotes: list[InstrumentExecutionQuote] = []
         for instrument in unique_instruments.values():
+            if instrument.instrument_type is InstrumentType.OPTION:
+                option = market.option_quote(instrument) or self.runtime.option_quote(
+                    instrument, as_of=timestamp
+                )
+                option_fee_schedule = self.runtime.settings.option_fee_schedules.get(
+                    instrument.venue.lower()
+                )
+                if option is None or option_fee_schedule is None:
+                    return None
+                book_age = (
+                    timestamp - option.exchange_timestamp
+                ).total_seconds()
+                if (
+                    book_age < 0
+                    or book_age
+                    > self.runtime.settings.multi_regime_stale_after_seconds
+                ):
+                    return None
+                maker_fee, taker_fee, fee_cap_rate = option_fee_schedule
+                quotes.append(
+                    InstrumentExecutionQuote(
+                        instrument=instrument,
+                        book=BookSnapshot(
+                            instrument=instrument,
+                            bids=(
+                                BookLevel(
+                                    price=option.bid_price,
+                                    quantity=option.bid_quantity,
+                                ),
+                            ),
+                            asks=(
+                                BookLevel(
+                                    price=option.ask_price,
+                                    quantity=option.ask_quantity,
+                                ),
+                            ),
+                            sequence=int(
+                                option.exchange_timestamp.timestamp() * 1000
+                            ),
+                            exchange_timestamp=option.exchange_timestamp,
+                        ),
+                        data_quality=DataQuality.VALID,
+                        quantity_step=option.quantity_step,
+                        price_tick=option.price_tick,
+                        minimum_quantity=option.minimum_quantity,
+                        maker_fee_bps=maker_fee * BPS,
+                        taker_fee_bps=taker_fee * BPS,
+                        contract_multiplier=option.contract_multiplier,
+                        option_underlying_price=option.underlying_price,
+                        option_fee_cap_rate=fee_cap_rate,
+                    )
+                )
+                continue
             try:
                 legacy_type = LegacyInstrumentType(instrument.instrument_type.value)
             except ValueError:
@@ -275,17 +329,23 @@ class RuntimeAdvancedRiskContextProvider:
         primary = quotes.get(intent.primary_instrument.canonical_id)
         if primary is None or primary.best_bid is None or primary.best_ask is None:
             return None
-        reference_price = (primary.best_bid + primary.best_ask) / Decimal("2")
+        primary_midpoint = (primary.best_bid + primary.best_ask) / Decimal("2")
         liquidity_caps: list[Decimal] = []
         spread_bps: list[Decimal] = []
-        signed_delta = ZERO
+        package_unit_notional = ZERO
+        signed_unit_notional = ZERO
         for leg in intent.legs:
             quote = quotes.get(leg.instrument.canonical_id)
             if quote is None or quote.best_bid is None or quote.best_ask is None:
                 return None
             levels = quote.book.asks if leg.side is Side.BUY else quote.book.bids
             visible_notional = sum(
-                (level.price * level.quantity for level in levels[:20]),
+                (
+                    level.price
+                    * level.quantity
+                    * quote.contract_multiplier
+                    for level in levels[:20]
+                ),
                 ZERO,
             )
             if visible_notional <= ZERO:
@@ -294,10 +354,47 @@ class RuntimeAdvancedRiskContextProvider:
             midpoint = (quote.best_bid + quote.best_ask) / Decimal("2")
             spread_bps.append((quote.best_ask - quote.best_bid) / midpoint * BPS)
             direction = Decimal("1") if leg.side is Side.BUY else Decimal("-1")
-            signed_delta += (
-                direction * leg.hedge_ratio * midpoint / reference_price
+            leg_unit_notional = (
+                leg.hedge_ratio * midpoint * quote.contract_multiplier
             )
+            package_unit_notional += leg_unit_notional
+            signed_unit_notional += direction * leg_unit_notional
+        reference_price = (
+            package_unit_notional
+            if intent.signal_type is SignalType.OPTIONS_VOLATILITY
+            else primary_midpoint * primary.contract_multiplier
+        )
+        if reference_price <= ZERO:
+            return None
+        signed_delta = signed_unit_notional / reference_price
+        option_risk_capacity: Decimal | None = None
+        if intent.signal_type is SignalType.OPTIONS_VOLATILITY:
+            risk_evidence = intent.evidence.get("risk")
+            risk_limits = intent.evidence.get("risk_limits")
+            if not isinstance(risk_evidence, dict) or not isinstance(
+                risk_limits,
+                dict,
+            ):
+                return None
+            try:
+                delta_notional = Decimal(
+                    str(risk_evidence["delta_notional_usd"])
+                )
+            except (InvalidOperation, KeyError, TypeError, ValueError):
+                return None
+            if not delta_notional.is_finite():
+                return None
+            signed_delta = delta_notional / reference_price
+            option_risk_capacity = _option_risk_capacity_notional(
+                risk_evidence,
+                risk_limits,
+                reference_price,
+            )
+            if option_risk_capacity is None:
+                return None
         available_liquidity = min(liquidity_caps)
+        if option_risk_capacity is not None:
+            available_liquidity = min(available_liquidity, option_risk_capacity)
         if available_liquidity <= ZERO:
             return None
 
@@ -474,6 +571,41 @@ class RuntimeAdvancedRiskContextProvider:
             reconciliation_healthy=True,
             operator_entries_enabled=operator_entries_enabled,
         )
+
+
+def _option_risk_capacity_notional(
+    risk: dict[str, object],
+    limits: dict[str, object],
+    package_reference_price: Decimal,
+) -> Decimal | None:
+    if package_reference_price <= ZERO or not package_reference_price.is_finite():
+        return None
+    dimensions = (
+        ("delta_notional_usd", "maximum_abs_delta_notional_usd"),
+        ("gamma_cash_usd", "maximum_abs_gamma_cash_usd"),
+        ("vega_usd", "maximum_abs_vega_usd"),
+        ("daily_theta_decay_usd", "maximum_daily_theta_decay_usd"),
+        ("worst_stress_loss_usd", "maximum_stress_loss_usd"),
+    )
+    package_caps: list[Decimal] = []
+    try:
+        for risk_key, limit_key in dimensions:
+            exposure = abs(Decimal(str(risk[risk_key])))
+            limit = Decimal(str(limits[limit_key]))
+            if (
+                not exposure.is_finite()
+                or not limit.is_finite()
+                or limit <= ZERO
+            ):
+                return None
+            if exposure > ZERO:
+                package_caps.append(limit / exposure)
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return None
+    if not package_caps:
+        return None
+    capacity = min(package_caps) * package_reference_price
+    return capacity if capacity > ZERO and capacity.is_finite() else None
 
 
 class RuntimePortfolioRiskContextProvider:

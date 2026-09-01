@@ -27,6 +27,7 @@ from funding_arbitrage.domain.events import (
     BookSnapshot,
     DataQuality,
     InstrumentKey,
+    InstrumentType,
     OrderType,
     Side,
 )
@@ -86,6 +87,9 @@ class InstrumentExecutionQuote(BaseModel):
     minimum_quantity: Decimal = Field(gt=0)
     maker_fee_bps: Decimal
     taker_fee_bps: Decimal
+    contract_multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    option_underlying_price: Decimal | None = Field(default=None, gt=0)
+    option_fee_cap_rate: Decimal | None = Field(default=None, gt=0, le=1)
 
     @model_validator(mode="after")
     def validate_quote(self) -> InstrumentExecutionQuote:
@@ -95,6 +99,14 @@ class InstrumentExecutionQuote(BaseModel):
             raise ValueError("maker fee is outside the supported bps range")
         if abs(self.taker_fee_bps) > Decimal("1000"):
             raise ValueError("taker fee is outside the supported bps range")
+        has_option_fee_model = (
+            self.option_underlying_price is not None
+            and self.option_fee_cap_rate is not None
+        )
+        if (
+            self.instrument.instrument_type is InstrumentType.OPTION
+        ) != has_option_fee_model:
+            raise ValueError("option execution quote requires its exact fee model")
         return self
 
     @property

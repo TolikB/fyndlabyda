@@ -109,5 +109,20 @@ making, not unrelated synchronized strategies.
 Every executable advanced intent still requires an independent content-addressed
 per-leg snapshot and the multi-leg portfolio-risk boundary. Runtime funding intents
 are intentionally execution-suppressed while the legacy funding pipeline is the sole
-position/settlement owner. Options contexts remain empty until a real synchronized
-public options chain is integrated. Live operator authorization is always false.
+position/settlement owner. Options contexts are built only from complete, fresh,
+same-venue/same-quote/same-settlement/same-expiry/same-strike Bybit or OKX public
+call/put pairs. Their canonical
+events contain actual top-of-book sizes, implied volatility, contract multipliers,
+trading increments, open interest, and volume; no synthetic option price is allowed.
+PAPER planning and accounting retain the exact per-leg contract rules and venue fees.
+Option fees are index-notional based with the venue premium cap, rather than a plain
+percentage of premium; account-tier overrides are explicit configuration, and each
+fill uses its contemporaneous underlying index. Risk-approved size is the minimum of
+visible liquidity and the package capacity implied by scaled delta, gamma, vega,
+daily theta, and stress-loss limits; missing or invalid limit evidence fails closed.
+USD, USDC, and USDT option-to-hedge quote differences require an explicit parity
+conversion rate in the context and evidence; non-parity and arbitrary cross-currency
+hedges fail closed.
+New option entries must also retain a configurable pre-expiry exit buffer (15 minutes
+by default), so PAPER accounting cannot silently treat exercise or delivery as free.
+Live option operator authorization remains always false.

@@ -28,7 +28,7 @@ NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 EXPIRY = NOW + timedelta(days=30)
 
 
-def _option(right: OptionRight) -> InstrumentKey:
+def _option(right: OptionRight, *, expiry: datetime = EXPIRY) -> InstrumentKey:
     suffix = "C" if right is OptionRight.CALL else "P"
     return InstrumentKey(
         venue="DERIBIT",
@@ -37,7 +37,7 @@ def _option(right: OptionRight) -> InstrumentKey:
         quote_asset="USD",
         settlement_asset="BTC",
         instrument_type=InstrumentType.OPTION,
-        expiry=EXPIRY,
+        expiry=expiry,
         strike_price=Decimal("100"),
         option_right=right,
     )
@@ -51,9 +51,10 @@ def _quote(
     age_seconds: int = 0,
     liquidity_score: str = "0.9",
     quality: DataQuality = DataQuality.VALID,
+    expiry: datetime = EXPIRY,
 ) -> OptionQuote:
     return OptionQuote(
-        instrument=_option(right),
+        instrument=_option(right, expiry=expiry),
         underlying_price=Decimal(underlying_price),
         bid_price=Decimal("5.4"),
         ask_price=Decimal("5.6"),
@@ -67,13 +68,13 @@ def _quote(
     )
 
 
-def _hedge() -> InstrumentKey:
+def _hedge(quote_asset: str = "USD") -> InstrumentKey:
     return InstrumentKey(
         venue="DERIBIT",
         exchange_symbol="BTC-PERPETUAL",
         base_asset="BTC",
-        quote_asset="USD",
-        settlement_asset="BTC",
+        quote_asset=quote_asset,
+        settlement_asset=quote_asset,
         instrument_type=InstrumentType.PERPETUAL,
     )
 
@@ -89,12 +90,14 @@ def _context(
     margin_available: bool = True,
     short_authorized: bool = False,
     live_authorized: bool = False,
+    hedge_quote_asset: str = "USD",
+    hedge_quote_conversion_rate: Decimal | None = None,
     risk_limits: OptionsRiskLimits | None = None,
 ) -> OptionsVolatilityContext:
     return OptionsVolatilityContext(
         call=call or _quote(OptionRight.CALL),
         put=put or _quote(OptionRight.PUT),
-        hedge_instrument=_hedge(),
+        hedge_instrument=_hedge(hedge_quote_asset),
         forecast_realized_volatility=Decimal(forecast),
         estimated_cost_bps=Decimal(costs),
         timestamp=NOW,
@@ -103,6 +106,7 @@ def _context(
         margin_available=margin_available,
         short_volatility_operator_authorized=short_authorized,
         live_operator_authorized=live_authorized,
+        hedge_quote_conversion_rate=hedge_quote_conversion_rate,
         risk_limits=risk_limits or OptionsRiskLimits(),
     )
 
@@ -215,6 +219,56 @@ def test_options_strategy_fails_closed_on_data_regime_cost_margin_and_live_mode(
     assert strategy.evaluate(
         _context(mode=TradingMode.LIVE, live_authorized=True)
     ).rejection_reason == "live_options_disabled"
+
+
+def test_options_strategy_exits_before_expiry_delivery_window() -> None:
+    strategy = OptionsVolatilityStrategy()
+    too_close = NOW + timedelta(seconds=900)
+    rejected = strategy.evaluate(
+        _context(
+            call=_quote(OptionRight.CALL, expiry=too_close),
+            put=_quote(OptionRight.PUT, expiry=too_close),
+        )
+    )
+
+    assert rejected.rejection_reason == "option_expiry_exit_window"
+
+    tradable_expiry = NOW + timedelta(hours=1)
+    accepted = strategy.evaluate(
+        _context(
+            call=_quote(OptionRight.CALL, expiry=tradable_expiry),
+            put=_quote(OptionRight.PUT, expiry=tradable_expiry),
+        )
+    )
+
+    assert accepted.intent is not None
+    assert accepted.intent.expected_holding_seconds == 2700
+    assert accepted.intent.evidence["expiry_exit_buffer_seconds"] == "900"
+
+
+def test_options_context_requires_explicit_compatible_quote_conversion() -> None:
+    with pytest.raises(ValueError, match="explicit conversion"):
+        _context(hedge_quote_asset="USDT")
+    with pytest.raises(ValueError, match="incompatible"):
+        _context(
+            hedge_quote_asset="EUR",
+            hedge_quote_conversion_rate=Decimal("1"),
+        )
+    with pytest.raises(ValueError, match="parity"):
+        _context(
+            hedge_quote_asset="USDT",
+            hedge_quote_conversion_rate=Decimal("0.99"),
+        )
+
+    accepted = OptionsVolatilityStrategy().evaluate(
+        _context(
+            hedge_quote_asset="USDT",
+            hedge_quote_conversion_rate=Decimal("1"),
+        )
+    )
+
+    assert accepted.intent is not None
+    assert accepted.intent.evidence["hedge_quote_conversion_rate"] == "1"
 
 
 def test_options_strategy_is_deterministic() -> None:
