@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from funding_arbitrage.config import Settings
+from funding_arbitrage.database.models import PaperPositionRecord
 from funding_arbitrage.database.session import create_database
 from funding_arbitrage.main import create_app
 from funding_arbitrage.services.daily_report import DailyReportService
@@ -79,12 +81,25 @@ def _wait_for_json(
     raise AssertionError(f"paper smoke timed out; latest response={latest!r}")
 
 
-async def _render_report(settings: Settings, report_date: datetime) -> str:
+async def _render_report(settings: Settings) -> str:
     engine, session_factory = create_database(settings)
     service = DailyReportService(settings, session_factory)
     try:
         async with session_factory() as session:
-            return await service._build_message(session, report_date.date())
+            opened_at = await session.scalar(
+                select(PaperPositionRecord.opened_at)
+                .where(
+                    PaperPositionRecord.simulation_version
+                    == settings.paper_simulation_version
+                )
+                .order_by(PaperPositionRecord.opened_at)
+                .limit(1)
+            )
+            assert opened_at is not None
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=UTC)
+            local_report_date = opened_at.astimezone(service.timezone).date()
+            return await service._build_message(session, local_report_date)
     finally:
         await service.close()
         await engine.dispose()
@@ -125,7 +140,7 @@ def test_full_mock_paper_lifecycle_respects_budget_and_renders_human_report(
     assert locked == Decimal("100")
     assert abs(equity - (cash + locked + total_pnl)) <= Decimal("0.01")
 
-    report = asyncio.run(_render_report(settings, datetime.now(UTC)))
+    report = asyncio.run(_render_report(settings))
     assert "📊 Результати торгівлі за" in report
     assert "ЗА ДЕНЬ" in report
     assert "Прибуток / збиток:" in report
