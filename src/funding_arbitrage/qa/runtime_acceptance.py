@@ -1399,4 +1399,7 @@ def _database_utc(value: datetime) -> datetime:
 def _effective_uid() -> int:
     if os.name != "posix":
         raise ValueError("runtime acceptance ownership checks require Linux")
-    return os.geteuid()  # type: ignore[attr-defined]
+    get_effective_uid = getattr(os, "geteuid", None)
+    if not callable(get_effective_uid):
+        raise ValueError("runtime acceptance ownership checks require geteuid")
+    return int(get_effective_uid())
