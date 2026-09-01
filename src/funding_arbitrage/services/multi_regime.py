@@ -24,6 +24,7 @@ from funding_arbitrage.domain.events import (
     Candle,
     DataQuality,
     EventEnvelope,
+    EventKind,
     FundingSnapshot,
     InstrumentKey,
     InstrumentType,
@@ -618,6 +619,21 @@ class MultiRegimeEngine:
     @property
     def active_assets(self) -> frozenset[str]:
         return self.config.assets | self._dynamic_universe_assets
+
+    def accepts_persisted_event(
+        self,
+        event: EventEnvelope[BaseModel],
+    ) -> bool:
+        """Return whether a fully validated stored event can affect this engine."""
+
+        if event.kind is EventKind.UNIVERSE_SELECTION_SNAPSHOT:
+            return True
+        instrument = getattr(event.payload, "instrument", None)
+        if not isinstance(instrument, InstrumentKey):
+            return True
+        if event.kind is EventKind.OPTION_QUOTE_SNAPSHOT:
+            return instrument.base_asset in self.active_assets
+        return self._eligible(instrument)
 
     @property
     def latest_universe_selection(self) -> UniverseSelectionSnapshot | None:

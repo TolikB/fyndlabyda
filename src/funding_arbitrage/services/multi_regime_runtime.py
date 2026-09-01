@@ -983,12 +983,14 @@ class DurableMultiRegimeRuntime:
             if not page:
                 return restored
             for row_id, event in page:
+                cursor = row_id
+                restored += 1
                 if isinstance(self.engine, MultiRegimeEngine):
+                    if not self.engine.accepts_persisted_event(event):
+                        continue
                     self.engine.restore_event(event)
                 else:
                     self.engine.process(event)
-                cursor = row_id
-                restored += 1
 
     async def _restore_paper_pages(
         self,
