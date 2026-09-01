@@ -22,6 +22,10 @@ BPS = Decimal("10000")
 YEAR_SECONDS = Decimal("31536000")
 
 
+class StaleDerivativesEventError(ValueError):
+    """A duplicate or out-of-order derivative snapshot safe to ignore on replay."""
+
+
 class DerivativesFeatureSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -259,7 +263,9 @@ class DerivativesFeatureEngine:
         timestamp: datetime, previous: datetime | None, stream: str
     ) -> None:
         if previous is not None and timestamp <= previous:
-            raise ValueError(f"out-of-order or duplicate {stream} event")
+            raise StaleDerivativesEventError(
+                f"out-of-order or duplicate {stream} event"
+            )
 
     @staticmethod
     def _sign(value: Decimal) -> int:

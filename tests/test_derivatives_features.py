@@ -12,7 +12,10 @@ from funding_arbitrage.domain.events import (
     InstrumentType,
     OpenInterestSnapshot,
 )
-from funding_arbitrage.features.derivatives import DerivativesFeatureEngine
+from funding_arbitrage.features.derivatives import (
+    DerivativesFeatureEngine,
+    StaleDerivativesEventError,
+)
 
 START = datetime(2026, 8, 16, 12, tzinfo=UTC)
 INSTRUMENT = InstrumentKey(
@@ -135,7 +138,7 @@ def test_derivatives_replay_is_deterministic_and_rejects_bad_order() -> None:
     engine = _engine()
     funding = _funding(0, "0.001")
     engine.on_funding(funding)
-    with pytest.raises(ValueError, match="duplicate funding"):
+    with pytest.raises(StaleDerivativesEventError, match="duplicate funding"):
         engine.on_funding(funding)
     with pytest.raises(ValueError, match="instrument mismatch"):
         _engine().on_open_interest(

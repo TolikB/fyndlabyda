@@ -36,8 +36,10 @@ from funding_arbitrage.domain.events import (
     EventEnvelope,
     EventKind,
     EventMetadata,
+    FundingSnapshot,
     InstrumentKey,
     InstrumentType,
+    OpenInterestSnapshot,
     OptionQuoteSnapshot,
     OptionRight,
     Side,
@@ -458,7 +460,14 @@ def _advanced_risk_context(
 
 def _envelope(
     kind: EventKind,
-    payload: BookSnapshot | BookDelta | Candle | OptionQuoteSnapshot,
+    payload: (
+        BookSnapshot
+        | BookDelta
+        | Candle
+        | FundingSnapshot
+        | OpenInterestSnapshot
+        | OptionQuoteSnapshot
+    ),
     sequence: int,
 ) -> EventEnvelope:
     timestamp = payload.exchange_timestamp
@@ -1171,6 +1180,87 @@ def test_out_of_order_invalid_book_does_not_downgrade_newer_valid_state() -> Non
     assert state.local_book.sequence == 101
     assert state.latest_book_quality is DataQuality.VALID
     assert engine.skipped_out_of_order_events == 1
+
+
+def test_stale_derivative_events_are_idempotently_skipped() -> None:
+    engine = _engine()
+    first_oi = OpenInterestSnapshot(
+        instrument=INSTRUMENT,
+        open_interest_quote=Decimal("1000"),
+        exchange_timestamp=START + timedelta(seconds=10),
+    )
+    first_funding = FundingSnapshot(
+        instrument=INSTRUMENT,
+        funding_rate=Decimal("0.0002"),
+        funding_interval_seconds=28800,
+        next_funding_time=START + timedelta(hours=8),
+        mark_price=Decimal("101"),
+        index_price=Decimal("100"),
+        exchange_timestamp=START + timedelta(seconds=10),
+    )
+    engine.process(_envelope(EventKind.OPEN_INTEREST_SNAPSHOT, first_oi, 100))
+    engine.process(_envelope(EventKind.FUNDING_SNAPSHOT, first_funding, 101))
+
+    duplicate_oi = _envelope(EventKind.OPEN_INTEREST_SNAPSHOT, first_oi, 102)
+    duplicate_funding = _envelope(EventKind.FUNDING_SNAPSHOT, first_funding, 103)
+    stale_oi = _envelope(
+        EventKind.OPEN_INTEREST_SNAPSHOT,
+        first_oi.model_copy(
+            update={"exchange_timestamp": START + timedelta(seconds=5)}
+        ),
+        104,
+    ).model_copy(
+        update={
+            "metadata": duplicate_oi.metadata.model_copy(
+                update={
+                    "event_id": "evt-104",
+                    "exchange_timestamp": START + timedelta(seconds=20),
+                }
+            )
+        }
+    )
+    stale_funding = _envelope(
+        EventKind.FUNDING_SNAPSHOT,
+        first_funding.model_copy(
+            update={"exchange_timestamp": START + timedelta(seconds=5)}
+        ),
+        105,
+    ).model_copy(
+        update={
+            "metadata": duplicate_funding.metadata.model_copy(
+                update={
+                    "event_id": "evt-105",
+                    "exchange_timestamp": START + timedelta(seconds=20),
+                }
+            )
+        }
+    )
+
+    assert engine.process(duplicate_oi) is None
+    assert engine.process(duplicate_funding) is None
+    assert engine.process(stale_oi) is None
+    assert engine.process(stale_funding) is None
+
+    newer_oi = first_oi.model_copy(
+        update={
+            "open_interest_quote": Decimal("1100"),
+            "exchange_timestamp": START + timedelta(seconds=11),
+        }
+    )
+    newer_funding = first_funding.model_copy(
+        update={
+            "funding_rate": Decimal("0.0003"),
+            "exchange_timestamp": START + timedelta(seconds=11),
+        }
+    )
+    engine.process(_envelope(EventKind.OPEN_INTEREST_SNAPSHOT, newer_oi, 106))
+    engine.process(_envelope(EventKind.FUNDING_SNAPSHOT, newer_funding, 107))
+
+    state = engine._states[INSTRUMENT.canonical_id]
+    assert state.derivatives is not None
+    assert state.derivatives.open_interest_quote == Decimal("1100")
+    assert state.derivatives.funding_rate == Decimal("0.0003")
+    assert engine.skipped_out_of_order_events == 4
 
 
 def test_runtime_risk_context_uses_canonical_uppercase_venue_exposure() -> None:

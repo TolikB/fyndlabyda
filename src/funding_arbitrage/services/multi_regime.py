@@ -38,6 +38,7 @@ from funding_arbitrage.features.candles import CandleAggregator
 from funding_arbitrage.features.derivatives import (
     DerivativesFeatureEngine,
     DerivativesFeatureSnapshot,
+    StaleDerivativesEventError,
 )
 from funding_arbitrage.features.orderflow import (
     OrderFlowFeatureEngine,
@@ -746,16 +747,33 @@ class MultiRegimeEngine:
                     quality=state.latest_book_quality,
                 )
             return None
-        self._latest_stream_timestamp[stream_key] = event.metadata.exchange_timestamp
         if isinstance(payload, TradeTick):
+            self._latest_stream_timestamp[stream_key] = (
+                event.metadata.exchange_timestamp
+            )
             state.orderflow_engine.on_trade(payload)
             return None
         if isinstance(payload, FundingSnapshot):
-            state.derivatives = state.derivatives_engine.on_funding(payload)
+            try:
+                state.derivatives = state.derivatives_engine.on_funding(payload)
+            except StaleDerivativesEventError:
+                self.skipped_out_of_order_events += 1
+                return None
+            self._latest_stream_timestamp[stream_key] = (
+                event.metadata.exchange_timestamp
+            )
             return None
         if isinstance(payload, OpenInterestSnapshot):
-            state.derivatives = state.derivatives_engine.on_open_interest(payload)
+            try:
+                state.derivatives = state.derivatives_engine.on_open_interest(payload)
+            except StaleDerivativesEventError:
+                self.skipped_out_of_order_events += 1
+                return None
+            self._latest_stream_timestamp[stream_key] = (
+                event.metadata.exchange_timestamp
+            )
             return None
+        self._latest_stream_timestamp[stream_key] = event.metadata.exchange_timestamp
         if not isinstance(payload, Candle):
             return None
         strategy_candle = state.strategy_candles.on_candle(payload)
