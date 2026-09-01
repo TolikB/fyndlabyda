@@ -23,6 +23,7 @@ from funding_arbitrage.qa.load_slo_evidence import (
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _REVISION = re.compile(r"^[a-f0-9]{40}$")
+_IMAGE_ID = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -57,6 +58,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--github-run-id", type=int)
     parser.add_argument("--github-run-attempt", type=int)
+    parser.add_argument(
+        "--container-image-id",
+        help="verified sha256 image id when release evidence runs in the sealed candidate",
+    )
     return parser
 
 
@@ -68,7 +73,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.release_evidence and (
             any(
                 value is not None
-                for value in (args.revision, args.github_run_id, args.github_run_attempt)
+                for value in (
+                    args.revision,
+                    args.github_run_id,
+                    args.github_run_attempt,
+                    args.container_image_id,
+                )
             )
             or args.evidence_source != "local"
         ):
@@ -79,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
                 source=cast(Literal["local", "github-actions"], args.evidence_source),
                 github_run_id=args.github_run_id,
                 github_run_attempt=args.github_run_attempt,
+                container_image_id=args.container_image_id,
             )
         config = LoadSLOConfig(
             event_count=args.events,
@@ -101,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
                 source=cast(Literal["local", "github-actions"], args.evidence_source),
                 github_run_id=args.github_run_id,
                 github_run_attempt=args.github_run_attempt,
+                container_image_id=args.container_image_id,
             )
             evidence = build_load_slo_evidence(
                 report,
@@ -108,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                 source=cast(Literal["local", "github-actions"], args.evidence_source),
                 github_run_id=args.github_run_id,
                 github_run_attempt=args.github_run_attempt,
+                container_image_id=args.container_image_id,
                 measured_at=datetime.now(UTC),
             )
     except (ValidationError, ValueError) as exc:
@@ -135,18 +148,23 @@ def _validate_evidence_identity(
     source: Literal["local", "github-actions"],
     github_run_id: int | None,
     github_run_attempt: int | None,
+    container_image_id: str | None = None,
     environment: Mapping[str, str] | None = None,
     repository_state: tuple[str, str] | None = None,
 ) -> None:
     if not _REVISION.fullmatch(code_revision):
         raise ValueError("evidence revision must be a lowercase 40-hex commit")
-    head, status = repository_state or _read_repository_state()
-    if head != code_revision:
-        raise ValueError("evidence revision does not match the checked-out commit")
-    if status:
-        raise ValueError("release evidence requires a clean Git working tree")
-    if source != "github-actions":
+    if source == "local":
+        if container_image_id is not None:
+            raise ValueError("local evidence cannot claim a sealed container image identity")
+        head, status = repository_state or _read_repository_state()
+        if head != code_revision:
+            raise ValueError("evidence revision does not match the checked-out commit")
+        if status:
+            raise ValueError("release evidence requires a clean Git working tree")
         return
+    if container_image_id is None or not _IMAGE_ID.fullmatch(container_image_id):
+        raise ValueError("GitHub Actions evidence requires a verified sealed container image id")
     values = environment if environment is not None else os.environ
     expected = {
         "GITHUB_ACTIONS": "true",
@@ -155,6 +173,8 @@ def _validate_evidence_identity(
         "GITHUB_RUN_ATTEMPT": (
             str(github_run_attempt) if github_run_attempt is not None else ""
         ),
+        "FUNDING_CANDIDATE_IMAGE_ID": container_image_id,
+        "FUNDING_CANDIDATE_REVISION": code_revision,
     }
     if any(values.get(name) != value for name, value in expected.items()):
         raise ValueError("GitHub Actions evidence identity does not match runner context")

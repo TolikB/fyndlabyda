@@ -6,6 +6,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "release-gate.yml"
 SHADOW_SCRIPT_PATH = ROOT / "scripts" / "ci_shadow_smoke.sh"
+LOAD_SLO_SCRIPT_PATH = ROOT / "scripts" / "ci_candidate_load_slo.sh"
 
 
 def _workflow_text() -> str:
@@ -37,23 +38,45 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     }.issubset(jobs)
     assert "coverage_gate.py" in str(jobs["verify"])
     assert "test_historical_replay.py" in str(jobs["integration-replay"])
-    assert "scripts/load_slo.py" in str(jobs["load-slo"])
-    assert "--events 20000" in str(jobs["load-slo"])
-    assert "--decisions 5000" in str(jobs["load-slo"])
-    assert "--release-evidence" in str(jobs["load-slo"])
-    assert '--revision "$GITHUB_SHA"' in str(jobs["load-slo"])
-    assert "--evidence-source github-actions" in str(jobs["load-slo"])
-    assert '--github-run-id "$GITHUB_RUN_ID"' in str(jobs["load-slo"])
-    assert '--github-run-attempt "$GITHUB_RUN_ATTEMPT"' in str(jobs["load-slo"])
+    load_slo_script = LOAD_SLO_SCRIPT_PATH.read_text(encoding="utf-8")
+    assert jobs["load-slo"]["needs"] == "build-candidate"
+    assert "scripts/ci_load_candidate_image.sh" in str(jobs["load-slo"])
+    assert "scripts/ci_candidate_load_slo.sh" in str(jobs["load-slo"])
+    assert "scripts/verify_load_slo_evidence.py" in str(jobs["load-slo"])
+    assert "requirements-linux.lock" in str(jobs["load-slo"])
+    assert "scripts/load_slo.py" in load_slo_script
+    assert "--events 20000" in load_slo_script
+    assert "--decisions 5000" in load_slo_script
+    assert "--release-evidence" in load_slo_script
+    assert '--revision "$expected_revision"' in load_slo_script
+    assert "--evidence-source github-actions" in load_slo_script
+    assert '--github-run-id "$github_run_id"' in load_slo_script
+    assert '--github-run-attempt "$github_run_attempt"' in load_slo_script
+    assert '--container-image-id "$expected_image_id"' in load_slo_script
+    assert '"$expected_image_id" \\' in load_slo_script
+    assert "--network none" in load_slo_script
+    assert "--read-only" in load_slo_script
+    assert "--user 10001:10001" in load_slo_script
+    assert "--cap-drop ALL" in load_slo_script
+    assert "TMPDIR=/var/lib/funding-load-slo" in load_slo_script
+    assert "src=$oms_dir,dst=/var/lib/funding-load-slo" in load_slo_script
+    assert "chown -R" not in load_slo_script
+    assert "chown --no-dereference" in load_slo_script
+    assert 'find -P "$oms_dir" -xdev' in load_slo_script
+    assert ".unsafe-funding-load-slo-" in load_slo_script
     assert (
         "funding-load-slo-${{ github.sha }}-${{ github.run_id }}-"
         "${{ github.run_attempt }}"
     ) in str(jobs["load-slo"])
-    assert "funding-load-slo.json.sha256" in str(jobs["load-slo"])
+    assert "funding-load-slo.json.sha256" in load_slo_script
     assert "funding-load-slo-run.txt" in str(jobs["load-slo"])
     assert "funding-load-slo.log" in str(jobs["load-slo"])
-    assert "set -o pipefail" in str(jobs["load-slo"])
+    assert "set -euo pipefail" in str(jobs["load-slo"])
     assert jobs["load-slo"]["permissions"] == {"contents": "read"}
+    load_steps = [step["name"] for step in jobs["load-slo"]["steps"]]
+    assert load_steps.index("Strictly verify candidate evidence before attestation") < (
+        load_steps.index("Upload commit-bound load SLO evidence")
+    )
     assert jobs["attest-load-slo"]["needs"] == "load-slo"
     assert jobs["attest-load-slo"]["if"] == (
         "github.event_name == 'push' && github.ref == 'refs/heads/main'"
@@ -74,6 +97,7 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "'retention-days': 30" in str(jobs["load-slo"])
     assert "terraform -chdir=infra/terraform validate" in str(jobs["infrastructure-verify"])
     assert "scripts/backup_state.sh" in str(jobs["infrastructure-verify"])
+    assert "scripts/ci_candidate_load_slo.sh" in str(jobs["infrastructure-verify"])
     assert "scripts/ci_restore_drill.sh" in str(jobs["restore-drill"])
     assert "restore-drill" in jobs["shadow-deploy"]["needs"]
     restore_drill = (ROOT / "scripts" / "ci_restore_drill.sh").read_text(encoding="utf-8")

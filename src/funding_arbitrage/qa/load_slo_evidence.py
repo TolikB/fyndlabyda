@@ -23,6 +23,7 @@ MAX_LOAD_SLO_CHECKSUM_BYTES = 512
 LOAD_SLO_PROFILE_ID = "v1-critical-path-2026-08"
 
 _REVISION = re.compile(r"^[a-f0-9]{40}$")
+_IMAGE_ID = re.compile(r"^sha256:[a-f0-9]{64}$")
 _SAFE_RUNTIME_VALUE = re.compile(r"^[^\x00-\x1f\x7f]{1,128}$")
 _O_BINARY = int(vars(os).get("O_BINARY", 0))
 _O_CLOEXEC = int(vars(os).get("O_CLOEXEC", 0))
@@ -72,8 +73,9 @@ class LoadSLOProvenance(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     document_kind: Literal["load-slo-provenance"]
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     code_revision: str
+    container_image_id: str | None = None
     measured_at: datetime
     source: Literal["local", "github-actions"]
     github_run_id: int | None = Field(default=None, ge=1)
@@ -85,6 +87,13 @@ class LoadSLOProvenance(BaseModel):
     def validate_revision(cls, value: str) -> str:
         if not _REVISION.fullmatch(value):
             raise ValueError("load SLO code revision must be a lowercase 40-hex commit")
+        return value
+
+    @field_validator("container_image_id")
+    @classmethod
+    def validate_container_image_id(cls, value: str | None) -> str | None:
+        if value is not None and not _IMAGE_ID.fullmatch(value):
+            raise ValueError("load SLO container image id must be a sha256 digest")
         return value
 
     @field_validator("measured_at")
@@ -100,8 +109,12 @@ class LoadSLOProvenance(BaseModel):
         has_run_attempt = self.github_run_attempt is not None
         if self.source == "github-actions" and not (has_run_id and has_run_attempt):
             raise ValueError("GitHub Actions evidence requires run id and run attempt")
-        if self.source == "local" and (has_run_id or has_run_attempt):
-            raise ValueError("local evidence cannot claim a GitHub Actions run identity")
+        if self.source == "github-actions" and self.container_image_id is None:
+            raise ValueError("GitHub Actions evidence requires a sealed container image id")
+        if self.source == "local" and (
+            has_run_id or has_run_attempt or self.container_image_id is not None
+        ):
+            raise ValueError("local evidence cannot claim GitHub Actions or container identity")
         return self
 
 
@@ -111,7 +124,7 @@ class LoadSLOEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     document_kind: Literal["load-slo-evidence"]
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     profile_id: Literal["v1-critical-path-2026-08"]
     provenance: LoadSLOProvenance
     report: LoadSLOReport
@@ -154,6 +167,7 @@ def build_load_slo_evidence(
     source: Literal["local", "github-actions"],
     github_run_id: int | None = None,
     github_run_attempt: int | None = None,
+    container_image_id: str | None = None,
     measured_at: datetime | None = None,
 ) -> LoadSLOEvidence:
     """Bind one exact-profile measurement to its revision and runtime."""
@@ -167,8 +181,9 @@ def build_load_slo_evidence(
     )
     provenance = LoadSLOProvenance(
         document_kind="load-slo-provenance",
-        schema_version=1,
+        schema_version=2,
         code_revision=code_revision,
+        container_image_id=container_image_id,
         measured_at=measured_at or datetime.now(UTC),
         source=source,
         github_run_id=github_run_id,
@@ -177,7 +192,7 @@ def build_load_slo_evidence(
     )
     return LoadSLOEvidence(
         document_kind="load-slo-evidence",
-        schema_version=1,
+        schema_version=2,
         profile_id=LOAD_SLO_PROFILE_ID,
         provenance=provenance,
         report=report,
@@ -222,6 +237,7 @@ def load_load_slo_evidence(
     path: Path,
     *,
     expected_revision: str | None = None,
+    expected_image_id: str | None = None,
 ) -> LoadSLOEvidence:
     """Verify the sidecar, strict JSON shape, and optional expected revision."""
 
@@ -255,6 +271,11 @@ def load_load_slo_evidence(
             raise ValueError("expected load SLO revision is invalid")
         if evidence.provenance.code_revision != expected_revision:
             raise ValueError("load SLO evidence revision mismatch")
+    if expected_image_id is not None:
+        if not _IMAGE_ID.fullmatch(expected_image_id):
+            raise ValueError("expected load SLO container image id is invalid")
+        if evidence.provenance.container_image_id != expected_image_id:
+            raise ValueError("load SLO evidence container image mismatch")
     return evidence
 
 
@@ -286,6 +307,7 @@ def _validate_evidence_shape(raw: Any) -> None:
             "document_kind",
             "schema_version",
             "code_revision",
+            "container_image_id",
             "measured_at",
             "source",
             "github_run_id",

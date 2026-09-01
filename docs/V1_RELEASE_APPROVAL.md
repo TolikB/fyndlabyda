@@ -12,6 +12,9 @@ terminal release gates must already have status `accepted`; `implemented`,
 `validated`, `partial`, and `missing` all block approval. This includes accepted
 Shadow and Paper elapsed-window evidence, research, failure-injection, security,
 infrastructure, restore, and load-SLO gates.
+The load-SLO prerequisite must identify the same sealed candidate image and source
+commit that passed the other release jobs; source-checkout-only performance output
+is diagnostic and cannot satisfy release approval.
 
 The requirement ID set is fixed to the complete 70-item V1 contract. Removing a
 requirement, adding an unreviewed substitute, or omitting either terminal gate

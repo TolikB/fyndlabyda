@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from scripts import load_slo as load_slo_script
+from scripts import verify_load_slo_evidence as verify_load_slo_script
 
 from funding_arbitrage.qa.load_slo import (
     LatencyDistribution,
@@ -199,26 +200,85 @@ async def test_sqlite_wal_full_oms_journal_is_part_of_release_profile() -> None:
 
 def test_commit_bound_load_slo_evidence_round_trip(tmp_path: Path) -> None:
     revision = "a" * 40
+    image_id = "sha256:" + "1" * 64
     evidence = build_load_slo_evidence(
         _release_report(),
         code_revision=revision,
         source="github-actions",
         github_run_id=123,
         github_run_attempt=2,
+        container_image_id=image_id,
         measured_at=datetime(2026, 8, 31, 12, tzinfo=UTC),
     )
     output = tmp_path / "load-slo.json"
 
     checksum_path, digest = write_load_slo_evidence(output, evidence)
-    loaded = load_load_slo_evidence(output, expected_revision=revision)
+    loaded = load_load_slo_evidence(
+        output,
+        expected_revision=revision,
+        expected_image_id=image_id,
+    )
 
     assert loaded == evidence
     assert loaded.provenance.source == "github-actions"
     assert loaded.provenance.github_run_id == 123
+    assert loaded.provenance.container_image_id == image_id
     assert loaded.provenance.runtime.python_version
     assert digest == load_slo_evidence_sha256(evidence)
     assert hashlib.sha256(output.read_bytes()).hexdigest() == digest
     assert checksum_path.read_text(encoding="ascii") == f"{digest}  load-slo.json\n"
+
+    assert (
+        verify_load_slo_script.main(
+            [
+                "--evidence",
+                str(output),
+                "--revision",
+                revision,
+                "--image-id",
+                image_id,
+                "--github-run-id",
+                "123",
+                "--github-run-attempt",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+
+def test_strict_load_slo_verifier_rejects_ci_run_mismatch(tmp_path: Path) -> None:
+    revision = "a" * 40
+    image_id = "sha256:" + "1" * 64
+    output = tmp_path / "load-slo.json"
+    write_load_slo_evidence(
+        output,
+        build_load_slo_evidence(
+            _release_report(),
+            code_revision=revision,
+            source="github-actions",
+            github_run_id=123,
+            github_run_attempt=2,
+            container_image_id=image_id,
+        ),
+    )
+
+    result = verify_load_slo_script.main(
+        [
+            "--evidence",
+            str(output),
+            "--revision",
+            revision,
+            "--image-id",
+            image_id,
+            "--github-run-id",
+            "999",
+            "--github-run-attempt",
+            "2",
+        ]
+    )
+
+    assert result == 2
 
 
 def test_load_slo_evidence_rejects_non_release_profiles_and_false_ci_identity() -> None:
@@ -250,6 +310,14 @@ def test_load_slo_evidence_rejects_non_release_profiles_and_false_ci_identity() 
             report,
             code_revision="a" * 40,
             source="github-actions",
+        )
+    with pytest.raises(ValidationError, match="sealed container image id"):
+        build_load_slo_evidence(
+            report,
+            code_revision="a" * 40,
+            source="github-actions",
+            github_run_id=123,
+            github_run_attempt=1,
         )
     with pytest.raises(ValidationError, match="cannot claim"):
         build_load_slo_evidence(
@@ -357,6 +425,7 @@ def test_load_slo_evidence_rejects_inconsistent_result_claims() -> None:
 
 def test_release_evidence_identity_requires_clean_matching_repository_and_ci() -> None:
     revision = "a" * 40
+    image_id = "sha256:" + "1" * 64
     load_slo_script._validate_evidence_identity(
         code_revision=revision,
         source="local",
@@ -385,12 +454,15 @@ def test_release_evidence_identity_requires_clean_matching_repository_and_ci() -
         "GITHUB_SHA": revision,
         "GITHUB_RUN_ID": "123",
         "GITHUB_RUN_ATTEMPT": "2",
+        "FUNDING_CANDIDATE_IMAGE_ID": image_id,
+        "FUNDING_CANDIDATE_REVISION": revision,
     }
     load_slo_script._validate_evidence_identity(
         code_revision=revision,
         source="github-actions",
         github_run_id=123,
         github_run_attempt=2,
+        container_image_id=image_id,
         environment=ci_environment,
         repository_state=(revision, ""),
     )
@@ -400,8 +472,17 @@ def test_release_evidence_identity_requires_clean_matching_repository_and_ci() -
             source="github-actions",
             github_run_id=123,
             github_run_attempt=3,
+            container_image_id=image_id,
             environment=ci_environment,
             repository_state=(revision, ""),
+        )
+    with pytest.raises(ValueError, match="sealed container image id"):
+        load_slo_script._validate_evidence_identity(
+            code_revision=revision,
+            source="github-actions",
+            github_run_id=123,
+            github_run_attempt=2,
+            environment=ci_environment,
         )
 
 
@@ -416,6 +497,12 @@ def test_load_slo_evidence_detects_tampering_and_revision_mismatch(tmp_path: Pat
 
     with pytest.raises(ValueError, match="revision mismatch"):
         load_load_slo_evidence(output, expected_revision="b" * 40)
+
+    with pytest.raises(ValueError, match="container image mismatch"):
+        load_load_slo_evidence(
+            output,
+            expected_image_id="sha256:" + "2" * 64,
+        )
 
     output.write_bytes(output.read_bytes().replace(b'"passed":true', b'"passed":false', 1))
     with pytest.raises(ValueError, match="checksum mismatch"):
