@@ -507,15 +507,11 @@ def test_cli_uses_explicit_trusted_artifact_root(
         trust_policy.model_dump_json(), encoding="utf-8"
     )
     monkeypatch.setattr(acceptance_window_script, "TRUST_POLICY_ROOT", trust_root)
-    runtime_identity_path = tmp_path / "runtime-release-identity.json"
-    runtime_identity_path.write_text(
-        _runtime_identity(bundle).model_dump_json(), encoding="utf-8"
-    )
-    runtime_identity_path.chmod(0o600)
+    runtime_identity = _runtime_identity(bundle)
     monkeypatch.setattr(
         acceptance_window_script,
-        "RUNTIME_RELEASE_IDENTITY_PATH",
-        runtime_identity_path,
+        "load_runtime_release_identity",
+        lambda _path: runtime_identity,
     )
 
     exit_code = acceptance_window_main(
@@ -1064,15 +1060,11 @@ def test_cli_accepts_only_with_replay_and_both_provenance_roles(
         trust_policy.model_dump_json(), encoding="utf-8"
     )
     monkeypatch.setattr(acceptance_window_script, "TRUST_POLICY_ROOT", trust_root)
-    runtime_identity_path = tmp_path / "runtime-release-identity.json"
-    runtime_identity_path.write_text(
-        _runtime_identity(bundle).model_dump_json(), encoding="utf-8"
-    )
-    runtime_identity_path.chmod(0o600)
+    runtime_identity = _runtime_identity(bundle)
     monkeypatch.setattr(
         acceptance_window_script,
-        "RUNTIME_RELEASE_IDENTITY_PATH",
-        runtime_identity_path,
+        "load_runtime_release_identity",
+        lambda _path: runtime_identity,
     )
 
     exit_code = acceptance_window_main(
