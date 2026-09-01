@@ -27,6 +27,7 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
         "verify",
         "integration-replay",
         "load-slo",
+        "attest-load-slo",
         "infrastructure-verify",
         "container-security",
         "restore-drill",
@@ -39,6 +40,38 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "scripts/load_slo.py" in str(jobs["load-slo"])
     assert "--events 20000" in str(jobs["load-slo"])
     assert "--decisions 5000" in str(jobs["load-slo"])
+    assert "--release-evidence" in str(jobs["load-slo"])
+    assert '--revision "$GITHUB_SHA"' in str(jobs["load-slo"])
+    assert "--evidence-source github-actions" in str(jobs["load-slo"])
+    assert '--github-run-id "$GITHUB_RUN_ID"' in str(jobs["load-slo"])
+    assert '--github-run-attempt "$GITHUB_RUN_ATTEMPT"' in str(jobs["load-slo"])
+    assert (
+        "funding-load-slo-${{ github.sha }}-${{ github.run_id }}-"
+        "${{ github.run_attempt }}"
+    ) in str(jobs["load-slo"])
+    assert "funding-load-slo.json.sha256" in str(jobs["load-slo"])
+    assert "funding-load-slo-run.txt" in str(jobs["load-slo"])
+    assert "funding-load-slo.log" in str(jobs["load-slo"])
+    assert "set -o pipefail" in str(jobs["load-slo"])
+    assert jobs["load-slo"]["permissions"] == {"contents": "read"}
+    assert jobs["attest-load-slo"]["needs"] == "load-slo"
+    assert jobs["attest-load-slo"]["if"] == (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    )
+    assert "actions/attest@a1948c3f048ba23858d222213b7c278aabede763" in str(
+        jobs["attest-load-slo"]
+    )
+    assert jobs["attest-load-slo"]["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+        "attestations": "write",
+        "artifact-metadata": "write",
+    }
+    assert set(jobs["publish-signed-image"]["needs"]) == {
+        "shadow-deploy",
+        "attest-load-slo",
+    }
+    assert "'retention-days': 30" in str(jobs["load-slo"])
     assert "terraform -chdir=infra/terraform validate" in str(jobs["infrastructure-verify"])
     assert "scripts/backup_state.sh" in str(jobs["infrastructure-verify"])
     assert "scripts/ci_restore_drill.sh" in str(jobs["restore-drill"])

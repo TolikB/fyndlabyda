@@ -770,6 +770,7 @@ requirements:
     status: partial
     evidence:
       - src/funding_arbitrage/qa/load_slo.py
+      - src/funding_arbitrage/qa/load_slo_evidence.py
       - scripts/load_slo.py
       - tests/test_load_slo.py
       - docs/V1_PERFORMANCE_SLO.md

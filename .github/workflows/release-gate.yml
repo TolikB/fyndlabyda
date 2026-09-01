@@ -161,6 +161,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      - name: Initialize load SLO diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'revision=%s\nrun_id=%s\nrun_attempt=%s\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            >"${RUNNER_TEMP}/funding-load-slo-run.txt"
+          : >"${RUNNER_TEMP}/funding-load-slo.log"
+
       - name: Set up Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -174,11 +183,59 @@ jobs:
       - name: Enforce P99 and reliability budgets under representative load
         env:
           PYTHONPATH: src
-        run: >-
-          python scripts/load_slo.py
-          --events 20000
-          --decisions 5000
-          --output "${RUNNER_TEMP}/funding-load-slo.json"
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/load_slo.py \
+            --events 20000 \
+            --decisions 5000 \
+            --release-evidence \
+            --revision "$GITHUB_SHA" \
+            --evidence-source github-actions \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "${RUNNER_TEMP}/funding-load-slo.json" \
+            2>&1 | tee "${RUNNER_TEMP}/funding-load-slo.log"
+
+      - name: Upload commit-bound load SLO evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: funding-load-slo-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/funding-load-slo-run.txt
+            ${{ runner.temp }}/funding-load-slo.log
+            ${{ runner.temp }}/funding-load-slo.json
+            ${{ runner.temp }}/funding-load-slo.json.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  attest-load-slo:
+    name: Attest successful public-repository load SLO evidence
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: load-slo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download exact load SLO evidence attempt
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: funding-load-slo-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/funding-load-slo
+
+      - name: Create signed SLSA provenance
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-path: |
+            ${{ runner.temp }}/funding-load-slo/funding-load-slo.json
+            ${{ runner.temp }}/funding-load-slo/funding-load-slo.json.sha256
+
   infrastructure-verify:
     name: Terraform, Vault, backup, and Linux script validation
     needs: verify
@@ -415,7 +472,9 @@ jobs:
   publish-signed-image:
     name: Publish and keylessly sign main image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: shadow-deploy
+    needs:
+      - shadow-deploy
+      - attest-load-slo
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

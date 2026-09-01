@@ -33,6 +33,17 @@ from funding_arbitrage.qa.acceptance_window import (
     AcceptanceWindowSealInput,
 )
 from funding_arbitrage.qa.load_slo import LoadSLOConfig, LoadSLOReport, run_load_slo
+from funding_arbitrage.qa.load_slo_evidence import (
+    LOAD_SLO_PROFILE_ID,
+    LoadSLOEvidence,
+    LoadSLOProvenance,
+    LoadSLORuntimeIdentity,
+    build_load_slo_evidence,
+    canonical_load_slo_evidence_bytes,
+    load_load_slo_evidence,
+    load_slo_evidence_sha256,
+    write_load_slo_evidence,
+)
 from funding_arbitrage.qa.runtime_acceptance import (
     AcceptanceRuntimeAttachments,
     AcceptanceRuntimeJournalHeader,
@@ -62,7 +73,11 @@ __all__ = [
     "TrustedPublicKey",
     "audit_acceptance_replay_rows",
     "LoadSLOConfig",
+    "LoadSLOEvidence",
+    "LoadSLOProvenance",
     "LoadSLOReport",
+    "LoadSLORuntimeIdentity",
+    "LOAD_SLO_PROFILE_ID",
     "run_load_slo",
     "acceptance_replay_command_sha256",
     "acceptance_replay_cost_policy_sha256",
@@ -73,9 +88,14 @@ __all__ = [
     "anchor_signature_payload",
     "collector_signature_payload",
     "build_acceptance_seal_input",
+    "build_load_slo_evidence",
+    "canonical_load_slo_evidence_bytes",
     "load_acceptance_trust_policy",
     "load_runtime_acceptance_journal",
     "load_runtime_release_identity",
+    "load_load_slo_evidence",
+    "load_slo_evidence_sha256",
     "provenance_envelope_sha256",
     "trusted_keyring_sha256",
+    "write_load_slo_evidence",
 ]

@@ -5,11 +5,24 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import re
+import subprocess
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, cast
 
 from pydantic import ValidationError
 
 from funding_arbitrage.qa.load_slo import LoadSLOConfig, run_load_slo
+from funding_arbitrage.qa.load_slo_evidence import (
+    build_load_slo_evidence,
+    write_load_slo_evidence,
+)
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_REVISION = re.compile(r"^[a-f0-9]{40}$")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -31,12 +44,42 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--oms-p99-ms", type=float, default=10.0)
     parser.add_argument("--end-to-end-p99-ms", type=float, default=30.0)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--release-evidence",
+        action="store_true",
+        help="write a commit-bound exact-profile evidence envelope and SHA-256 sidecar",
+    )
+    parser.add_argument("--revision", help="lowercase 40-hex commit for evidence binding")
+    parser.add_argument(
+        "--evidence-source",
+        choices=("local", "github-actions"),
+        default="local",
+    )
+    parser.add_argument("--github-run-id", type=int)
+    parser.add_argument("--github-run-attempt", type=int)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.release_evidence and (args.output is None or args.revision is None):
+            raise ValueError("release evidence requires --output and --revision")
+        if not args.release_evidence and (
+            any(
+                value is not None
+                for value in (args.revision, args.github_run_id, args.github_run_attempt)
+            )
+            or args.evidence_source != "local"
+        ):
+            raise ValueError("evidence identity arguments require --release-evidence")
+        if args.release_evidence:
+            _validate_evidence_identity(
+                code_revision=args.revision,
+                source=cast(Literal["local", "github-actions"], args.evidence_source),
+                github_run_id=args.github_run_id,
+                github_run_attempt=args.github_run_attempt,
+            )
         config = LoadSLOConfig(
             event_count=args.events,
             decision_count=args.decisions,
@@ -52,16 +95,92 @@ def main(argv: list[str] | None = None) -> int:
             decision_to_filled_p99_ms=args.end_to_end_p99_ms,
         )
         report = asyncio.run(run_load_slo(config))
+        if args.release_evidence:
+            _validate_evidence_identity(
+                code_revision=args.revision,
+                source=cast(Literal["local", "github-actions"], args.evidence_source),
+                github_run_id=args.github_run_id,
+                github_run_attempt=args.github_run_attempt,
+            )
+            evidence = build_load_slo_evidence(
+                report,
+                code_revision=args.revision,
+                source=cast(Literal["local", "github-actions"], args.evidence_source),
+                github_run_id=args.github_run_id,
+                github_run_attempt=args.github_run_attempt,
+                measured_at=datetime.now(UTC),
+            )
     except (ValidationError, ValueError) as exc:
         print(json.dumps({"passed": False, "error": str(exc)}, sort_keys=True))
         return 2
-    encoded = report.model_dump_json(indent=2)
+    encoded = (
+        evidence.model_dump_json(indent=2)
+        if args.release_evidence
+        else report.model_dump_json(indent=2)
+    )
     if args.output is not None:
-        output = args.output.resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(encoded + "\n", encoding="utf-8")
+        if args.release_evidence:
+            write_load_slo_evidence(args.output, evidence)
+        else:
+            output = args.output.resolve()
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(encoded + "\n", encoding="utf-8")
     print(encoded)
     return 0 if report.passed else 1
+
+
+def _validate_evidence_identity(
+    *,
+    code_revision: str,
+    source: Literal["local", "github-actions"],
+    github_run_id: int | None,
+    github_run_attempt: int | None,
+    environment: Mapping[str, str] | None = None,
+    repository_state: tuple[str, str] | None = None,
+) -> None:
+    if not _REVISION.fullmatch(code_revision):
+        raise ValueError("evidence revision must be a lowercase 40-hex commit")
+    head, status = repository_state or _read_repository_state()
+    if head != code_revision:
+        raise ValueError("evidence revision does not match the checked-out commit")
+    if status:
+        raise ValueError("release evidence requires a clean Git working tree")
+    if source != "github-actions":
+        return
+    values = environment if environment is not None else os.environ
+    expected = {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_SHA": code_revision,
+        "GITHUB_RUN_ID": str(github_run_id) if github_run_id is not None else "",
+        "GITHUB_RUN_ATTEMPT": (
+            str(github_run_attempt) if github_run_attempt is not None else ""
+        ),
+    }
+    if any(values.get(name) != value for name, value in expected.items()):
+        raise ValueError("GitHub Actions evidence identity does not match runner context")
+
+
+def _read_repository_state() -> tuple[str, str]:
+    head = _run_git("rev-parse", "HEAD")
+    status = _run_git("status", "--porcelain=v1", "--untracked-files=all")
+    return head, status
+
+
+def _run_git(*arguments: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-c", f"safe.directory={_REPOSITORY_ROOT.as_posix()}", *arguments],
+            cwd=_REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("unable to verify repository identity for load SLO evidence") from exc
+    if result.returncode != 0:
+        raise ValueError("unable to verify repository identity for load SLO evidence")
+    return result.stdout.strip()
 
 
 if __name__ == "__main__":

@@ -374,7 +374,7 @@ def test_release_workflow_pins_actions_and_has_no_remote_vm_deployment() -> None
     assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
     assert workflow.count(
         "actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53"
-    ) == 4
+    ) == 5
     assert 'docker tag "$CI_IMAGE" "${image}:${GITHUB_SHA}"' in workflow
     assert "alembic downgrade base" in workflow
     assert "scripts/ci_shadow_smoke.sh" in workflow

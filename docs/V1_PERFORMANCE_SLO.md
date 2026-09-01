@@ -31,4 +31,15 @@ Run locally:
 PYTHONPATH=src python scripts/load_slo.py --output artifacts/load-slo.json
 ```
 
-CI runs the default representative workload on Ubuntu. Smaller counts are permitted only in unit tests; they are not release evidence. Real acceptance still requires the elapsed shadow and paper windows in GATE-001 and GATE-002.
+The plain local JSON is diagnostic output, not release evidence. A local commit-bound envelope can be generated for inspection from an exact clean commit:
+
+```bash
+PYTHONPATH=src python scripts/load_slo.py \
+  --release-evidence \
+  --revision 0123456789abcdef0123456789abcdef01234567 \
+  --output artifacts/load-slo.json
+```
+
+Evidence mode verifies that `--revision` equals the checked-out Git `HEAD` and refuses a dirty working tree. It fails closed unless the exact V1 workload, durable SQLite OMS, and fixed latency budgets are used. It records the 40-hex code revision, UTC measurement time, operating system, architecture, Python implementation/version, and execution source. Evidence files are created exclusively and are never overwritten. The JSON is canonicalized and accompanied by `load-slo.json.sha256`; the bounded regular-file loader rejects missing or mismatched sidecars, symbolic-link final paths, duplicate JSON keys, non-finite numbers, extra schema fields, inconsistent counters/pass claims, and revision mismatches.
+
+CI runs the exact representative workload on Ubuntu, requires the CLI identity to match the trusted GitHub runner environment, and rechecks Git state immediately after measurement. Every initialized attempt retains run metadata and a diagnostic log (which can be empty when setup fails) under a collision-free commit/run/attempt artifact name for 30 days. A completed exact-profile measurement additionally contains the JSON and checksum; a failed benchmark can retain only its run metadata and log. Main-branch pushes pass the successful artifact to a separate trusted-push job with elevated permissions. For public repositories GitHub creates a signed SLSA provenance attestation for the JSON and checksum, and image publication depends on successful completion of that job; private repositories still pass through the trusted job without making an unsupported public attestation. Pull-request code receives read-only contents permission only. The adjacent SHA-256 sidecar detects corruption but is not, by itself, proof of origin; provenance comes from the GitHub workflow artifact/attestation context. Smaller counts are permitted only in unit tests; they cannot be wrapped as release evidence. QA-004 remains partial until a successful external CI run produces that artifact. Real acceptance still requires the elapsed shadow and paper windows in GATE-001 and GATE-002.
