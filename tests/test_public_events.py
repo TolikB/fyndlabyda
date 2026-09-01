@@ -817,6 +817,91 @@ async def test_supervisor_mirrors_exact_funding_and_only_falls_back_for_missing_
     assert funding.next_funding_time == datetime(2026, 8, 20, 16, 0, tzinfo=UTC)
 
 
+async def test_required_quality_streams_survive_one_transient_snapshot_omission() -> None:
+    collector = EventCollector()
+    clock_values = iter((0.0, 60.0))
+    supervisor = PublicEventSupervisor(
+        [],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        quality_stream_retention_seconds=180,
+        quality_stream_clock=lambda: next(clock_values),
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    source = _snapshot()
+    await supervisor.observe_snapshot(source)
+    expected = supervisor.required_quality_streams
+
+    await supervisor.observe_snapshot(
+        MarketSnapshot([], [], [], {}, source.captured_at + timedelta(seconds=60))
+    )
+
+    assert supervisor.required_quality_streams == expected
+
+
+async def test_required_quality_streams_expire_after_retention_window() -> None:
+    collector = EventCollector()
+    clock_values = iter((0.0, 181.0))
+    supervisor = PublicEventSupervisor(
+        [],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        quality_stream_retention_seconds=180,
+        quality_stream_clock=lambda: next(clock_values),
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    source = _snapshot()
+    await supervisor.observe_snapshot(source)
+
+    await supervisor.observe_snapshot(
+        MarketSnapshot([], [], [], {}, source.captured_at + timedelta(seconds=181))
+    )
+
+    assert supervisor.required_quality_streams == ()
+
+
+async def test_quality_stream_retention_ignores_regressed_snapshot_clock() -> None:
+    collector = EventCollector()
+    clock_values = iter((0.0, 60.0, 241.0))
+    supervisor = PublicEventSupervisor(
+        [],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        quality_stream_retention_seconds=180,
+        quality_stream_clock=lambda: next(clock_values),
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    source = _snapshot()
+    await supervisor.observe_snapshot(source)
+    regressed_at = source.captured_at - timedelta(hours=1)
+    instrument = source.instruments[0].model_copy(
+        update={"exchange_symbol": "ETHUSDT", "base_asset": "ETH"}
+    )
+    ticker = source.tickers[0].model_copy(
+        update={"symbol": "ETHUSDT", "timestamp": regressed_at}
+    )
+    funding = source.funding[0].model_copy(
+        update={"symbol": "ETHUSDT", "timestamp": regressed_at}
+    )
+
+    await supervisor.observe_snapshot(
+        MarketSnapshot([instrument], [ticker], [funding], {}, regressed_at)
+    )
+    assert len(supervisor.required_quality_streams) == 2
+
+    await supervisor.observe_snapshot(
+        MarketSnapshot([], [], [], {}, regressed_at - timedelta(hours=1))
+    )
+
+    assert supervisor.required_quality_streams == ()
+
+
 async def test_snapshot_projection_precedes_mirrored_market_events() -> None:
     calls: list[str] = []
 

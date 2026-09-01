@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from time import monotonic_ns
+from time import monotonic, monotonic_ns
 from typing import Any
 
 from pydantic import BaseModel
@@ -319,6 +319,8 @@ class PublicEventSupervisor:
         symbol_limit: int,
         rest_interval_seconds: float,
         metadata_refresh_seconds: float = 3600.0,
+        quality_stream_retention_seconds: float = 540.0,
+        quality_stream_clock: Callable[[], float] = monotonic,
         reconnect_initial_seconds: float,
         reconnect_max_seconds: float,
     ) -> None:
@@ -326,6 +328,8 @@ class PublicEventSupervisor:
             raise ValueError("public event limits and intervals must be positive")
         if metadata_refresh_seconds <= 0:
             raise ValueError("public metadata refresh interval must be positive")
+        if quality_stream_retention_seconds <= 0:
+            raise ValueError("public quality stream retention must be positive")
         if not 0 < reconnect_initial_seconds <= reconnect_max_seconds:
             raise ValueError("public event reconnect bounds are invalid")
         self.accounts = tuple(accounts)
@@ -333,6 +337,8 @@ class PublicEventSupervisor:
         self.symbol_limit = symbol_limit
         self.rest_interval_seconds = rest_interval_seconds
         self.metadata_refresh_seconds = metadata_refresh_seconds
+        self.quality_stream_retention_seconds = quality_stream_retention_seconds
+        self._quality_stream_clock = quality_stream_clock
         self.reconnect_initial_seconds = reconnect_initial_seconds
         self.reconnect_max_seconds = reconnect_max_seconds
         self._normalizers = {
@@ -345,6 +351,7 @@ class PublicEventSupervisor:
         self._available: set[tuple[str, str]] = set()
         self._desired_symbols: dict[tuple[str, str], tuple[str, ...]] = {}
         self._required_quality_streams: tuple[StreamIdentity, ...] = ()
+        self._required_quality_last_seen: dict[StreamIdentity, float] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._symbol_tasks: dict[tuple[str, str, str, str], asyncio.Task[None]] = {}
         self._started = False
@@ -459,7 +466,18 @@ class PublicEventSupervisor:
                     canonical.canonical_id,
                 )
             )
-        self._required_quality_streams = tuple(sorted(required))
+        observed_at = self._quality_stream_clock()
+        for identity in required:
+            self._required_quality_last_seen[identity] = observed_at
+        cutoff = observed_at - self.quality_stream_retention_seconds
+        self._required_quality_last_seen = {
+            identity: last_seen
+            for identity, last_seen in self._required_quality_last_seen.items()
+            if last_seen >= cutoff
+        }
+        self._required_quality_streams = tuple(
+            sorted(self._required_quality_last_seen)
+        )
 
     def _start_account_tasks(self, account: PublicEventAccount) -> None:
         self._track(asyncio.create_task(self._manage_symbols(account)))
@@ -1055,6 +1073,10 @@ def create_public_event_supervisor(
         symbol_limit=settings.public_event_symbol_limit_per_profile,
         rest_interval_seconds=settings.public_event_rest_interval_seconds,
         metadata_refresh_seconds=settings.public_metadata_refresh_seconds,
+        quality_stream_retention_seconds=max(
+            settings.orderbook_stream_stale_seconds * 3,
+            settings.funding_snapshot_stale_seconds * 3,
+        ),
         reconnect_initial_seconds=settings.public_event_reconnect_initial_seconds,
         reconnect_max_seconds=settings.public_event_reconnect_max_seconds,
     )
