@@ -43,6 +43,13 @@ class NormalizedInstrument(BaseModel):
 
 
 class Ticker(BaseModel):
+    """Normalized ticker values.
+
+    ``volume_24h`` is quote-currency notional, not base quantity or contract
+    count.  Keeping one unit across venues is required for cross-venue universe
+    ranking and liquidity gates.
+    """
+
     model_config = ConfigDict(frozen=True)
 
     exchange: str

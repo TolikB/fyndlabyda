@@ -415,6 +415,9 @@ async def test_okx_tickers_skip_blank_last_without_dropping_venue() -> None:
         ("BTC-USDT-SWAP", InstrumentType.PERPETUAL),
         ("BTC-USDT", InstrumentType.SPOT),
     }
+    volumes = {ticker.instrument_type: ticker.volume_24h for ticker in tickers}
+    assert volumes[InstrumentType.PERPETUAL] == Decimal("1200")
+    assert volumes[InstrumentType.SPOT] == Decimal("12")
 
 
 def test_binance_websocket_ticker_aliases_are_normalized() -> None:

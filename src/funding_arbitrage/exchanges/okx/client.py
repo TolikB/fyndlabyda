@@ -449,16 +449,24 @@ class OkxPublicAdapter(ExchangeAdapter):
             return None
 
     def _parse_ticker(self, row: dict[str, Any], instrument_type: InstrumentType) -> Ticker:
+        last_price = decimal(row["last"], "last")
+        native_volume = decimal(row.get("volCcy24h", "0"), "volCcy24h")
         return Ticker(
             exchange=self.name,
             symbol=str(row["instId"]),
             instrument_type=instrument_type,
-            last_price=decimal(row["last"], "last"),
+            last_price=last_price,
             mark_price=_opt(row.get("markPx"), "markPx"),
             index_price=_opt(row.get("idxPx"), "idxPx"),
             best_bid=_opt(row.get("bidPx"), "bidPx"),
             best_ask=_opt(row.get("askPx"), "askPx"),
-            volume_24h=decimal(row.get("volCcy24h", "0"), "volCcy24h"),
+            # OKX reports derivative volCcy24h in base currency and spot
+            # volCcy24h in quote currency.
+            volume_24h=(
+                native_volume * last_price
+                if instrument_type is InstrumentType.PERPETUAL
+                else native_volume
+            ),
             open_interest=_opt(row.get("oi"), "oi"),
             timestamp=_ms(row.get("ts", int(datetime.now(UTC).timestamp() * 1000))),
         )

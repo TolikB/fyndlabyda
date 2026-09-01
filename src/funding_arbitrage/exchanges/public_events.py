@@ -64,6 +64,7 @@ _CANDLE_BACKFILL_LIMIT = 10
 _CANDLE_FINALITY_DELAY = timedelta(seconds=5)
 
 CanonicalEventSink = Callable[[EventEnvelope[Any]], Awaitable[None]]
+SnapshotObserver = Callable[[MarketSnapshot], Awaitable[object]]
 
 
 @dataclass(frozen=True)
@@ -348,6 +349,16 @@ class PublicEventSupervisor:
         self._symbol_tasks: dict[tuple[str, str, str, str], asyncio.Task[None]] = {}
         self._started = False
         self._stop_event = asyncio.Event()
+        self._pre_mirror_snapshot_observer: SnapshotObserver | None = None
+
+    def set_pre_mirror_snapshot_observer(self, observer: SnapshotObserver) -> None:
+        """Attach one projection before this supervisor mirrors a snapshot."""
+
+        if self._started:
+            raise RuntimeError("snapshot observer must be attached before start")
+        if self._pre_mirror_snapshot_observer is not None:
+            raise ValueError("public snapshot observer is already configured")
+        self._pre_mirror_snapshot_observer = observer
 
     async def start(self) -> None:
         if self._started:
@@ -380,6 +391,8 @@ class PublicEventSupervisor:
     async def observe_snapshot(self, snapshot: MarketSnapshot) -> None:
         """Mirror exact native funding and update the bounded CCXT universe."""
 
+        if self._pre_mirror_snapshot_observer is not None:
+            await self._pre_mirror_snapshot_observer(snapshot)
         received_at = datetime.now(UTC)
         await self._publish_snapshot_events(snapshot, received_at, monotonic_ns())
         self._update_required_quality_streams(snapshot)

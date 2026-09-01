@@ -457,7 +457,7 @@ class BybitPublicAdapter(ExchangeAdapter):
             index_price=_optional_decimal(row.get("indexPrice"), "indexPrice"),
             best_bid=_optional_decimal(row.get("bid1Price"), "bid1Price"),
             best_ask=_optional_decimal(row.get("ask1Price"), "ask1Price"),
-            volume_24h=decimal(row.get("volume24h", "0"), "volume24h"),
+            volume_24h=decimal(row.get("turnover24h", "0"), "turnover24h"),
             open_interest=_optional_decimal(row.get("openInterest"), "openInterest"),
             timestamp=timestamp,
         )

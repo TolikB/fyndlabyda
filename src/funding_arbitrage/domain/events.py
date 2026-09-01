@@ -103,6 +103,7 @@ class EventKind(StrEnum):
     FILL = "FILL"
     POSITION_SNAPSHOT = "POSITION_SNAPSHOT"
     BALANCE_SNAPSHOT = "BALANCE_SNAPSHOT"
+    UNIVERSE_SELECTION_SNAPSHOT = "UNIVERSE_SELECTION_SNAPSHOT"
 
 
 def _utc(value: datetime) -> datetime:
@@ -433,6 +434,70 @@ class BalanceSnapshot(ExchangeTimedModel):
         return value.strip().upper()
 
 
+class UniverseSelectionEntry(BaseModel):
+    """One auditable member of a dynamic runtime universe."""
+
+    model_config = ConfigDict(frozen=True)
+
+    instrument: InstrumentKey
+    asset: str = Field(min_length=1)
+    score: Decimal = Field(ge=0, le=1)
+    liquidity_score: Decimal = Field(ge=0, le=1)
+    funding_score: Decimal = Field(ge=0, le=1)
+    quality_score: Decimal = Field(ge=0, le=1)
+    retained_from_previous: bool = False
+
+    @field_validator("asset")
+    @classmethod
+    def normalize_asset(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("universe asset cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_instrument_asset(self) -> UniverseSelectionEntry:
+        if self.instrument.base_asset != self.asset:
+            raise ValueError("universe entry asset does not match its instrument")
+        return self
+
+
+class UniverseSelectionExclusion(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    instrument: InstrumentKey
+    reason: str = Field(min_length=1)
+
+
+class UniverseSelectionSnapshot(ExchangeTimedModel):
+    """Persisted dynamic-universe decision consumed by runtime and replay."""
+
+    selection_id: str = Field(min_length=1)
+    selector_version: str = Field(min_length=1)
+    selected: tuple[UniverseSelectionEntry, ...]
+    excluded: tuple[UniverseSelectionExclusion, ...] = ()
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> UniverseSelectionSnapshot:
+        assets = tuple(item.asset for item in self.selected)
+        instruments = tuple(item.instrument.canonical_id for item in self.selected)
+        if len(assets) != len(set(assets)):
+            raise ValueError("dynamic universe contains duplicate assets")
+        if len(instruments) != len(set(instruments)):
+            raise ValueError("dynamic universe contains duplicate instruments")
+        excluded = tuple(
+            (item.instrument.canonical_id, item.reason) for item in self.excluded
+        )
+        if len(excluded) != len(set(excluded)):
+            raise ValueError("dynamic universe contains duplicate exclusions")
+        return self
+
+    @property
+    def selected_assets(self) -> tuple[str, ...]:
+        return tuple(item.asset for item in self.selected)
+
+
 EventPayload = (
     TradeTick
     | BookSnapshot
@@ -446,6 +511,7 @@ EventPayload = (
     | FillEvent
     | PositionSnapshot
     | BalanceSnapshot
+    | UniverseSelectionSnapshot
 )
 
 PAYLOAD_KIND: dict[type[BaseModel], EventKind] = {
@@ -461,6 +527,7 @@ PAYLOAD_KIND: dict[type[BaseModel], EventKind] = {
     FillEvent: EventKind.FILL,
     PositionSnapshot: EventKind.POSITION_SNAPSHOT,
     BalanceSnapshot: EventKind.BALANCE_SNAPSHOT,
+    UniverseSelectionSnapshot: EventKind.UNIVERSE_SELECTION_SNAPSHOT,
 }
 
 

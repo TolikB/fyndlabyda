@@ -817,6 +817,31 @@ async def test_supervisor_mirrors_exact_funding_and_only_falls_back_for_missing_
     assert funding.next_funding_time == datetime(2026, 8, 20, 16, 0, tzinfo=UTC)
 
 
+async def test_snapshot_projection_precedes_mirrored_market_events() -> None:
+    calls: list[str] = []
+
+    async def sink(event: EventEnvelope[Any]) -> None:
+        calls.append(event.kind.value)
+
+    async def observer(_: MarketSnapshot) -> None:
+        calls.append("UNIVERSE")
+
+    supervisor = PublicEventSupervisor(
+        [],
+        sink,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    supervisor.set_pre_mirror_snapshot_observer(observer)
+
+    await supervisor.observe_snapshot(_snapshot())
+
+    assert calls[0] == "UNIVERSE"
+    assert EventKind.FUNDING_SNAPSHOT.value in calls[1:]
+
+
 async def test_polled_derivative_observations_do_not_reuse_event_ids() -> None:
     exchange = FakePublicExchange(open_interest=False)
     collector = EventCollector()

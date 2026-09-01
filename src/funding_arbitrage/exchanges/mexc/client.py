@@ -308,7 +308,9 @@ class MexcPublicAdapter(ExchangeAdapter):
             index_price=_optional_decimal(row.get("indexPrice"), "indexPrice"),
             best_bid=_optional_decimal(row.get("bid1"), "bid1"),
             best_ask=_optional_decimal(row.get("ask1"), "ask1"),
-            volume_24h=decimal(row.get("volume24", "0"), "volume24") * size,
+            # amount24 is quote-currency transaction notional; volume24 is
+            # contract count and cannot be compared across venues.
+            volume_24h=decimal(row.get("amount24", "0"), "amount24"),
             open_interest=_optional_contract_quantity(row.get("holdVol"), size),
             timestamp=_utc_from_ms(row.get("timestamp") or _now_ms()),
         )

@@ -60,6 +60,21 @@ USD-quoted options may use a USD, USDC, or USDT underlying hedge only with an
 explicit parity conversion rate retained in the signal evidence. Non-parity and any
 other cross-quote pair are rejected; advanced live option execution remains disabled.
 
+The configured `MULTI_REGIME_ASSETS` are the always-on core universe. A separate
+dynamic liquid-altcoin projection evaluates active perpetuals using quote-currency
+24h notional, two-sided depth within 25 bps, executable $10k slippage, open-interest
+notional, exact funding history, funding persistence, data coverage, venue coverage,
+listing-history evidence, and current stream quality. Bybit turnover, OKX derivative
+base volume, and MEXC `amount24` are normalized to one quote-notional unit before
+cross-venue ranking. The earliest stored funding observation is a conservative
+listing-history lower bound; missing history can never make a newly listed asset look
+older. Selection is hourly by default with entry/retention hysteresis and a bounded
+number of new assets. Every result is committed as a typed
+`UNIVERSE_SELECTION_SNAPSHOT` before it changes runtime eligibility, and restart or
+replay restores the same selected assets from the canonical journal. Stale, future,
+crossed, incomplete, low-depth, low-OI, low-volume, or insufficient-history
+candidates remain excluded. Dynamic selection never grants live execution authority.
+
 The mature legacy paper pipeline remains the sole funding execution and settlement
 owner. Canonical funding contexts are evaluated and retained as evidence, but their
 normalized runtime intent is suppressed so the same opportunity cannot create a

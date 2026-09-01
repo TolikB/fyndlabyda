@@ -90,6 +90,69 @@ class Settings(BaseSettings):
     multi_regime_assets: str = Field(
         default="BTC,ETH", alias="MULTI_REGIME_ASSETS"
     )
+    multi_regime_dynamic_universe_enabled: bool = Field(
+        default=True, alias="MULTI_REGIME_DYNAMIC_UNIVERSE_ENABLED"
+    )
+    multi_regime_universe_rebalance_seconds: int = Field(
+        default=3600, alias="MULTI_REGIME_UNIVERSE_REBALANCE_SECONDS"
+    )
+    multi_regime_universe_maximum_assets: int = Field(
+        default=20, alias="MULTI_REGIME_UNIVERSE_MAXIMUM_ASSETS"
+    )
+    multi_regime_universe_maximum_new_assets: int = Field(
+        default=5, alias="MULTI_REGIME_UNIVERSE_MAXIMUM_NEW_ASSETS"
+    )
+    multi_regime_universe_maximum_data_age_seconds: Decimal = Field(
+        default=Decimal("120"), alias="MULTI_REGIME_UNIVERSE_MAXIMUM_DATA_AGE_SECONDS"
+    )
+    multi_regime_universe_minimum_listing_age_days: Decimal = Field(
+        default=Decimal("30"), alias="MULTI_REGIME_UNIVERSE_MINIMUM_LISTING_AGE_DAYS"
+    )
+    multi_regime_universe_minimum_statistics_days: Decimal = Field(
+        default=Decimal("7"), alias="MULTI_REGIME_UNIVERSE_MINIMUM_STATISTICS_DAYS"
+    )
+    multi_regime_universe_minimum_venue_count: int = Field(
+        default=2, alias="MULTI_REGIME_UNIVERSE_MINIMUM_VENUE_COUNT"
+    )
+    multi_regime_universe_minimum_quote_volume_usd: Decimal = Field(
+        default=Decimal("10000000"),
+        alias="MULTI_REGIME_UNIVERSE_MINIMUM_QUOTE_VOLUME_USD",
+    )
+    multi_regime_universe_minimum_depth_usd: Decimal = Field(
+        default=Decimal("100000"), alias="MULTI_REGIME_UNIVERSE_MINIMUM_DEPTH_USD"
+    )
+    multi_regime_universe_minimum_open_interest_usd: Decimal = Field(
+        default=Decimal("5000000"),
+        alias="MULTI_REGIME_UNIVERSE_MINIMUM_OPEN_INTEREST_USD",
+    )
+    multi_regime_universe_maximum_spread_bps: Decimal = Field(
+        default=Decimal("15"), alias="MULTI_REGIME_UNIVERSE_MAXIMUM_SPREAD_BPS"
+    )
+    multi_regime_universe_maximum_slippage_bps: Decimal = Field(
+        default=Decimal("20"), alias="MULTI_REGIME_UNIVERSE_MAXIMUM_SLIPPAGE_BPS"
+    )
+    multi_regime_universe_minimum_funding_samples: int = Field(
+        default=20, alias="MULTI_REGIME_UNIVERSE_MINIMUM_FUNDING_SAMPLES"
+    )
+    multi_regime_universe_minimum_data_coverage: Decimal = Field(
+        default=Decimal("0.95"),
+        alias="MULTI_REGIME_UNIVERSE_MINIMUM_DATA_COVERAGE",
+    )
+    multi_regime_universe_minimum_entry_score: Decimal = Field(
+        default=Decimal("0.55"), alias="MULTI_REGIME_UNIVERSE_MINIMUM_ENTRY_SCORE"
+    )
+    multi_regime_universe_minimum_retention_score: Decimal = Field(
+        default=Decimal("0.45"),
+        alias="MULTI_REGIME_UNIVERSE_MINIMUM_RETENTION_SCORE",
+    )
+    multi_regime_universe_target_funding_bps_daily: Decimal = Field(
+        default=Decimal("10"),
+        alias="MULTI_REGIME_UNIVERSE_TARGET_FUNDING_BPS_DAILY",
+    )
+    multi_regime_universe_excluded_assets: str = Field(
+        default="BTC,ETH,USDT,USDC,DAI,FDUSD,TUSD",
+        alias="MULTI_REGIME_UNIVERSE_EXCLUDED_ASSETS",
+    )
     multi_regime_source_interval_seconds: int = Field(
         default=60, alias="MULTI_REGIME_SOURCE_INTERVAL_SECONDS"
     )
@@ -627,6 +690,14 @@ class Settings(BaseSettings):
         )
 
     @property
+    def multi_regime_universe_excluded_asset_values(self) -> frozenset[str]:
+        return frozenset(
+            value.strip().upper()
+            for value in self.multi_regime_universe_excluded_assets.split(",")
+            if value.strip()
+        )
+
+    @property
     def bybit_category_values(self) -> tuple[str, ...]:
         return tuple(value.strip() for value in self.bybit_categories.split(",") if value.strip())
 
@@ -952,6 +1023,54 @@ def _validate_safe_values(settings: Settings) -> None:
     if settings.multi_regime_enabled:
         if not settings.multi_regime_asset_values:
             raise ValueError("MULTI_REGIME_ASSETS cannot be empty")
+        if settings.multi_regime_dynamic_universe_enabled:
+            positive_universe_values = (
+                settings.multi_regime_universe_rebalance_seconds,
+                settings.multi_regime_universe_maximum_assets,
+                settings.multi_regime_universe_maximum_new_assets,
+                settings.multi_regime_universe_maximum_data_age_seconds,
+                settings.multi_regime_universe_minimum_statistics_days,
+                settings.multi_regime_universe_minimum_venue_count,
+                settings.multi_regime_universe_minimum_quote_volume_usd,
+                settings.multi_regime_universe_minimum_depth_usd,
+                settings.multi_regime_universe_minimum_open_interest_usd,
+                settings.multi_regime_universe_maximum_spread_bps,
+                settings.multi_regime_universe_maximum_slippage_bps,
+                settings.multi_regime_universe_minimum_funding_samples,
+                settings.multi_regime_universe_target_funding_bps_daily,
+            )
+            if any(value <= 0 for value in positive_universe_values):
+                raise ValueError("dynamic-universe limits must be positive")
+            if settings.multi_regime_universe_minimum_listing_age_days < 0:
+                raise ValueError(
+                    "MULTI_REGIME_UNIVERSE_MINIMUM_LISTING_AGE_DAYS cannot be negative"
+                )
+            if (
+                settings.multi_regime_universe_maximum_new_assets
+                > settings.multi_regime_universe_maximum_assets
+            ):
+                raise ValueError(
+                    "dynamic-universe new-asset limit cannot exceed maximum assets"
+                )
+            for name in (
+                "multi_regime_universe_minimum_data_coverage",
+                "multi_regime_universe_minimum_entry_score",
+                "multi_regime_universe_minimum_retention_score",
+            ):
+                value = getattr(settings, name)
+                if not Decimal("0") <= value <= Decimal("1"):
+                    raise ValueError(f"{name.upper()} must be between 0 and 1")
+            if (
+                settings.multi_regime_universe_minimum_retention_score
+                > settings.multi_regime_universe_minimum_entry_score
+            ):
+                raise ValueError(
+                    "dynamic-universe retention score cannot exceed entry score"
+                )
+            if not settings.multi_regime_universe_excluded_asset_values:
+                raise ValueError(
+                    "MULTI_REGIME_UNIVERSE_EXCLUDED_ASSETS cannot be empty"
+                )
         intervals = (
             settings.multi_regime_source_interval_seconds,
             settings.multi_regime_strategy_interval_seconds,

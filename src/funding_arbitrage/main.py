@@ -77,6 +77,7 @@ from funding_arbitrage.services.paper_runner import (
     SharedMarketPaperComparisonRunner,
 )
 from funding_arbitrage.services.runtime import RuntimeState
+from funding_arbitrage.services.runtime_universe import RuntimeUniversePublisher
 from funding_arbitrage.services.strategy_suite import PAPER_EXECUTABLE_SIGNAL_TYPES
 from funding_arbitrage.storage.clickhouse import (
     ClickHouseHttpWriter,
@@ -86,6 +87,7 @@ from funding_arbitrage.storage.replication import (
     ClickHouseDecisionReplicator,
     ClickHouseEventReplicator,
 )
+from funding_arbitrage.strategies.universe import UniverseSelectorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     event_router = CanonicalEventRouter(event_writer, event_quality_monitor)
     multi_regime_runtime: DurableMultiRegimeRuntime | None = None
+    universe_publisher: RuntimeUniversePublisher | None = None
     paper_broker: DirectionalPaperBroker | None = None
     advanced_paper_broker: AdvancedStrategyPaperBroker | None = None
     adapters = create_public_adapters(
@@ -321,6 +324,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             runtime_state=runtime,
         )
         event_router.subscribe(multi_regime_runtime.publish)
+        if public_events is not None:
+            universe_publisher = RuntimeUniversePublisher(
+                session_factory,
+                event_router.publish,
+                selector_config=UniverseSelectorConfig(
+                    maximum_assets=(
+                        active_settings.multi_regime_universe_maximum_assets
+                    ),
+                    maximum_new_assets_per_rebalance=(
+                        active_settings.multi_regime_universe_maximum_new_assets
+                    ),
+                    maximum_data_age_seconds=(
+                        active_settings.multi_regime_universe_maximum_data_age_seconds
+                    ),
+                    minimum_listing_age_days=(
+                        active_settings.multi_regime_universe_minimum_listing_age_days
+                    ),
+                    minimum_statistics_days=(
+                        active_settings.multi_regime_universe_minimum_statistics_days
+                    ),
+                    minimum_venue_count=(
+                        active_settings.multi_regime_universe_minimum_venue_count
+                    ),
+                    minimum_quote_volume_24h_usd=(
+                        active_settings.multi_regime_universe_minimum_quote_volume_usd
+                    ),
+                    minimum_depth_within_25bps_usd=(
+                        active_settings.multi_regime_universe_minimum_depth_usd
+                    ),
+                    minimum_open_interest_usd=(
+                        active_settings.multi_regime_universe_minimum_open_interest_usd
+                    ),
+                    maximum_spread_bps=(
+                        active_settings.multi_regime_universe_maximum_spread_bps
+                    ),
+                    maximum_slippage_10k_bps=(
+                        active_settings.multi_regime_universe_maximum_slippage_bps
+                    ),
+                    minimum_funding_samples=(
+                        active_settings.multi_regime_universe_minimum_funding_samples
+                    ),
+                    minimum_market_data_coverage=(
+                        active_settings.multi_regime_universe_minimum_data_coverage
+                    ),
+                    minimum_entry_score=(
+                        active_settings.multi_regime_universe_minimum_entry_score
+                    ),
+                    minimum_retention_score=(
+                        active_settings.multi_regime_universe_minimum_retention_score
+                    ),
+                    target_funding_potential_bps_daily=(
+                        active_settings.multi_regime_universe_target_funding_bps_daily
+                    ),
+                    excluded_assets=(
+                        active_settings.multi_regime_universe_excluded_asset_values
+                    ),
+                ),
+                rebalance_seconds=(
+                    active_settings.multi_regime_universe_rebalance_seconds
+                ),
+                enabled=active_settings.multi_regime_dynamic_universe_enabled,
+            )
+            public_events.set_pre_mirror_snapshot_observer(
+                universe_publisher.observe_snapshot
+            )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -333,6 +401,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_router = event_router
         app.state.event_quality_monitor = event_quality_monitor
         app.state.multi_regime_runtime = multi_regime_runtime
+        app.state.universe_publisher = universe_publisher
         app.state.clickhouse_replicator = clickhouse_replicator
         app.state.clickhouse_decision_replicator = clickhouse_decision_replicator
         app.state.public_events = public_events

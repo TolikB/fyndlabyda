@@ -64,6 +64,7 @@ async def test_bybit_rest_payloads_are_normalized() -> None:
                 "bid1Price": "99.9",
                 "ask1Price": "100.1",
                 "volume24h": "12",
+                "turnover24h": "1200",
                 "ts": "1735689600000",
             }
             if category == "linear":
@@ -120,6 +121,7 @@ async def test_bybit_rest_payloads_are_normalized() -> None:
         is None
     )
     assert tickers[0].last_price == Decimal("100")
+    assert all(ticker.volume_24h == Decimal("1200") for ticker in tickers)
     assert tickers[0].timestamp == datetime(2025, 1, 1, tzinfo=UTC)
     assert funding[0].funding_rate_daily == Decimal("0.003")
     assert funding[0].timestamp == datetime(2025, 1, 1, tzinfo=UTC)
@@ -187,6 +189,7 @@ async def test_websocket_reconnects_after_disconnect() -> None:
                     "bid1Price": "99",
                     "ask1Price": "101",
                     "volume24h": "1",
+                    "turnover24h": "100",
                 },
             }
         )
@@ -247,6 +250,7 @@ def test_websocket_ticker_merges_partial_delta() -> None:
                 "bid1Price": "99",
                 "ask1Price": "101",
                 "volume24h": "1",
+                "turnover24h": "100",
             },
         },
         state,

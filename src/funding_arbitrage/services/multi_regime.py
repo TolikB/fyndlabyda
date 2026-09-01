@@ -32,6 +32,7 @@ from funding_arbitrage.domain.events import (
     OrderType,
     TradeTick,
     TradingMode,
+    UniverseSelectionSnapshot,
 )
 from funding_arbitrage.features.candles import CandleAggregator
 from funding_arbitrage.features.derivatives import (
@@ -609,7 +610,17 @@ class MultiRegimeEngine:
         self._states: dict[str, _InstrumentState] = {}
         self._seen: OrderedDict[str, str] = OrderedDict()
         self._latest_stream_timestamp: dict[tuple[str, str], datetime] = {}
+        self._dynamic_universe_assets: frozenset[str] = frozenset()
+        self._latest_universe_selection: UniverseSelectionSnapshot | None = None
         self.skipped_out_of_order_events = 0
+
+    @property
+    def active_assets(self) -> frozenset[str]:
+        return self.config.assets | self._dynamic_universe_assets
+
+    @property
+    def latest_universe_selection(self) -> UniverseSelectionSnapshot | None:
+        return self._latest_universe_selection
 
     def process(self, event: EventEnvelope[BaseModel]) -> MultiRegimeDecisionBatch | None:
         return self._process(event, evaluate_strategies=True)
@@ -663,15 +674,27 @@ class MultiRegimeEngine:
     ) -> MultiRegimeDecisionBatch | None:
         if self._duplicate(event):
             return None
+        payload = event.payload
+        if isinstance(payload, UniverseSelectionSnapshot):
+            if event.metadata.quality is not DataQuality.VALID:
+                return None
+            previous = self._latest_universe_selection
+            if (
+                previous is not None
+                and payload.exchange_timestamp < previous.exchange_timestamp
+            ):
+                raise ValueError("dynamic universe timestamp regressed")
+            self._dynamic_universe_assets = frozenset(payload.selected_assets)
+            self._latest_universe_selection = payload
+            return None
         instrument = getattr(event.payload, "instrument", None)
         if not isinstance(instrument, InstrumentKey):
             return None
         option_event = isinstance(event.payload, OptionQuoteSnapshot)
         if not option_event and not self._eligible(instrument):
             return None
-        if option_event and instrument.base_asset not in self.config.assets:
+        if option_event and instrument.base_asset not in self.active_assets:
             return None
-        payload = event.payload
         stream_name = (
             "BOOK"
             if isinstance(payload, (BookSnapshot, BookDelta))
@@ -1073,7 +1096,7 @@ class MultiRegimeEngine:
     def _eligible(self, instrument: InstrumentKey) -> bool:
         return (
             instrument.instrument_type is InstrumentType.PERPETUAL
-            and instrument.base_asset in self.config.assets
+            and instrument.base_asset in self.active_assets
         )
 
     def _duplicate(self, event: EventEnvelope[BaseModel]) -> bool:

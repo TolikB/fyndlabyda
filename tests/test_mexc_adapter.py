@@ -151,6 +151,7 @@ async def test_mexc_futures_ticker_and_book_convert_contracts_to_base_quantity()
                         "bid1": "99999",
                         "ask1": "100001",
                         "volume24": "5000",
+                        "amount24": "50000000",
                         "holdVol": "7000",
                         "timestamp": 1735689600000,
                     },
@@ -182,7 +183,7 @@ async def test_mexc_futures_ticker_and_book_convert_contracts_to_base_quantity()
     book = await adapter.get_orderbook("BTC_USDT", 20)
     await client.aclose()
 
-    assert tickers[0].volume_24h == Decimal("0.5")
+    assert tickers[0].volume_24h == Decimal("50000000")
     assert tickers[0].open_interest == Decimal("0.7")
     assert book.bids[0].quantity == Decimal("0.0010")
     assert book.asks[0].quantity == Decimal("0.0020")

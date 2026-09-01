@@ -31,6 +31,7 @@ from funding_arbitrage.domain.events import (
     OrderUpdate,
     PositionSnapshot,
     TradeTick,
+    UniverseSelectionSnapshot,
 )
 
 PAYLOAD_MODELS: dict[EventKind, type[BaseModel]] = {
@@ -46,6 +47,7 @@ PAYLOAD_MODELS: dict[EventKind, type[BaseModel]] = {
     EventKind.FILL: FillEvent,
     EventKind.POSITION_SNAPSHOT: PositionSnapshot,
     EventKind.BALANCE_SNAPSHOT: BalanceSnapshot,
+    EventKind.UNIVERSE_SELECTION_SNAPSHOT: UniverseSelectionSnapshot,
 }
 
 
@@ -265,6 +267,25 @@ async def load_ingestion_events(
 async def latest_event_row_id(session: AsyncSession) -> int:
     value = await session.scalar(select(func.max(CanonicalEventRecord.id)))
     return int(value or 0)
+
+
+async def load_latest_event_by_kind(
+    session: AsyncSession,
+    kind: EventKind,
+) -> EventEnvelope[BaseModel] | None:
+    """Load the latest durable event of one kind by canonical event time."""
+
+    record = await session.scalar(
+        select(CanonicalEventRecord)
+        .where(CanonicalEventRecord.kind == kind.value)
+        .order_by(
+            CanonicalEventRecord.exchange_timestamp.desc(),
+            CanonicalEventRecord.monotonic_ns.desc(),
+            CanonicalEventRecord.id.desc(),
+        )
+        .limit(1)
+    )
+    return record_to_event(record) if record is not None else None
 
 
 def record_to_event(record: CanonicalEventRecord) -> EventEnvelope[BaseModel]:

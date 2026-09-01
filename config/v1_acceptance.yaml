@@ -349,7 +349,12 @@ requirements:
     status: implemented
     evidence:
       - src/funding_arbitrage/strategies/universe.py
+      - src/funding_arbitrage/services/runtime_universe.py
+      - src/funding_arbitrage/domain/events.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/main.py
       - tests/test_universe_selector.py
+      - tests/test_runtime_universe.py
   - id: STRAT-009
     category: strategies
     title: Martingale, grid, and loss-averaging research modules are configurable and fail-closed for live use
