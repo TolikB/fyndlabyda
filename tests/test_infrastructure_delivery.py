@@ -54,6 +54,12 @@ def test_terraform_is_provider_neutral_and_fail_closed() -> None:
     assert 'for name in "$${required_files[@]}"' in cloud
     assert "BindsTo=vault-agent-funding.service" in cloud
     assert "ExecStartPre=/usr/bin/bash scripts/host_preflight.sh" in cloud
+    assert "ConditionPathExists=${app_dir}/docker-compose.production.yml" in cloud
+    assert "ConditionPathExists=${app_dir}/.env.release" in cloud
+    assert "--file docker-compose.yml --file docker-compose.production.yml" in cloud
+    assert "--env-file .env.live --env-file .env.release" in cloud
+    assert "--no-build" in cloud
+    assert "--pull never" not in cloud
     assert "/etc/credstore.encrypted/funding-v1-approle-secret-id" in cloud
     assert "/usr/local/sbin/funding-v1-control start" in cloud
     assert "#!/usr/bin/bash" in cloud
@@ -125,6 +131,20 @@ def test_compose_uses_optional_secret_overlays_and_live_requires_them() -> None:
     assert alertmanager["user"] == "10001:10001"
     assert "uid=10001,gid=10001" in alertmanager["tmpfs"][0]
     assert compose["services"]["app"]["restart"] == "no"
+    assert compose["services"]["app"]["image"] == (
+        "${APP_IMAGE:-funding-arbitrage:local}"
+    )
+
+
+def test_production_compose_requires_verified_image_without_pull_or_build() -> None:
+    compose = yaml.safe_load(_read("docker-compose.production.yml"))
+
+    for service_name in ("app", "low-latency"):
+        service = compose["services"][service_name]
+        assert service["image"] == (
+            "${APP_IMAGE:?APP_IMAGE must be an immutable verified digest}"
+        )
+        assert service["pull_policy"] == "never"
 
 
 def test_acceptance_compose_overlay_pins_measured_image_and_evidence_paths() -> None:
@@ -308,7 +328,10 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "10#$mode > 600" not in preflight
     assert "internal secret directory must be root-owned mode 0711" in preflight
     assert "private artifact owner is invalid" in preflight
-    assert "for command_name in chronyc docker findmnt id jq setpriv ss timedatectl" in preflight
+    assert (
+        "for command_name in chronyc docker findmnt git id jq setpriv "
+        "sha256sum ss stat timedatectl"
+    ) in preflight
     assert "POSTGRES_USER" in preflight
     assert "check_private_owner secrets/internal/clickhouse-server.key 101 101" in preflight
     assert "secrets/internal/clickhouse-client.crt" in preflight
@@ -326,10 +349,39 @@ def test_host_preflight_enforces_time_resources_ports_and_secret_modes() -> None
     assert "runtime UID 10001 cannot read rendered secret" in preflight
     assert "secrets/exchange/telegram-bot-token" in preflight
     assert "secrets/exchange/telegram-chat-id" in preflight
+    assert 'readonly release_env_file=".env.release"' in preflight
+    assert 'readonly production_compose_file="docker-compose.production.yml"' in preflight
+    assert "ghcr.io/tolikb/fyndlabyda" in preflight
+    assert "release metadata must be a root:funding mode-0640 regular file" in preflight
+    assert "deployed checkout does not match the immutable release commit" in preflight
+    assert "for service_name in app low-latency" in preflight
+    assert "production Compose service $service_name does not select" in preflight
+    assert "local application image does not match release commit" in preflight
+    assert 'index($image) != null' in preflight
     assert (
         'bash scripts/verify_internal_tls.sh secrets/internal 86400 "$postgres_user"'
         in preflight
     )
+
+
+def test_signed_release_staging_verifies_before_pull_and_never_starts_app() -> None:
+    staging = _read("scripts/stage_signed_release.sh")
+
+    assert 'readonly expected_repository="ghcr.io/tolikb/fyndlabyda"' in staging
+    assert "mktemp mv realpath sha256sum" in staging
+    assert "cosign verify" in staging
+    assert "--certificate-identity" in staging
+    assert "--certificate-oidc-issuer" in staging
+    assert staging.index("cosign verify") < staging.index('docker pull "$image_ref"')
+    assert "org.opencontainers.image.revision" in staging
+    assert "status --porcelain --untracked-files=no" in staging
+    assert "APP_IMAGE=%s" in staging
+    assert "RELEASE_COMMIT_SHA=%s" in staging
+    assert staging.count("mv -fT --") == 4
+    assert "application remains stopped" in staging
+    assert "docker compose up" not in staging
+    assert "systemctl start" not in staging
+    assert "rm -rf" not in staging
 
 
 def test_internal_tls_verifier_rejects_invalid_runtime_material(

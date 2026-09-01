@@ -31,6 +31,7 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
         "attest-load-slo",
         "infrastructure-verify",
         "container-security",
+        "attest-sbom",
         "restore-drill",
         "shadow-deploy",
         "publish-signed-image",
@@ -93,6 +94,7 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert set(jobs["publish-signed-image"]["needs"]) == {
         "shadow-deploy",
         "attest-load-slo",
+        "attest-sbom",
     }
     assert "'retention-days': 30" in str(jobs["load-slo"])
     assert "terraform -chdir=infra/terraform validate" in str(jobs["infrastructure-verify"])
@@ -127,7 +129,39 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "pip_audit" in str(jobs["container-security"])
     assert "trivy-action" in str(jobs["container-security"])
     assert "sbom-action" in str(jobs["container-security"])
-    assert "cosign" in str(jobs["container-security"]).lower()
+    assert "'upload-artifact': 'false'" in str(jobs["container-security"])
+    assert "funding-arbitrage-sbom-${{ github.sha }}" in str(
+        jobs["container-security"]
+    )
+    assert jobs["container-security"]["permissions"] == {"contents": "read"}
+    security = str(jobs["container-security"])
+    assert "cosign generate-key-pair" not in security
+    sbom_attestation = jobs["attest-sbom"]
+    assert sbom_attestation["if"] == (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    )
+    assert sbom_attestation["needs"] == "container-security"
+    assert sbom_attestation["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+    }
+    assert "funding-arbitrage.spdx.bundle" in str(sbom_attestation)
+    assert "cosign" in str(sbom_attestation).lower()
+    assert "funding-sbom-bundle-${{ github.sha }}-${{ github.run_id }}-" in str(
+        sbom_attestation
+    )
+    assert "cosign generate-key-pair" not in str(sbom_attestation)
+    assert "certificate-oidc-issuer" in str(sbom_attestation)
+    publish = str(jobs["publish-signed-image"])
+    assert set(jobs["publish-signed-image"]["needs"]) == {
+        "shadow-deploy",
+        "attest-load-slo",
+        "attest-sbom",
+    }
+    assert "funding-signed-release-${{ github.sha }}" in publish
+    assert "funding-release-image.txt" in publish
+    assert "funding-release-revision.txt" in publish
+    assert "funding-release-cosign.json" in publish
 
 
 def test_all_action_dependencies_are_immutable_and_expected() -> None:

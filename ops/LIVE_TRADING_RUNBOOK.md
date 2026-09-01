@@ -50,7 +50,7 @@ required signed 64-bit numeric form.
 
 ## Configuration and preflight
 
-Copy `.env.live.example` to `.env`, replace the database password, choose the
+Copy `.env.live.example` to `.env.live`, replace the database password, choose the
 smallest useful `LIVE_VENUES` subset, and insert only those venue credentials.
 The exact confirmation phrase and `LIVE_ARMED=true` are mandatory. Keep the
 initial $100 per-leg limit and 1x leverage for the canary.
@@ -88,7 +88,8 @@ These are code-enforced boundaries, not optional operator conventions.
 Only release an immutable commit whose GitHub **Release gate** passed. The gate
 uses the hash-locked development environment, runs compile/Ruff/mypy/pytest and
 the dependency audit, exercises the complete PostgreSQL migration chain, checks
-Compose, and builds the production image. It never deploys or accesses a VPS.
+Compose, builds the production image once, publishes it by commit, and keylessly
+signs its immutable registry digest. It never deploys or accesses a VPS.
 
 Before a migration or image change, record the exact commit and create a
 database backup outside the database volume:
@@ -103,14 +104,23 @@ docker compose exec -T postgres sh -c \
 test -s "$backup_path"
 ```
 
-Before startup, verify that the persistent runtime volume does not contain
-`/app/.runtime/LIVE_DISABLED`. Then validate without starting the service:
+After the backup, stop the application and checkout the exact successful `main`
+commit. Stage only its signed digest; this verifies before pulling and leaves the
+application stopped:
 
 ```bash
-docker compose config --quiet
-docker compose build app
-docker compose run --rm app alembic upgrade head
+sudo bash scripts/stage_signed_release.sh \
+  ghcr.io/tolikb/fyndlabyda@sha256:<64-hex-digest> \
+  <40-hex-commit>
+sudo /usr/local/sbin/funding-v1-control preflight
 ```
+
+Do not run `docker compose build` on the server. The Vault-gated systemd start
+uses the already verified application image with `pull_policy: never` and
+`--no-build`; its app command runs the reviewed Alembic migration before Uvicorn.
+Digest-pinned database and observability images can still be fetched when absent.
+Verify that the persistent runtime volume does not contain
+`/app/.runtime/LIVE_DISABLED` before startup.
 
 The startup sequence loads private markets/balances/positions/orders and
 reconciles them with PostgreSQL. `/health/ready` remains HTTP 503 unless this
@@ -125,7 +135,7 @@ curl -fsS http://127.0.0.1:8000/metrics | grep funding_live
 If preflight, migration, or startup fails, keep/create `LIVE_DISABLED`, stop the
 app, and do not retry orders. Capture `docker compose logs app`, the commit SHA,
 and `alembic current`. A code-only rollback must check out the previously proven
-immutable commit and rebuild it while the app stays stopped. If the schema must
+immutable commit and stage its previously signed digest while the app stays stopped. If the schema must
 also be rolled back, restore the pre-migration dump (or run the explicitly
 reviewed Alembic downgrade) before starting that older image. Never let the
 older app auto-start against an unreviewed newer schema.

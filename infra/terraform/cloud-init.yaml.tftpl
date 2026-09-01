@@ -247,7 +247,12 @@ write_files:
       BindsTo=vault-agent-funding.service
       After=docker.service vault-agent-funding.service network-online.target
       ConditionPathExists=${app_dir}/docker-compose.yml
+      ConditionPathExists=${app_dir}/docker-compose.production.yml
       ConditionPathExists=${app_dir}/.env.live
+      ConditionPathExists=${app_dir}/.env.release
+      ConditionPathExists=${app_dir}/.release-sha
+      ConditionPathExists=${app_dir}/.release-image.json
+      ConditionPathExists=${app_dir}/.release-cosign.json
       ConditionPathExists=${app_dir}/secrets/exchange/runtime.env
       ConditionPathExists=${app_dir}/secrets/exchange/credential-policy.json
       ConditionPathExists=${app_dir}/secrets/exchange/telegram-bot-token
@@ -259,9 +264,9 @@ write_files:
       WorkingDirectory=${app_dir}
       ExecCondition=/usr/bin/test ! -e ${app_dir}/.restore-maintenance
       ExecStartPre=/usr/bin/bash scripts/host_preflight.sh
-      ExecStartPre=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env config --quiet
-      ExecStart=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env up --detach --remove-orphans
-      ExecStop=/usr/bin/docker compose --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env stop
+      ExecStartPre=/usr/bin/docker compose --file docker-compose.yml --file docker-compose.production.yml --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file .env.release --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env config --quiet
+      ExecStart=/usr/bin/docker compose --file docker-compose.yml --file docker-compose.production.yml --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file .env.release --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env up --detach --remove-orphans --no-build
+      ExecStop=/usr/bin/docker compose --file docker-compose.yml --file docker-compose.production.yml --profile analytics --profile observability --profile secure-control --project-name ${project_name} --env-file .env.live --env-file .env.release --env-file secrets/exchange/runtime.env --env-file secrets/exchange/telegram.env stop
       TimeoutStartSec=600
       TimeoutStopSec=180
 

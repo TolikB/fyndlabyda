@@ -38,7 +38,8 @@ perform this one-time bootstrap. Clone the repository into
 `/opt/funding-arbitrage-v1`, checkout an immutable reviewed commit SHA, and
 verify `git status --short` is empty. Install an official Vault binary with its
 vendor checksum/signature and the CA certificate at
-`/etc/funding-v1/vault-ca.crt`.
+`/etc/funding-v1/vault-ca.crt`. Install a pinned official Cosign binary and verify
+its published checksum; release staging fails closed when `cosign` is unavailable.
 
 Install the Vault inputs with exact service-readable ownership; Terraform does
 not carry either value:
@@ -74,6 +75,23 @@ only non-secret host-specific placeholders. Vault renders runtime/exchange and
 Telegram overlays under `secrets/exchange/`. Never put API keys into `.env.live`,
 Terraform state, CI secrets, command history, or chat.
 
+After the selected `main` commit passes the GitHub Release gate, download its
+`funding-signed-release-<commit>` artifact and verify the included checksums.
+Use the exact `ghcr.io/tolikb/fyndlabyda@sha256:...` reference from that artifact.
+Keep the application stopped and stage it as root:
+
+```bash
+cd /opt/funding-arbitrage-v1
+sudo bash scripts/stage_signed_release.sh \
+  ghcr.io/tolikb/fyndlabyda@sha256:<64-hex-digest> \
+  <40-hex-commit>
+```
+
+The staging command verifies the GitHub Actions keyless Cosign identity before it
+pulls the image, checks the OCI revision label, and atomically writes root-owned
+`.env.release`, `.release-sha`, `.release-image.json`, and retained Cosign evidence.
+It never starts or restarts a container. Do not hand-edit these files or use a tag.
+
 ## 3. Preflight and safe start
 
 ```bash
@@ -96,8 +114,12 @@ off for explicit operator inspection and restart.
 
 The host preflight requires UTC + synchronized Chrony, at least 6 GiB RAM and
 10 GiB free disk, exact Compose scope, private secret-file permissions, runtime
-UID readability, and no public listeners on 5432/9108/9109. The mTLS control
-plane remains loopback-only.
+UID readability, a clean checkout matching the signed image revision, exact
+root-owned release metadata, the locally present digest, and no public listeners
+on 5432/9108/9109. Production Compose applies `pull_policy: never` to both
+application services, and systemd passes `--no-build`; startup cannot build or
+fetch another application image. Missing third-party services may be fetched only
+by their immutable Compose digests. The mTLS control plane remains loopback-only.
 
 Start in `SHADOW`, then `PAPER`. Limited Live remains blocked until acceptance
 GATE-001/002 and the protected GitHub `limited-live-approval` environment pass.

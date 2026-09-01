@@ -1,0 +1,8 @@
+services:
+  low-latency:
+    image: ${APP_IMAGE:?APP_IMAGE must be an immutable verified digest}
+    pull_policy: never
+
+  app:
+    image: ${APP_IMAGE:?APP_IMAGE must be an immutable verified digest}
+    pull_policy: never

@@ -7,6 +7,10 @@ __pycache__/
 *.egg-info/
 *.py[cod]
 .env
+.env.release
+.release-cosign.json
+.release-image.json
+.release-sha
 *.log
 coverage.xml
 .coverage

@@ -2,6 +2,9 @@
 .github
 .env
 .env.*
+.release-cosign.json
+.release-image.json
+.release-sha
 .runtime
 .venv
 .venv*
