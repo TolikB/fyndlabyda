@@ -798,7 +798,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "status": "ok",
             "environment": active_settings.app_env,
-            \
+            "run_mode": active_settings.run_mode,
+            "market_data_mode": active_settings.market_data_mode,
             "execution_mode": active_settings.execution_mode,
             "paper_autotrade_enabled": active_settings.paper_autotrade,
             "paper_autotrade_start_utc": (

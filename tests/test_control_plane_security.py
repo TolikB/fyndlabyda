@@ -388,7 +388,10 @@ def test_create_app_wires_database_backed_security(
     app = create_app(settings)
     policy = ControlPlanePolicy.from_settings(settings)
     with TestClient(app) as client:
-        assert client.get("/health").status_code == 200
+        health_response = client.get("/health")
+        assert health_response.status_code == 200
+        assert health_response.json()["run_mode"] == "api"
+        assert health_response.json()["market_data_mode"] == settings.market_data_mode
         assert client.get("/exchanges").status_code == 401
         assert (
             client.get(

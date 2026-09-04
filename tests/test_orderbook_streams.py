@@ -25,6 +25,7 @@ from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 from funding_arbitrage.market_data.collector import MarketDataCollector
 from funding_arbitrage.monitoring.metrics import (
     exchange_stream_last_message_timestamp,
+    market_data_dropped_total,
 )
 
 
@@ -628,7 +629,9 @@ async def test_collector_does_not_mask_rest_failure_without_fresh_stream() -> No
 
 
 @pytest.mark.asyncio
-async def test_missing_discovery_book_does_not_block_shared_snapshot() -> None:
+async def test_missing_discovery_book_does_not_block_shared_snapshot(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class MissingDiscoveryBookMock(MockExchangeAdapter):
         async def get_orderbook(
             self,
@@ -642,7 +645,11 @@ async def test_missing_discovery_book_does_not_block_shared_snapshot() -> None:
 
     adapter = MissingDiscoveryBookMock("bybit", sleep=0)
     collector = MarketDataCollector([adapter], enable_streams=False)
+    dropped_before = market_data_dropped_total.labels(
+        "bybit", "orderbook_fetch_error"
+    )._value.get()
 
+    caplog.set_level("WARNING")
     snapshot = await collector.collect_once(
         orderbook_symbols={"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]},
         discovery_orderbook_symbols={
@@ -658,6 +665,20 @@ async def test_missing_discovery_book_does_not_block_shared_snapshot() -> None:
     assert snapshot.orderbook(
         "bybit", "MISSINGUSDT", InstrumentType.PERPETUAL
     ) is None
+    assert (
+        market_data_dropped_total.labels(
+            "bybit", "orderbook_fetch_error"
+        )._value.get()
+        == dropped_before + 1
+    )
+    record = next(
+        item for item in caplog.records if item.message == "orderbook_fetch_failed"
+    )
+    assert record.exchange == "bybit"
+    assert record.symbol == "MISSINGUSDT"
+    assert record.instrument_type == "PERPETUAL"
+    assert record.error_type == "NetworkError"
+    assert "synthetic discovery book outage" not in caplog.text
 
 
 @pytest.mark.asyncio

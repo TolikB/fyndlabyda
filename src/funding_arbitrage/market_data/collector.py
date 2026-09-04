@@ -670,23 +670,36 @@ class MarketDataCollector:
             for (symbol, instrument_type), book_result in zip(
                 rest_book_requests, book_results, strict=True
             ):
-                if isinstance(book_result, OrderBook):
-                    key = (adapter.name, symbol, instrument_type)
-                    self._last_rest_book_fetch[key] = now
-                    current = orderbooks.get(key)
-                    latest_streamed = self._stream_orderbook_cache.get(key)
-                    if (
-                        latest_streamed is not None
-                        and (
-                            current is None
-                            or latest_streamed.timestamp > current.timestamp
-                        )
-                    ):
-                        current = latest_streamed
-                        orderbooks[key] = latest_streamed
-                    if current is None or book_result.timestamp >= current.timestamp:
-                        orderbooks[key] = book_result
-                        accepted_rest_books.append(book_result)
+                if not isinstance(book_result, OrderBook):
+                    market_data_dropped_total.labels(
+                        adapter.name, "orderbook_fetch_error"
+                    ).inc()
+                    logger.warning(
+                        "orderbook_fetch_failed",
+                        extra={
+                            "exchange": adapter.name,
+                            "symbol": symbol,
+                            "instrument_type": instrument_type.value,
+                            "error_type": type(book_result).__name__,
+                        },
+                    )
+                    continue
+                key = (adapter.name, symbol, instrument_type)
+                self._last_rest_book_fetch[key] = now
+                current = orderbooks.get(key)
+                latest_streamed = self._stream_orderbook_cache.get(key)
+                if (
+                    latest_streamed is not None
+                    and (
+                        current is None
+                        or latest_streamed.timestamp > current.timestamp
+                    )
+                ):
+                    current = latest_streamed
+                    orderbooks[key] = latest_streamed
+                if current is None or book_result.timestamp >= current.timestamp:
+                    orderbooks[key] = book_result
+                    accepted_rest_books.append(book_result)
             await self._publish_rest_book_events(
                 adapter.name, venue_instruments, accepted_rest_books
             )
