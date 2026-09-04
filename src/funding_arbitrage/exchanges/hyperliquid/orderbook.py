@@ -34,8 +34,20 @@ class HyperliquidBookUpdate:
 
 
 class HyperliquidOrderBookNormalizer:
-    def __init__(self, instrument: InstrumentKey, *, depth: int) -> None:
+    def __init__(
+        self,
+        instrument: InstrumentKey,
+        *,
+        depth: int,
+        exchange_symbol: str | None = None,
+    ) -> None:
+        raw_exchange_symbol = (
+            instrument.exchange_symbol if exchange_symbol is None else exchange_symbol.strip()
+        )
+        if not raw_exchange_symbol or raw_exchange_symbol.upper() != instrument.exchange_symbol:
+            raise ValueError("Hyperliquid exchange symbol does not match canonical instrument")
         self.instrument = instrument
+        self.exchange_symbol = raw_exchange_symbol
         self.local_book = LocalOrderBook(instrument, max_depth=depth)
 
     def apply(
@@ -47,8 +59,8 @@ class HyperliquidOrderBookNormalizer:
     ) -> HyperliquidBookUpdate:
         if not isinstance(payload, dict):
             raise InvalidResponseError("invalid Hyperliquid L2 payload")
-        symbol = str(payload.get("coin", "")).upper()
-        if symbol != self.instrument.exchange_symbol:
+        symbol = str(payload.get("coin", "")).strip()
+        if symbol != self.exchange_symbol:
             raise InvalidResponseError("Hyperliquid L2 instrument mismatch")
         try:
             levels = payload["levels"]
@@ -112,7 +124,7 @@ class HyperliquidOrderBookNormalizer:
         return validate_orderbook(
             OrderBook(
                 exchange="hyperliquid",
-                symbol=self.instrument.exchange_symbol,
+                symbol=self.exchange_symbol,
                 instrument_type=instrument_type,
                 bids=tuple(
                     OrderBookLevel(price=level.price, quantity=level.quantity)

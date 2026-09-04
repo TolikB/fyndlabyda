@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
+import funding_arbitrage.exchanges.hyperliquid.client as hyperliquid_client
 from funding_arbitrage.domain.events import EventKind, InstrumentKey, InstrumentType
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
@@ -84,6 +88,64 @@ async def test_hyperliquid_adapter_publishes_before_legacy_book() -> None:
     book = states["BTC"].legacy_book(update, LegacyInstrumentType.PERPETUAL)
     assert book is not None
     assert book.sequence == 1786881600000
+
+
+async def test_hyperliquid_stream_preserves_mixed_case_exchange_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {**_payload(), "coin": "kPEPE"}
+    sent: list[dict[str, object]] = []
+
+    class Socket:
+        def __init__(self) -> None:
+            self.messages = iter(
+                [json.dumps({"channel": "l2Book", "data": payload})]
+            )
+
+        async def send(self, message: str) -> None:
+            sent.append(json.loads(message))
+
+        def __aiter__(self) -> Socket:
+            return self
+
+        async def __anext__(self) -> str:
+            try:
+                return next(self.messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class Connection:
+        def __init__(self, socket: Socket) -> None:
+            self.socket = socket
+
+        async def __aenter__(self) -> Socket:
+            return self.socket
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        hyperliquid_client.websockets,
+        "connect",
+        lambda *_args, **_kwargs: Connection(Socket()),
+    )
+    adapter = HyperliquidPublicAdapter()
+    stream = adapter._stream_orderbooks(
+        [("kPEPE", LegacyInstrumentType.PERPETUAL)],
+        depth=20,
+    )
+
+    book = await anext(stream)
+    await stream.aclose()
+
+    assert sent == [
+        {
+            "method": "subscribe",
+            "subscription": {"type": "l2Book", "coin": "kPEPE"},
+        }
+    ]
+    assert book.symbol == "kPEPE"
+    assert book.instrument_type is LegacyInstrumentType.PERPETUAL
 
 
 def test_hyperliquid_reused_native_snapshot_id_is_unique_per_observation() -> None:

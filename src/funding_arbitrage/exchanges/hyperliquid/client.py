@@ -454,13 +454,15 @@ class HyperliquidPublicAdapter(ExchangeAdapter):
     ) -> HyperliquidBookUpdate | None:
         if not isinstance(payload, dict):
             raise InvalidResponseError("invalid Hyperliquid L2 payload")
-        symbol = str(payload.get("coin", "")).upper()
+        symbol = str(payload.get("coin", "")).strip()
         if not symbol:
             return None
         state = states.get(symbol)
         if state is None:
             state = HyperliquidOrderBookNormalizer(
-                self._canonical_instrument(symbol, instrument_type), depth=depth
+                self._canonical_instrument(symbol, instrument_type),
+                depth=depth,
+                exchange_symbol=symbol,
             )
             states[symbol] = state
         update = state.apply(payload)
