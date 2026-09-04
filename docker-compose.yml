@@ -153,6 +153,7 @@ services:
       - data_plane
     cpus: "0.50"
     mem_limit: 640m
+    memswap_limit: 1280m
     shm_size: 128m
     logging: *bounded-logging
     healthcheck:
