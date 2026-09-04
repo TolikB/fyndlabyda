@@ -284,21 +284,22 @@ class CanonicalEventWriter:
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
-                if last_error is not None:
-                    raise last_error
-                raise TimeoutError("canonical event writer retry window expired")
+                raise TimeoutError(
+                    "canonical event writer retry window expired"
+                ) from last_error
             try:
                 async with asyncio.timeout(remaining):
                     async with self.session_factory() as session:
                         inserted = await self.append_batch(session, events)
             except BaseException as error:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    if isinstance(error, TimeoutError) and last_error is not None:
-                        raise last_error from error
-                    raise
                 if not _is_retryable_storage_error(error):
                     raise
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    cause = last_error if isinstance(error, TimeoutError) else error
+                    raise TimeoutError(
+                        "canonical event writer retry window expired"
+                    ) from cause
                 last_error = error
                 self._recovering = True
                 self._recovery_error_type = type(error).__name__

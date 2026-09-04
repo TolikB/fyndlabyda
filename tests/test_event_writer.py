@@ -212,11 +212,13 @@ async def test_writer_fails_closed_when_transient_outage_exceeds_retry_window() 
     )
     writer.start()
 
-    with pytest.raises(EventWriterFailed, match="TimeoutError"):
+    with pytest.raises(EventWriterFailed, match="TimeoutError") as raised:
         await asyncio.wait_for(writer.publish(_event(1)), timeout=1)
 
     assert attempts >= 2
     assert writer.failed
+    assert writer.failure_reason == "TimeoutError"
+    assert isinstance(raised.value.__cause__, TimeoutError)
     assert not writer.recovering
     with pytest.raises(TimeoutError):
         await writer.stop()
