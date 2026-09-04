@@ -168,19 +168,23 @@ async def append_ledger_transaction(
         postings=postings,
         previous_hash=previous_hash,
     )
-    session.add(
-        LedgerTransactionRecord(
-            sequence=transaction.sequence,
-            transaction_id=transaction.transaction_id,
-            timestamp=transaction.timestamp,
-            reference_type=transaction.reference_type,
-            reference_id=transaction.reference_id,
-            description=transaction.description,
-            previous_hash=transaction.previous_hash,
-            transaction_hash=transaction.transaction_hash,
-            payload=transaction.model_dump(mode="json"),
-        )
+    transaction_record = LedgerTransactionRecord(
+        sequence=transaction.sequence,
+        transaction_id=transaction.transaction_id,
+        timestamp=transaction.timestamp,
+        reference_type=transaction.reference_type,
+        reference_id=transaction.reference_id,
+        description=transaction.description,
+        previous_hash=transaction.previous_hash,
+        transaction_hash=transaction.transaction_hash,
+        payload=transaction.model_dump(mode="json"),
     )
+    session.add(transaction_record)
+    # These mappers deliberately do not expose a mutable ORM relationship.
+    # Flush the immutable header first so PostgreSQL can enforce the posting FK
+    # without depending on mapper insertion order. Both flushes remain inside
+    # the caller's transaction and therefore commit or roll back atomically.
+    await session.flush()
     session.add_all(
         [
             LedgerPostingRecord(
