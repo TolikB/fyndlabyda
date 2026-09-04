@@ -841,6 +841,85 @@ async def test_required_quality_streams_survive_one_transient_snapshot_omission(
     assert supervisor.required_quality_streams == expected
 
 
+async def test_required_quality_streams_are_registered_before_mirror_completes() -> None:
+    mirror_started = asyncio.Event()
+    release_mirror = asyncio.Event()
+
+    async def slow_sink(event: EventEnvelope[Any]) -> None:
+        del event
+        mirror_started.set()
+        await release_mirror.wait()
+
+    supervisor = PublicEventSupervisor(
+        [],
+        slow_sink,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    task = asyncio.create_task(supervisor.observe_snapshot(_snapshot()))
+    try:
+        await asyncio.wait_for(mirror_started.wait(), timeout=1)
+        assert [item.stream for item in supervisor.required_quality_streams] == [
+            EventKind.FUNDING_SNAPSHOT.value
+        ]
+    finally:
+        release_mirror.set()
+        await task
+
+
+async def test_native_funding_snapshot_rows_publish_concurrently() -> None:
+    active = 0
+    maximum_active = 0
+    both_started = asyncio.Event()
+    release_mirror = asyncio.Event()
+
+    async def slow_sink(event: EventEnvelope[Any]) -> None:
+        nonlocal active, maximum_active
+        assert event.kind is EventKind.FUNDING_SNAPSHOT
+        active += 1
+        maximum_active = max(maximum_active, active)
+        if active == 2:
+            both_started.set()
+        try:
+            await release_mirror.wait()
+        finally:
+            active -= 1
+
+    source = _snapshot(open_interest=None)
+    second_instrument = source.instruments[0].model_copy(
+        update={"exchange_symbol": "ETHUSDT", "base_asset": "ETH"}
+    )
+    second_ticker = source.tickers[0].model_copy(
+        update={"symbol": "ETHUSDT", "open_interest": None}
+    )
+    second_funding = source.funding[0].model_copy(update={"symbol": "ETHUSDT"})
+    snapshot = MarketSnapshot(
+        [*source.instruments, second_instrument],
+        [*source.tickers, second_ticker],
+        [*source.funding, second_funding],
+        source.orderbooks,
+        source.captured_at,
+    )
+    supervisor = PublicEventSupervisor(
+        [],
+        slow_sink,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+    )
+    task = asyncio.create_task(supervisor.observe_snapshot(snapshot))
+    try:
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+    finally:
+        release_mirror.set()
+        await task
+
+    assert maximum_active == 2
+
+
 async def test_required_quality_streams_expire_after_retention_window() -> None:
     collector = EventCollector()
     clock_values = iter((0.0, 181.0))

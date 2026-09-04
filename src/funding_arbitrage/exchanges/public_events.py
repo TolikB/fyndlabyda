@@ -400,9 +400,13 @@ class PublicEventSupervisor:
 
         if self._pre_mirror_snapshot_observer is not None:
             await self._pre_mirror_snapshot_observer(snapshot)
+        # Register the new snapshot identities before durable mirroring starts.
+        # Under sustained websocket load, publishing native rows can take longer
+        # than the freshness window. Readiness must not keep judging only the
+        # obsolete universe while current rows are already being committed.
+        self._update_required_quality_streams(snapshot)
         received_at = datetime.now(UTC)
         await self._publish_snapshot_events(snapshot, received_at, monotonic_ns())
-        self._update_required_quality_streams(snapshot)
         for account in self.accounts:
             key = self._key(account)
             if key not in self._available:
@@ -856,23 +860,29 @@ class PublicEventSupervisor:
                 for payload, source, sequence_id, _ in funding_rows
             ],
         )
+        funding_events: list[tuple[EventEnvelope[Any], str, str]] = []
         for funding_row, funding_occurrence_id in zip(
             funding_rows, funding_occurrences, strict=True
         ):
             funding_event_payload, funding_source, funding_sequence_id, exchange = (
                 funding_row
             )
-            event = _envelope(
-                funding_event_payload,
-                kind=EventKind.FUNDING_SNAPSHOT,
-                source=funding_source,
-                sequence_id=funding_sequence_id,
-                received_at=received_at,
-                received_monotonic_ns=observed_monotonic_ns,
-                occurrence_id=funding_occurrence_id,
+            funding_events.append(
+                (
+                    _envelope(
+                        funding_event_payload,
+                        kind=EventKind.FUNDING_SNAPSHOT,
+                        source=funding_source,
+                        sequence_id=funding_sequence_id,
+                        received_at=received_at,
+                        received_monotonic_ns=observed_monotonic_ns,
+                        occurrence_id=funding_occurrence_id,
+                    ),
+                    exchange,
+                    "funding",
+                )
             )
-            await self.event_sink(event)
-            public_events_total.labels(exchange, "funding", "native").inc()
+        await self._publish_native_snapshot_events(funding_events)
         unsupported_oi = {
             account.profile.venue
             for account in self.accounts
@@ -912,6 +922,7 @@ class PublicEventSupervisor:
                 for payload, source, sequence_id, _ in open_interest_rows
             ],
         )
+        open_interest_events: list[tuple[EventEnvelope[Any], str, str]] = []
         for open_interest_row, open_interest_occurrence_id in zip(
             open_interest_rows, open_interest_occurrences, strict=True
         ):
@@ -921,18 +932,53 @@ class PublicEventSupervisor:
                 open_interest_sequence_id,
                 exchange,
             ) = open_interest_row
-            await self.event_sink(
-                _envelope(
-                    open_interest_event_payload,
-                    kind=EventKind.OPEN_INTEREST_SNAPSHOT,
-                    source=open_interest_source,
-                    sequence_id=open_interest_sequence_id,
-                    received_at=received_at,
-                    received_monotonic_ns=observed_monotonic_ns,
-                    occurrence_id=open_interest_occurrence_id,
+            open_interest_events.append(
+                (
+                    _envelope(
+                        open_interest_event_payload,
+                        kind=EventKind.OPEN_INTEREST_SNAPSHOT,
+                        source=open_interest_source,
+                        sequence_id=open_interest_sequence_id,
+                        received_at=received_at,
+                        received_monotonic_ns=observed_monotonic_ns,
+                        occurrence_id=open_interest_occurrence_id,
+                    ),
+                    exchange,
+                    "open_interest",
                 )
             )
-            public_events_total.labels(exchange, "open_interest", "native").inc()
+        await self._publish_native_snapshot_events(open_interest_events)
+
+    async def _publish_native_snapshot_events(
+        self,
+        events: Sequence[tuple[EventEnvelope[Any], str, str]],
+    ) -> None:
+        """Durably publish one bounded native snapshot without serial ACK waits."""
+
+        async def publish_one(
+            event: EventEnvelope[Any], exchange: str, stream: str
+        ) -> None:
+            await self.event_sink(event)
+            public_events_total.labels(exchange, stream, "native").inc()
+
+        results = await asyncio.gather(
+            *(
+                publish_one(event, exchange, stream)
+                for event, exchange, stream in events
+            ),
+            return_exceptions=True,
+        )
+        failures = [
+            result for result in results if isinstance(result, BaseException)
+        ]
+        if failures:
+            primary = failures[0]
+            for additional in failures[1:]:
+                primary.add_note(
+                    "concurrent native snapshot publication also failed: "
+                    f"{type(additional).__name__}"
+                )
+            raise primary
 
     async def _publish(
         self,
