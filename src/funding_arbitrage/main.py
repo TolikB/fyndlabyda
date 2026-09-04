@@ -141,6 +141,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         queue_size=active_settings.canonical_event_queue_size,
         batch_size=active_settings.canonical_event_batch_size,
         flush_interval_seconds=(active_settings.canonical_event_flush_interval_seconds),
+        retry_window_seconds=active_settings.canonical_event_retry_window_seconds,
+        retry_initial_seconds=active_settings.canonical_event_retry_initial_seconds,
+        retry_max_seconds=active_settings.canonical_event_retry_max_seconds,
+        shutdown_timeout_seconds=(
+            active_settings.canonical_event_shutdown_timeout_seconds
+        ),
     )
     clickhouse_writer: ClickHouseHttpWriter | None = None
     clickhouse_replicator: ClickHouseEventReplicator | None = None
@@ -211,6 +217,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def entry_health() -> tuple[bool, str | None]:
         if event_writer.failed:
             return False, "canonical_event_journal_unavailable"
+        if event_writer.recovering:
+            return False, "canonical_event_journal_recovering"
         if clickhouse_replicator is not None and not clickhouse_replicator.healthy:
             return False, clickhouse_replicator.health_reason
         if (

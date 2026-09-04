@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -83,6 +84,18 @@ class Settings(BaseSettings):
     )
     canonical_event_flush_interval_seconds: float = Field(
         default=0.10, alias="CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS"
+    )
+    canonical_event_retry_window_seconds: float = Field(
+        default=20.0, alias="CANONICAL_EVENT_RETRY_WINDOW_SECONDS"
+    )
+    canonical_event_retry_initial_seconds: float = Field(
+        default=0.25, alias="CANONICAL_EVENT_RETRY_INITIAL_SECONDS"
+    )
+    canonical_event_retry_max_seconds: float = Field(
+        default=2.0, alias="CANONICAL_EVENT_RETRY_MAX_SECONDS"
+    )
+    canonical_event_shutdown_timeout_seconds: float = Field(
+        default=30.0, alias="CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS"
     )
     multi_regime_enabled: bool = Field(
         default=True, alias="MULTI_REGIME_ENABLED"
@@ -1056,6 +1069,50 @@ def _validate_safe_values(settings: Settings) -> None:
         )
     if settings.canonical_event_flush_interval_seconds <= 0:
         raise ValueError("CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS must be positive")
+    canonical_retry_values = (
+        settings.canonical_event_retry_window_seconds,
+        settings.canonical_event_retry_initial_seconds,
+        settings.canonical_event_retry_max_seconds,
+        settings.canonical_event_shutdown_timeout_seconds,
+    )
+    if not all(math.isfinite(value) for value in canonical_retry_values):
+        raise ValueError("CANONICAL_EVENT_RETRY values must be finite")
+    if settings.canonical_event_retry_window_seconds <= 0:
+        raise ValueError("CANONICAL_EVENT_RETRY_WINDOW_SECONDS must be positive")
+    if settings.canonical_event_retry_initial_seconds <= 0:
+        raise ValueError("CANONICAL_EVENT_RETRY_INITIAL_SECONDS must be positive")
+    if settings.canonical_event_retry_max_seconds <= 0:
+        raise ValueError("CANONICAL_EVENT_RETRY_MAX_SECONDS must be positive")
+    if settings.canonical_event_shutdown_timeout_seconds <= 0:
+        raise ValueError("CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS must be positive")
+    if (
+        settings.canonical_event_retry_initial_seconds
+        > settings.canonical_event_retry_max_seconds
+    ):
+        raise ValueError(
+            "CANONICAL_EVENT_RETRY_INITIAL_SECONDS must not exceed "
+            "CANONICAL_EVENT_RETRY_MAX_SECONDS"
+        )
+    if (
+        settings.canonical_event_retry_max_seconds
+        > settings.canonical_event_retry_window_seconds
+    ):
+        raise ValueError(
+            "CANONICAL_EVENT_RETRY_MAX_SECONDS must not exceed "
+            "CANONICAL_EVENT_RETRY_WINDOW_SECONDS"
+        )
+    if (
+        settings.canonical_event_retry_window_seconds
+        >= settings.canonical_event_shutdown_timeout_seconds
+    ):
+        raise ValueError(
+            "CANONICAL_EVENT_RETRY_WINDOW_SECONDS must be shorter than "
+            "CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS"
+        )
+    if settings.canonical_event_shutdown_timeout_seconds > 45:
+        raise ValueError(
+            "CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS must not exceed 45 seconds"
+        )
     if settings.decision_support_enabled and not settings.multi_regime_enabled:
         raise ValueError("DECISION_SUPPORT_ENABLED requires MULTI_REGIME_ENABLED=true")
     decision_support_components_enabled = (

@@ -151,8 +151,8 @@ services:
       - ${INTERNAL_TLS_SECRETS_DIR:-./secrets/internal}:/run/secrets/internal:ro
     networks:
       - data_plane
-    cpus: "0.25"
-    mem_limit: 384m
+    cpus: "0.50"
+    mem_limit: 640m
     shm_size: 128m
     logging: *bounded-logging
     healthcheck:

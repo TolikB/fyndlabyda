@@ -80,6 +80,8 @@ def test_every_service_has_cpu_and_memory_limits() -> None:
     app = services["app"]
     assert app["cpus"] == "1.00"
     assert app["mem_limit"] == "1536m"
+    assert services["postgres"]["cpus"] == "0.50"
+    assert services["postgres"]["mem_limit"] == "640m"
     assert services["clickhouse"]["mem_limit"] == "1280m"
 
 
