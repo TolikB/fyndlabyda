@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
@@ -834,6 +834,7 @@ class DurableMultiRegimeRuntime:
         paper_broker: DirectionalPaperBroker | None = None,
         advanced_paper_broker: AdvancedStrategyPaperBroker | None = None,
         runtime_state: RuntimeState | None = None,
+        paper_execution_start_utc: datetime | None = None,
     ) -> None:
         if (
             paper_broker is not None or advanced_paper_broker is not None
@@ -846,11 +847,21 @@ class DurableMultiRegimeRuntime:
             != advanced_paper_broker.simulation_version
         ):
             raise ValueError("paper brokers must share one simulation version")
+        if (
+            paper_execution_start_utc is not None
+            and paper_execution_start_utc.utcoffset() is None
+        ):
+            raise ValueError("paper execution start must include a timezone")
         self.engine = engine
         self.session_factory = session_factory
         self.paper_broker = paper_broker
         self.advanced_paper_broker = advanced_paper_broker
         self.runtime_state = runtime_state
+        self.paper_execution_start_utc = (
+            paper_execution_start_utc.astimezone(UTC)
+            if paper_execution_start_utc is not None
+            else None
+        )
         self.latest_by_instrument: dict[str, MultiRegimeDecisionBatch] = {}
         self.persisted_batches = 0
         self.restored_events = 0
@@ -946,13 +957,19 @@ class DurableMultiRegimeRuntime:
                 if self.advanced_paper_broker is not None:
                     self.advanced_paper_broker.restore(advanced_positions)
                 if self._paper_execution_enabled:
+                    paper_replay_start = start
+                    if checkpoint is None and self.paper_execution_start_utc is not None:
+                        paper_replay_start = max(
+                            paper_replay_start,
+                            self.paper_execution_start_utc,
+                        )
                     await self._restore_paper_pages(
                         after_row_id=(
                             checkpoint.event_row_id
                             if checkpoint is not None
                             else 0
                         ),
-                        start=(start if checkpoint is None else None),
+                        start=(paper_replay_start if checkpoint is None else None),
                         journal_tip=journal_tip,
                     )
                 self._processed_event_row_id = journal_tip
@@ -1036,17 +1053,22 @@ class DurableMultiRegimeRuntime:
             batches_by_event.setdefault(batch.source_event_id, []).append(batch)
         projections: list[DirectionalPaperEventProjection] = []
         for row_id, event in events:
+            execution_allowed = self._paper_event_execution_allowed(event)
             updates = (
                 list(self.paper_broker.advance(event))
-                if self.paper_broker is not None
+                if self.paper_broker is not None and execution_allowed
                 else []
             )
             advanced_updates = (
                 list(self.advanced_paper_broker.advance(event))
-                if self.advanced_paper_broker is not None
+                if self.advanced_paper_broker is not None and execution_allowed
                 else []
             )
-            for batch in batches_by_event.get(event.metadata.event_id, ()):
+            for batch in (
+                batches_by_event.get(event.metadata.event_id, ())
+                if execution_allowed
+                else ()
+            ):
                 if self.paper_broker is not None:
                     updates.extend(self.paper_broker.submit(batch))
                 if self.advanced_paper_broker is not None:
@@ -1098,17 +1120,19 @@ class DurableMultiRegimeRuntime:
                     self.latest_by_instrument[batch.instrument.canonical_id] = batch
                     self.persisted_batches += int(inserted)
                 if self._paper_execution_enabled:
+                    execution_allowed = self._paper_event_execution_allowed(event)
                     updates = (
                         list(self.paper_broker.advance(event))
-                        if self.paper_broker is not None
+                        if self.paper_broker is not None and execution_allowed
                         else []
                     )
                     advanced_updates = (
                         list(self.advanced_paper_broker.advance(event))
                         if self.advanced_paper_broker is not None
+                        and execution_allowed
                         else []
                     )
-                    if batch is not None:
+                    if batch is not None and execution_allowed:
                         if self.paper_broker is not None:
                             updates.extend(self.paper_broker.submit(batch))
                         if self.advanced_paper_broker is not None:
@@ -1216,6 +1240,15 @@ class DurableMultiRegimeRuntime:
         return (
             self.paper_broker is not None
             or self.advanced_paper_broker is not None
+        )
+
+    def _paper_event_execution_allowed(
+        self,
+        event: EventEnvelope[Any],
+    ) -> bool:
+        start = self.paper_execution_start_utc
+        return self._paper_execution_enabled and (
+            start is None or event.metadata.exchange_timestamp >= start
         )
 
     def start(self) -> None:

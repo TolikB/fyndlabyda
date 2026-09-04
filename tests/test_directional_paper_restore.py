@@ -148,6 +148,85 @@ async def test_restart_replays_only_events_after_durable_checkpoint() -> None:
     assert broker.positions[0].status is DirectionalPaperStatus.OPEN
     assert positions[0].status is DirectionalPaperStatus.OPEN
 
+
+async def test_restart_honors_paper_execution_boundary_without_losing_checkpoint() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    first, before_boundary, at_boundary = _event(1), _event(2), _event(10)
+    async with factory() as session:
+        await append_events(session, (first, before_boundary))
+    async with factory() as session:
+        await save_directional_paper_event(
+            session,
+            first,
+            (DirectionalPaperUpdate(position=_pending()),),
+            event_row_id=1,
+        )
+
+    broker = DirectionalPaperBroker(
+        {
+            "BYBIT": FillModelPolicy(
+                order_latency_ms=0,
+                maximum_participation_rate=Decimal("1"),
+            )
+        }
+    )
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+        paper_execution_start_utc=at_boundary.metadata.exchange_timestamp,
+    )
+
+    restored = await runtime.restore_features(start=NOW)
+    async with factory() as session:
+        checkpoint_before = await load_directional_paper_checkpoint(session)
+        await append_events(session, (at_boundary,))
+
+    assert restored == 2
+    assert runtime.paper_replayed_events == 1
+    assert checkpoint_before is not None
+    assert checkpoint_before.event_row_id == 2
+    assert broker.positions[0].status is DirectionalPaperStatus.PENDING_ENTRY
+
+    await runtime.publish(at_boundary)
+    async with factory() as session:
+        checkpoint_after = await load_directional_paper_checkpoint(session)
+    await database.dispose()
+
+    assert checkpoint_after is not None
+    assert checkpoint_after.event_row_id == 3
+    assert broker.positions[0].status is DirectionalPaperStatus.OPEN
+
+
+async def test_new_paper_version_does_not_replay_events_before_boundary() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    async with factory() as session:
+        await append_events(session, (_event(1),))
+
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=DirectionalPaperBroker(
+            {"BYBIT": FillModelPolicy(order_latency_ms=0)}
+        ),
+        paper_execution_start_utc=_event(10).metadata.exchange_timestamp,
+    )
+
+    restored = await runtime.restore_features(start=NOW)
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+    await database.dispose()
+
+    assert restored == 1
+    assert runtime.paper_replayed_events == 0
+    assert checkpoint is None
+
 async def test_out_of_order_callback_catches_up_in_canonical_row_order() -> None:
     database = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with database.begin() as connection:

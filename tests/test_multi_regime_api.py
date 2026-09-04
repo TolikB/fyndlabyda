@@ -1,11 +1,14 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from funding_arbitrage.api.routes.multi_regime import _strategy_rows, router
+from funding_arbitrage.config import Settings
 from funding_arbitrage.domain.events import InstrumentKey, InstrumentType, TradingMode
+from funding_arbitrage.main import create_app
 from funding_arbitrage.services.strategy_suite import (
     StrategyEvaluationRecord,
     StrategyFamily,
@@ -53,6 +56,37 @@ def test_multi_regime_read_api_is_explicit_when_runtime_is_disabled() -> None:
         "total_net_pnl": "0",
     }
     assert paper_positions.json() == []
+
+
+def test_paper_autotrade_false_disables_multi_regime_execution(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        RUN_MODE="paper_test",
+        TRADING_MODE="PAPER",
+        MARKET_DATA_MODE="mock",
+        EXECUTION_MODE="paper",
+        DATABASE_URL=f"sqlite+aiosqlite:///{(tmp_path / 'disabled.db').as_posix()}",
+        PAPER_AUTO_INIT_DATABASE=True,
+        PAPER_AUTOTRADE=False,
+        PAPER_COMPARISON_ENABLED=False,
+        MULTI_REGIME_ENABLED=True,
+        INTERNAL_SERVICE_TLS_REQUIRED=False,
+        CONTROL_PLANE_SECURITY_ENABLED=False,
+        CLICKHOUSE_ENABLED=False,
+        TELEGRAM_ENABLED=False,
+        LOG_LEVEL="WARNING",
+    )
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        status = client.get("/multi-regime/status")
+        health = client.get("/health")
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert status.json()["paper_execution_enabled"] is False
+    assert health.status_code == 200
+    assert health.json()["paper_autotrade_active"] is False
 
 
 async def test_strategies_preserves_directional_shape_and_adds_suite_rows() -> None:

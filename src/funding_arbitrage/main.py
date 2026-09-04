@@ -266,6 +266,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         paper_execution_enabled = (
             runtime_mode is TradingMode.PAPER
             and active_settings.multi_regime_paper_execution_enabled
+            and active_settings.paper_autotrade
         )
         paper_broker = (
             DirectionalPaperBroker(
@@ -422,6 +423,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             paper_broker=paper_broker,
             advanced_paper_broker=advanced_paper_broker,
             runtime_state=runtime,
+            paper_execution_start_utc=(
+                active_settings.paper_autotrade_start_utc
+            ),
         )
         event_router.subscribe(multi_regime_runtime.publish)
         if public_events is not None:
