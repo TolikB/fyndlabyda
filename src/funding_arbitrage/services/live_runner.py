@@ -104,7 +104,7 @@ class LiveTradingRunner:
             settings.paper_market_asset_limit,
             settings.paper_history_symbol_limit,
             settings.market_data_stale_seconds,
-            True,
+            settings.market_data_streams_enabled,
             option_assets=(
                 settings.multi_regime_asset_values
                 if settings.options_market_data_enabled
@@ -260,9 +260,21 @@ class LiveTradingRunner:
 
     async def cycle(self) -> None:
         now = datetime.now(UTC)
-        history_symbols = {
-            venue: tuple(sorted(symbols))
+        required_history = self._open_position_funding_symbols()
+        bounded_discovery_history = {
+            venue: sorted(symbols)[: self.settings.paper_history_symbol_limit]
             for venue, symbols in self._candidate_history.items()
+        }
+        history_symbols = {
+            venue: tuple(
+                dict.fromkeys(
+                    [
+                        *required_history.get(venue, ()),
+                        *bounded_discovery_history.get(venue, ()),
+                    ]
+                )
+            )
+            for venue in required_history.keys() | bounded_discovery_history.keys()
         }
         periodic_history_refresh = self._last_history_refresh is None or (
             now - self._last_history_refresh
@@ -272,9 +284,14 @@ class LiveTradingRunner:
             or history_symbols != self._last_history_symbols
         )
         snapshot = await self.collector.collect_once(
-            orderbook_symbols=self._required_books(),
+            orderbook_symbols=self._open_position_books(),
+            discovery_orderbook_symbols={
+                venue: sorted(values, key=lambda item: (item[0], item[1].value))
+                for venue, values in self._candidate_books.items()
+            },
             include_history=refresh_history,
-            history_symbols={venue: list(symbols) for venue, symbols in history_symbols.items()},
+            history_symbols=required_history,
+            discovery_history_symbols=bounded_discovery_history,
             force_history_refresh=periodic_history_refresh,
         )
         self._require_complete_market_snapshot(snapshot)
@@ -868,6 +885,15 @@ class LiveTradingRunner:
 
     def _required_books(self) -> dict[str, list[tuple[str, InstrumentType]]]:
         result = {venue: set(values) for venue, values in self._candidate_books.items()}
+        for venue, values in self._open_position_books().items():
+            result.setdefault(venue, set()).update(values)
+        return {
+            venue: sorted(values, key=lambda item: (item[0], item[1].value))
+            for venue, values in result.items()
+        }
+
+    def _open_position_books(self) -> dict[str, list[tuple[str, InstrumentType]]]:
+        result: dict[str, set[tuple[str, InstrumentType]]] = {}
         for position in self.positions.values():
             if position.state is not LivePositionState.OPEN:
                 continue
@@ -881,10 +907,25 @@ class LiveTradingRunner:
             for venue, values in result.items()
         }
 
+    def _open_position_funding_symbols(self) -> dict[str, list[str]]:
+        result: dict[str, set[str]] = {}
+        for position in self.positions.values():
+            if position.state is not LivePositionState.OPEN:
+                continue
+            for leg in (position.leg_a, position.leg_b):
+                if (
+                    leg is not None
+                    and leg.instrument_type is InstrumentType.PERPETUAL
+                ):
+                    result.setdefault(leg.exchange, set()).add(leg.exchange_symbol)
+        return {venue: sorted(symbols) for venue, symbols in result.items()}
+
     def _remember_candidates(self, opportunities: list[Opportunity]) -> None:
         books: dict[str, set[tuple[str, InstrumentType]]] = {}
         history: dict[str, set[str]] = {}
         for opportunity in opportunities:
+            opportunity_books: dict[str, set[tuple[str, InstrumentType]]] = {}
+            opportunity_history: dict[str, set[str]] = {}
             for venue, symbol, instrument_type in (
                 (
                     opportunity.venue_a,
@@ -899,9 +940,25 @@ class LiveTradingRunner:
             ):
                 if venue not in self.trading_adapters or symbol is None:
                     continue
-                books.setdefault(venue, set()).add((symbol, instrument_type))
+                opportunity_books.setdefault(venue, set()).add(
+                    (symbol, instrument_type)
+                )
                 if instrument_type is InstrumentType.PERPETUAL:
-                    history.setdefault(venue, set()).add(symbol)
+                    opportunity_history.setdefault(venue, set()).add(symbol)
+            if any(
+                len(books.get(venue, set()) | book_additions)
+                > self.settings.paper_orderbook_symbol_limit
+                for venue, book_additions in opportunity_books.items()
+            ) or any(
+                len(history.get(venue, set()) | history_additions)
+                > self.settings.paper_history_symbol_limit
+                for venue, history_additions in opportunity_history.items()
+            ):
+                continue
+            for venue, book_additions in opportunity_books.items():
+                books.setdefault(venue, set()).update(book_additions)
+            for venue, history_additions in opportunity_history.items():
+                history.setdefault(venue, set()).update(history_additions)
         self._candidate_books = books
         self._candidate_history = history
 

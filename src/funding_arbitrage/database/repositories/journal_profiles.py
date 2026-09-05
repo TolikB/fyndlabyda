@@ -259,8 +259,10 @@ def canonical_journal_profile_spec(settings: Settings) -> CanonicalJournalProfil
         "run_mode": settings.run_mode,
         "trading_mode": settings.effective_trading_mode.value,
         "market_data_mode": settings.market_data_mode,
+        "market_data_streams_enabled": settings.market_data_streams_enabled,
         "simulation_versions": simulation_versions,
         "venues": venues,
+        "public_event_enrichment_enabled": settings.public_event_enrichment_enabled,
         "public_event_symbol_limit_per_profile": (settings.public_event_symbol_limit_per_profile),
         "public_event_rest_interval_seconds": _decimal_text(
             settings.public_event_rest_interval_seconds

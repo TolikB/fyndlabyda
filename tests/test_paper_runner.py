@@ -2672,6 +2672,41 @@ def _exit_test_opportunity() -> Opportunity:
     )
 
 
+def test_candidate_prefetch_memory_respects_per_venue_limits() -> None:
+    settings = Settings(
+        _env_file=None,
+        run_mode="paper_test",
+        market_data_mode="mock",
+        paper_orderbook_symbol_limit=1,
+        paper_history_symbol_limit=1,
+    )
+    runtime = RuntimeState(settings, create_public_adapters(settings))
+    runner = PaperTestRunner(
+        settings,
+        runtime,
+        cast(async_sessionmaker[AsyncSession], EmptySessionFactory()),
+    )
+    first = _exit_test_opportunity()
+    second = first.model_copy(
+        update={
+            "asset": "ETH",
+            "symbol_a": "ETHUSDT",
+            "symbol_b": "ETH_USDT",
+        }
+    )
+
+    runner._remember_candidate_symbols([first, second])
+
+    assert runner._candidate_orderbook_symbols == {
+        "bybit": {("BTCUSDT", InstrumentType.PERPETUAL)},
+        "gate": {("BTC_USDT", InstrumentType.PERPETUAL)},
+    }
+    assert runner._candidate_history_symbols == {
+        "bybit": {"BTCUSDT"},
+        "gate": {"BTC_USDT"},
+    }
+
+
 def _exit_test_fill(
     exchange: str,
     symbol: str,

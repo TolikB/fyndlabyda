@@ -773,6 +773,28 @@ def test_size_concentration_books_funding_and_basis_helpers(
         ]
     )
     assert runner._candidate_history["bybit"] == {"BTCUSDT"}
+    runner.settings = runner.settings.model_copy(
+        update={
+            "paper_orderbook_symbol_limit": 1,
+            "paper_history_symbol_limit": 1,
+        }
+    )
+    runner._remember_candidates(
+        [
+            candidate,
+            candidate.model_copy(
+                update={
+                    "asset": "ETH",
+                    "symbol_a": "ETHUSDT",
+                    "symbol_b": "ETH_USDT",
+                }
+            ),
+        ]
+    )
+    assert runner._candidate_books == {
+        "bybit": {("BTCUSDT", InstrumentType.PERPETUAL)},
+        "gate": {("BTC_USDT", InstrumentType.PERPETUAL)},
+    }
     assert runner._reconciliation_due(snapshot.captured_at)
     runner._last_reconciliation = snapshot.captured_at
     assert not runner._reconciliation_due(snapshot.captured_at)

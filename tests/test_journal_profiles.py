@@ -97,6 +97,16 @@ def test_journal_profile_hash_is_deterministic_and_contract_sensitive() -> None:
         {"RELEASE_COMMIT_SHA": "a" * 40},
         {"PAPER_LOOP_INTERVAL_SECONDS": 11},
         {"PAPER_ORDERBOOK_SYMBOL_LIMIT": 11},
+        {
+            "MARKET_DATA_STREAMS_ENABLED": False,
+            "CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED": False,
+            "MULTI_REGIME_ENABLED": False,
+        },
+        {
+            "PUBLIC_EVENT_ENRICHMENT_ENABLED": False,
+            "CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED": False,
+            "MULTI_REGIME_ENABLED": False,
+        },
         {"OPTIONS_MAXIMUM_EXPIRIES": 3},
         {"PUBLIC_METADATA_REFRESH_SECONDS": 3601},
         {"MULTI_REGIME_ASSETS": "BTC,ETH,SOL"},

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     market_data_mode: Literal["live_public", "mock"] = Field(
         default="live_public", alias="MARKET_DATA_MODE"
     )
+    market_data_streams_enabled: bool = Field(default=True, alias="MARKET_DATA_STREAMS_ENABLED")
     execution_mode: Literal["paper", "live"] = Field(default="paper", alias="EXECUTION_MODE")
     trading_mode: TradingMode | None = Field(default=None, alias="TRADING_MODE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -229,6 +230,9 @@ class Settings(BaseSettings):
     options_strikes_per_expiry: int = Field(default=3, alias="OPTIONS_STRIKES_PER_EXPIRY")
     public_event_symbol_limit_per_profile: int = Field(
         default=3, alias="PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE"
+    )
+    public_event_enrichment_enabled: bool = Field(
+        default=True, alias="PUBLIC_EVENT_ENRICHMENT_ENABLED"
     )
     public_event_rest_interval_seconds: float = Field(
         default=60.0, alias="PUBLIC_EVENT_REST_INTERVAL_SECONDS"
@@ -1013,6 +1017,14 @@ def _validate_safe_values(settings: Settings) -> None:
         or settings.canonical_high_frequency_market_event_min_interval_seconds > 0
     ):
         raise ValueError("RUN_MODE=live requires the complete canonical market journal")
+    if settings.canonical_high_frequency_market_events_enabled and (
+        not settings.market_data_streams_enabled
+        or not settings.public_event_enrichment_enabled
+    ):
+        raise ValueError(
+            "the complete canonical market journal requires market-data streams "
+            "and public-event enrichment"
+        )
     if settings.multi_regime_enabled and (
         not settings.canonical_high_frequency_market_events_enabled
         or settings.canonical_high_frequency_market_event_min_interval_seconds > 0

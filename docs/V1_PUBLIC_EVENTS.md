@@ -26,6 +26,16 @@ reconnect with bounded exponential backoff; REST polling is controlled by
 `PUBLIC_EVENT_REST_INTERVAL_SECONDS`. The canonical event writer remains the
 single durable sink and its existing failure gate blocks new entries.
 
+`MARKET_DATA_STREAMS_ENABLED=false` switches the native ticker/order-book
+collector to bounded REST snapshots. `PUBLIC_EVENT_ENRICHMENT_ENABLED=false`
+omits the CCXT Pro trade, candle, open-interest, and liquidation accounts while
+the supervisor continues to journal exact native funding snapshots. These two
+capacity controls are intended only for explicitly bounded paper funding runs.
+Either disabled control requires
+`CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED=false`; `RUN_MODE=live` and the
+multi-regime runtime fail closed because they require the complete stream and
+enrichment contract.
+
 `CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED` defaults to `true` and keeps
 the complete raw trade, order-book, and option-quote journal required by the
 full replay profile. A positive

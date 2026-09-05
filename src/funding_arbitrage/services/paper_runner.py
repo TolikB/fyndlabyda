@@ -189,7 +189,10 @@ class PaperTestRunner:
             settings.paper_market_asset_limit,
             settings.paper_history_symbol_limit,
             settings.market_data_stale_seconds,
-            settings.market_data_mode == "live_public",
+            (
+                settings.market_data_mode == "live_public"
+                and settings.market_data_streams_enabled
+            ),
             option_assets=(
                 settings.multi_regime_asset_values
                 if settings.options_market_data_enabled
@@ -402,22 +405,37 @@ class PaperTestRunner:
             await self.public_events.start()
         runners = (self, *peers)
         required_history: dict[str, set[str]] = {}
+        discovery_history: dict[str, set[str]] = {}
         forced_history: dict[str, set[str]] = {}
         required_books: dict[str, set[tuple[str, InstrumentType]]] = {}
         discovery_books: dict[str, set[tuple[str, InstrumentType]]] = {}
         for runner in runners:
-            for venue, symbols in runner._required_funding_symbols(now).items():
-                required_history.setdefault(venue, set()).update(symbols)
-            for venue, symbols in runner._due_funding_symbols(now).items():
-                forced_history.setdefault(venue, set()).update(symbols)
-            for venue, books in runner._open_position_orderbook_symbols().items():
-                required_books.setdefault(venue, set()).update(books)
+            for venue, position_symbols in runner._position_funding_symbols(now).items():
+                required_history.setdefault(venue, set()).update(position_symbols)
+            for venue, candidate_symbols in runner._candidate_history_symbols.items():
+                discovery_history.setdefault(venue, set()).update(candidate_symbols)
+            for venue, due_symbols in runner._due_funding_symbols(now).items():
+                forced_history.setdefault(venue, set()).update(due_symbols)
+            for venue, position_books in runner._open_position_orderbook_symbols().items():
+                required_books.setdefault(venue, set()).update(position_books)
             for venue, candidate_books in runner._candidate_orderbook_symbols.items():
                 discovery_books.setdefault(venue, set()).update(candidate_books)
         for runner in runners:
             await runner._persist_pending_funding_reconciliation_failures()
+        bounded_discovery_history = {
+            venue: sorted(symbols)[: self.settings.paper_history_symbol_limit]
+            for venue, symbols in discovery_history.items()
+        }
         normalized_history = {
-            venue: tuple(sorted(symbols)) for venue, symbols in required_history.items()
+            venue: tuple(
+                dict.fromkeys(
+                    [
+                        *sorted(required_history.get(venue, ())),
+                        *bounded_discovery_history.get(venue, ()),
+                    ]
+                )
+            )
+            for venue in required_history.keys() | discovery_history.keys()
         }
         periodic_history_refresh = self._last_history_refresh is None or (
             now - self._last_history_refresh
@@ -436,6 +454,7 @@ class PaperTestRunner:
             },
             include_history=refresh_history,
             history_symbols={venue: sorted(symbols) for venue, symbols in required_history.items()},
+            discovery_history_symbols=bounded_discovery_history,
             force_history_refresh=periodic_history_refresh,
             force_history_symbols={
                 venue: sorted(symbols) for venue, symbols in forced_history.items()
@@ -1390,11 +1409,21 @@ class PaperTestRunner:
     def _required_funding_symbols(
         self, now: datetime | None = None
     ) -> dict[str, list[str]]:
-        observed_at = now or datetime.now(UTC)
         result: dict[str, list[str]] = {
             venue: list(symbols)
             for venue, symbols in self._candidate_history_symbols.items()
         }
+        for venue, symbols in self._position_funding_symbols(now).items():
+            result.setdefault(venue, []).extend(symbols)
+        return {
+            venue: list(dict.fromkeys(symbols)) for venue, symbols in result.items()
+        }
+
+    def _position_funding_symbols(
+        self, now: datetime | None = None
+    ) -> dict[str, list[str]]:
+        observed_at = now or datetime.now(UTC)
+        result: dict[str, list[str]] = {}
         for position in self.runtime.portfolio.positions.values():
             if position.state is not PositionState.OPEN and not (
                 self._funding_reconciliation_active(position, observed_at)
@@ -1426,6 +1455,8 @@ class PaperTestRunner:
         history: dict[str, set[str]] = {}
         books: dict[str, set[tuple[str, InstrumentType]]] = {}
         for opportunity in opportunities:
+            opportunity_books: dict[str, set[tuple[str, InstrumentType]]] = {}
+            opportunity_history: dict[str, set[str]] = {}
             for venue, symbol, instrument_type in (
                 (
                     opportunity.venue_a,
@@ -1440,9 +1471,25 @@ class PaperTestRunner:
             ):
                 if symbol is None:
                     continue
-                books.setdefault(venue, set()).add((symbol, instrument_type))
+                opportunity_books.setdefault(venue, set()).add(
+                    (symbol, instrument_type)
+                )
                 if instrument_type is InstrumentType.PERPETUAL:
-                    history.setdefault(venue, set()).add(symbol)
+                    opportunity_history.setdefault(venue, set()).add(symbol)
+            if any(
+                len(books.get(venue, set()) | book_additions)
+                > self.settings.paper_orderbook_symbol_limit
+                for venue, book_additions in opportunity_books.items()
+            ) or any(
+                len(history.get(venue, set()) | history_additions)
+                > self.settings.paper_history_symbol_limit
+                for venue, history_additions in opportunity_history.items()
+            ):
+                continue
+            for venue, book_additions in opportunity_books.items():
+                books.setdefault(venue, set()).update(book_additions)
+            for venue, history_additions in opportunity_history.items():
+                history.setdefault(venue, set()).update(history_additions)
         self._candidate_history_symbols = history
         self._candidate_orderbook_symbols = books
 

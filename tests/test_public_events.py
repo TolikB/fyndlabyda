@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from funding_arbitrage.config import Settings
 from funding_arbitrage.database.repositories.events import append_events
 from funding_arbitrage.domain.events import (
     DataQuality,
@@ -31,6 +33,7 @@ from funding_arbitrage.exchanges.public_events import (
     PublicEventAccount,
     PublicEventProfile,
     PublicEventSupervisor,
+    create_public_event_supervisor,
     public_event_profiles,
 )
 from funding_arbitrage.market_data.collector import MarketSnapshot
@@ -809,6 +812,37 @@ async def test_supervisor_mirrors_exact_funding_and_only_falls_back_for_missing_
         EventKind.FUNDING_SNAPSHOT,
         EventKind.OPEN_INTEREST_SNAPSHOT,
     ]
+    funding = collector.events[0].payload
+    assert funding.funding_rate == Decimal("0.0001")
+    assert funding.funding_interval_seconds == 28_800
+    assert funding.mark_price == Decimal("60001")
+    assert funding.index_price == Decimal("59999")
+    assert funding.next_funding_time == datetime(2026, 8, 20, 16, 0, tzinfo=UTC)
+
+
+async def test_disabled_enrichment_avoids_ccxt_and_keeps_exact_native_funding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "ccxt.pro", None)
+    settings = Settings(
+        _env_file=None,
+        RUN_MODE="paper_test",
+        TRADING_MODE="PAPER",
+        PAPER_VENUES="bybit",
+        CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED=False,
+        MULTI_REGIME_ENABLED=False,
+        MARKET_DATA_STREAMS_ENABLED=False,
+        PUBLIC_EVENT_ENRICHMENT_ENABLED=False,
+    )
+    collector = EventCollector()
+    supervisor = create_public_event_supervisor(settings, collector)
+
+    await supervisor.start()
+    await supervisor.observe_snapshot(_snapshot())
+    await supervisor.close()
+
+    assert supervisor.accounts == ()
+    assert [event.kind for event in collector.events] == [EventKind.FUNDING_SNAPSHOT]
     funding = collector.events[0].payload
     assert funding.funding_rate == Decimal("0.0001")
     assert funding.funding_interval_seconds == 28_800

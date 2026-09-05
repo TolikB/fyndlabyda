@@ -279,7 +279,16 @@ class MarketDataCollector:
             str, list[tuple[str, InstrumentType]]
         ]
         | None = None,
+        discovery_history_symbols: dict[str, list[str]] | None = None,
     ) -> MarketSnapshot:
+        bounded_discovery_books = {
+            venue: list(dict.fromkeys(markets))[: self.orderbook_symbol_limit]
+            for venue, markets in (discovery_orderbook_symbols or {}).items()
+        }
+        bounded_discovery_history = {
+            venue: list(dict.fromkeys(symbols))[: self.history_symbol_limit]
+            for venue, symbols in (discovery_history_symbols or {}).items()
+        }
         active_adapters = tuple(
             adapter
             for adapter in self.adapters
@@ -290,9 +299,10 @@ class MarketDataCollector:
                 self._collect_venue(
                     adapter,
                     (orderbook_symbols or {}).get(adapter.name),
-                    (discovery_orderbook_symbols or {}).get(adapter.name),
+                    bounded_discovery_books.get(adapter.name),
                     include_history,
                     (history_symbols or {}).get(adapter.name, []),
+                    bounded_discovery_history.get(adapter.name, []),
                     force_history_refresh,
                     (force_history_symbols or {}).get(adapter.name, []),
                 )
@@ -306,7 +316,7 @@ class MarketDataCollector:
             active_adapters,
             collections,
             orderbook_symbols or {},
-            discovery_orderbook_symbols or {},
+            bounded_discovery_books,
         )
         captured_at = datetime.now(UTC)
         instruments = [item for result in collections for item in result.instruments]
@@ -552,6 +562,7 @@ class MarketDataCollector:
         pinned_discovery_books: list[tuple[str, InstrumentType]] | None,
         include_history: bool,
         required_history: list[str],
+        discovery_history: list[str],
         force_history_refresh: bool,
         forced_history: list[str],
     ) -> _VenueCollection:
@@ -561,6 +572,16 @@ class MarketDataCollector:
         funding_history_refreshed: dict[tuple[str, str], datetime] = {}
         history_complete = True
         try:
+            requested_books = list(dict.fromkeys(requested_books or ()))
+            pinned_discovery_books = list(dict.fromkeys(pinned_discovery_books or ()))[
+                : self.orderbook_symbol_limit
+            ]
+            required_history = list(
+                dict.fromkeys([*required_history, *forced_history])
+            )
+            discovery_history = list(dict.fromkeys(discovery_history))[
+                : self.history_symbol_limit
+            ]
             venue_instruments = self._instrument_cache.get(adapter.name)
             if venue_instruments is None:
                 venue_instruments = await adapter.get_instruments()
@@ -638,13 +659,15 @@ class MarketDataCollector:
             self._ensure_ticker_stream(adapter, valid_tickers)
             ranked_discovery_books = _rank_orderbook_requests(
                 valid_tickers, venue_funding, venue_instruments
+            )
+            discovery_book_requests = list(
+                dict.fromkeys([*pinned_discovery_books, *ranked_discovery_books])
             )[: self.orderbook_symbol_limit]
             book_requests = list(
                 dict.fromkeys(
                     [
-                        *(requested_books or []),
-                        *(pinned_discovery_books or []),
-                        *ranked_discovery_books,
+                        *requested_books,
+                        *discovery_book_requests,
                     ]
                 )
             )
@@ -740,13 +763,11 @@ class MarketDataCollector:
                 ranked = _rank_funding_symbols(
                     venue_funding, valid_tickers, venue_instruments
                 )
-                ranked_budget = (
-                    len(ranked)
-                    if self.market_asset_limit is not None
-                    else self.history_symbol_limit
-                )
+                discovery_selected = list(
+                    dict.fromkeys([*discovery_history, *ranked])
+                )[: self.history_symbol_limit]
                 selected = list(
-                    dict.fromkeys([*required_history, *ranked[:ranked_budget]])
+                    dict.fromkeys([*required_history, *discovery_selected])
                 )
                 valid_symbols = {item.symbol for item in all_venue_funding}
                 selected = [

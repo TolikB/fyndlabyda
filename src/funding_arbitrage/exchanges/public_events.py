@@ -1103,29 +1103,30 @@ def public_event_profiles(venue: str) -> tuple[PublicEventProfile, ...]:
 def create_public_event_supervisor(
     settings: Settings, event_sink: CanonicalEventSink
 ) -> PublicEventSupervisor:
-    import ccxt.pro as ccxtpro  # type: ignore[import-untyped]
-
     venues = (
         settings.live_venue_values
         if settings.run_mode == "live"
         else settings.paper_venue_values
     )
     accounts: list[PublicEventAccount] = []
-    for venue in venues:
-        for profile in public_event_profiles(venue):
-            options: dict[str, object] = {"defaultType": profile.default_type}
-            if venue in {"binance", "bybit", "okx"}:
-                options["adjustForTimeDifference"] = True
-            config: dict[str, object] = {
-                "enableRateLimit": True,
-                "newUpdates": True,
-                "timeout": int(settings.request_timeout_seconds * 1000),
-                "options": options,
-            }
-            exchange = getattr(ccxtpro, profile.exchange_class)(config)
-            if venue == "htx":
-                exchange.urls["hostnames"]["contract"] = "api.hbdm.com"
-            accounts.append(PublicEventAccount(profile, exchange))
+    if settings.public_event_enrichment_enabled:
+        import ccxt.pro as ccxtpro  # type: ignore[import-untyped]
+
+        for venue in venues:
+            for profile in public_event_profiles(venue):
+                options: dict[str, object] = {"defaultType": profile.default_type}
+                if venue in {"binance", "bybit", "okx"}:
+                    options["adjustForTimeDifference"] = True
+                config: dict[str, object] = {
+                    "enableRateLimit": True,
+                    "newUpdates": True,
+                    "timeout": int(settings.request_timeout_seconds * 1000),
+                    "options": options,
+                }
+                exchange = getattr(ccxtpro, profile.exchange_class)(config)
+                if venue == "htx":
+                    exchange.urls["hostnames"]["contract"] = "api.hbdm.com"
+                accounts.append(PublicEventAccount(profile, exchange))
     return PublicEventSupervisor(
         accounts,
         event_sink,

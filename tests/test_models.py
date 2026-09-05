@@ -28,6 +28,8 @@ def test_default_paper_safety_and_namespaces_are_cost_gated() -> None:
     assert settings.paper_minimum_funding_rate == Decimal("0.0002")
     assert settings.orderbook_stream_stale_seconds == 120
     assert settings.funding_snapshot_stale_seconds == 180
+    assert settings.market_data_streams_enabled is True
+    assert settings.public_event_enrichment_enabled is True
     assert settings.paper_position_size_usd == Decimal("50")
     assert settings.paper_max_open_positions == 8
     assert settings.paper_simulation_version == "v34-cost-gated-candidate"
@@ -41,6 +43,26 @@ def test_default_paper_safety_and_namespaces_are_cost_gated() -> None:
         Decimal("0.0003"),
         Decimal("0.07"),
     )
+
+
+def test_bounded_public_market_profile_is_explicit_and_fail_closed() -> None:
+    bounded = Settings(
+        _env_file=None,
+        CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED=False,
+        MULTI_REGIME_ENABLED=False,
+        MARKET_DATA_STREAMS_ENABLED=False,
+        PUBLIC_EVENT_ENRICHMENT_ENABLED=False,
+    )
+
+    assert bounded.market_data_streams_enabled is False
+    assert bounded.public_event_enrichment_enabled is False
+
+    for update in (
+        {"MARKET_DATA_STREAMS_ENABLED": False},
+        {"PUBLIC_EVENT_ENRICHMENT_ENABLED": False},
+    ):
+        with pytest.raises(ValueError, match="complete canonical market journal"):
+            Settings(_env_file=None, **update)
 
 
 def test_option_market_data_bounds_and_fees_fail_closed() -> None:

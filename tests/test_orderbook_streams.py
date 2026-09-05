@@ -29,6 +29,107 @@ from funding_arbitrage.monitoring.metrics import (
 )
 
 
+class MultiSymbolMock(MockExchangeAdapter):
+    symbols = (
+        ("BTCUSDT", "BTC"),
+        ("ETHUSDT", "ETH"),
+        ("SOLUSDT", "SOL"),
+        ("DOGEUSDT", "DOGE"),
+    )
+
+    def __init__(self) -> None:
+        super().__init__("bybit", sleep=0)
+        self.book_calls: list[str] = []
+        self.history_calls: list[str] = []
+
+    async def get_instruments(self) -> list[NormalizedInstrument]:
+        template = next(
+            item
+            for item in await super().get_instruments()
+            if item.instrument_type is InstrumentType.PERPETUAL
+        )
+        return [
+            template.model_copy(update={"exchange_symbol": symbol, "base_asset": asset})
+            for symbol, asset in self.symbols
+        ]
+
+    async def get_tickers(self) -> list[Ticker]:
+        template = next(
+            item
+            for item in await super().get_tickers()
+            if item.instrument_type is InstrumentType.PERPETUAL
+        )
+        return [
+            template.model_copy(
+                update={
+                    "symbol": symbol,
+                    "volume_24h": Decimal(4_000_000 - index * 500_000),
+                }
+            )
+            for index, (symbol, _) in enumerate(self.symbols)
+        ]
+
+    async def get_funding_rates(self) -> list[FundingSnapshot]:
+        template = (await super().get_funding_rates())[0]
+        return [
+            template.model_copy(
+                update={
+                    "symbol": symbol,
+                    "funding_rate": Decimal("0.004")
+                    - Decimal(index) * Decimal("0.0005"),
+                }
+            )
+            for index, (symbol, _) in enumerate(self.symbols)
+        ]
+
+    async def get_orderbook(
+        self,
+        symbol: str,
+        depth: int,
+        instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+    ) -> OrderBook:
+        self.book_calls.append(symbol)
+        return await super().get_orderbook(symbol, depth, instrument_type)
+
+    async def get_funding_history(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> list[FundingHistoryPoint]:
+        self.history_calls.append(symbol)
+        return await super().get_funding_history(symbol, start, end)
+
+
+@pytest.mark.asyncio
+async def test_collector_bounds_discovery_but_preserves_required_markets() -> None:
+    adapter = MultiSymbolMock()
+    collector = MarketDataCollector(
+        [adapter],
+        orderbook_symbol_limit=2,
+        market_asset_limit=4,
+        history_symbol_limit=2,
+        enable_streams=False,
+    )
+
+    snapshot = await collector.collect_once(
+        orderbook_symbols={"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]},
+        discovery_orderbook_symbols={
+            "bybit": [
+                ("ETHUSDT", InstrumentType.PERPETUAL),
+                ("SOLUSDT", InstrumentType.PERPETUAL),
+                ("DOGEUSDT", InstrumentType.PERPETUAL),
+            ]
+        },
+        include_history=True,
+        history_symbols={"bybit": ["BTCUSDT"]},
+        discovery_history_symbols={"bybit": ["SOLUSDT", "DOGEUSDT", "ETHUSDT"]},
+    )
+    await collector.close()
+
+    assert set(adapter.book_calls) == {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+    assert set(adapter.history_calls) == {"BTCUSDT", "SOLUSDT", "DOGEUSDT"}
+    assert len(snapshot.orderbooks) == 3
+    assert len(snapshot.funding_history_refreshed) == 3
+
+
 def test_bybit_orderbook_snapshot_and_delta_are_merged() -> None:
     adapter = BybitPublicAdapter()
     state: dict[str, dict[str, dict[Decimal, Decimal]]] = {}
