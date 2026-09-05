@@ -20,6 +20,7 @@ COPY requirements-linux.lock ./
 RUN apk add --no-cache \
       libcrypto3=3.5.8-r0 \
       libssl3=3.5.8-r0 \
+      libuuid=2.42.3-r0 \
     && pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock
 
 COPY src ./src
