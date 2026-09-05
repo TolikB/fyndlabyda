@@ -132,7 +132,18 @@ for _ in $(seq 1 90); do
   if [[ "$app_status" == "healthy" ]]; then break; fi
   sleep 2
 done
-test "$app_status" = "healthy"
+if [[ "$app_status" != "healthy" ]]; then
+  echo "restore drill app failed to become healthy; bounded diagnostics follow" >&2
+  "${compose[@]}" ps --all >&2 || true
+  failed_app_container_id="$("${compose[@]}" ps --all --quiet app 2>/dev/null || true)"
+  if [[ -n "$failed_app_container_id" ]]; then
+    docker inspect "$failed_app_container_id" \
+      --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} restarts={{.RestartCount}}' \
+      >&2 || true
+    docker logs --tail 200 "$failed_app_container_id" >&2 || true
+  fi
+  exit 1
+fi
 app_container_id="$("${compose[@]}" ps --all --quiet app)"
 test "$(docker inspect "$app_container_id" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$expected_revision"
 drill_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -741,7 +752,7 @@ jq --null-input --compact-output \
     restored_target_marker: $restored_target_marker,
     restored_sentinel: $restored_sentinel,
     restored_alembic_head: $restored_alembic_head,
-    critical_state_entity_count: 14,
+    critical_state_entity_count: 15,
     target_critical_state_sha256: $target_critical_state_sha256,
     post_target_critical_state_sha256: $post_target_critical_state_sha256,
     restored_critical_state_sha256: $restored_critical_state_sha256,

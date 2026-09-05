@@ -71,7 +71,7 @@ def _facts(**changes: object) -> DisasterRecoveryDrillFacts:
         "restored_target_marker": "target",
         "restored_sentinel": "1|target-row",
         "restored_alembic_head": "0017_multi_regime_runtime",
-        "critical_state_entity_count": 14,
+        "critical_state_entity_count": 15,
         "target_critical_state_sha256": "8" * 64,
         "post_target_critical_state_sha256": "9" * 64,
         "restored_critical_state_sha256": "8" * 64,

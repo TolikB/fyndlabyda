@@ -22,6 +22,7 @@ DR_PROFILE_ID = "v1-postgresql-authority-restore-2026-09"
 DR_TARGET_BACKUP_MAX_AGE_SECONDS = Decimal("86400")
 DR_DATABASE_RESTORE_BUDGET_SECONDS = Decimal("900")
 DR_SAFETY_BACKUP_MAX_AGE_SECONDS = Decimal("3600")
+EXPECTED_CRITICAL_STATE_ENTITY_COUNT = 15
 EXPECTED_RECOVERY_STAGES = (
     "prepared",
     "canonical_locked",
@@ -347,7 +348,8 @@ class DisasterRecoveryEvidence(BaseModel):
             facts.restored_post_target_event_count == 0,
             facts.restored_target_marker == "target",
             facts.restored_sentinel == "1|target-row",
-            facts.critical_state_entity_count == 14,
+            facts.critical_state_entity_count
+            == EXPECTED_CRITICAL_STATE_ENTITY_COUNT,
             facts.target_critical_state_sha256
             != facts.post_target_critical_state_sha256,
             facts.target_critical_state_sha256
@@ -455,7 +457,8 @@ def build_disaster_recovery_evidence(
             facts.restored_post_target_event_count == 0,
             facts.restored_target_marker == "target",
             facts.restored_sentinel == "1|target-row",
-            facts.critical_state_entity_count == 14,
+            facts.critical_state_entity_count
+            == EXPECTED_CRITICAL_STATE_ENTITY_COUNT,
             facts.target_critical_state_sha256
             != facts.post_target_critical_state_sha256,
             facts.target_critical_state_sha256

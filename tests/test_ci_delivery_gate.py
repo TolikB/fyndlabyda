@@ -133,6 +133,9 @@ def test_release_workflow_has_every_required_delivery_gate() -> None:
     assert "disaster_recovery_evidence.py" in restore_drill
     assert "disaster-recovery-drill-facts" in restore_drill
     assert "recovered_crash_stages" in restore_drill
+    assert "bounded diagnostics follow" in restore_drill
+    assert 'docker logs --tail 200 "$failed_app_container_id"' in restore_drill
+    assert "critical_state_entity_count: 15" in restore_drill
     assert 'app_restart_policy: "no"' in restore_drill
     assert 'host_plaintext_artifact_count: 0' in restore_drill
     assert '--github-run-id "$GITHUB_RUN_ID"' in restore_drill
@@ -275,3 +278,4 @@ def test_paper_test_template_satisfies_required_compose_variables() -> None:
     assert required
     assert required <= environment.keys()
     assert all(environment[name] for name in required)
+    assert environment["PAPER_AUTO_INIT_DATABASE"] == "false"
