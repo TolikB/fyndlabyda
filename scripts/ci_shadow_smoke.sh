@@ -107,10 +107,12 @@ docker run --detach \
   --env EXECUTION_MODE=paper \
   --env PAPER_AUTOTRADE=false \
   --env LIVE_AUTOTRADE=false \
-  --env PAPER_AUTO_INIT_DATABASE=true \
+  --env PAPER_AUTO_INIT_DATABASE=false \
   --env PAPER_LOOP_INTERVAL_SECONDS=1 \
   --env "DATABASE_URL=postgresql+asyncpg://funding:${db_password}@postgres:5432/funding" \
-  "$image" >/dev/null
+  "$image" \
+  sh -c 'alembic upgrade head && exec uvicorn funding_arbitrage.main:app --host 0.0.0.0 --port 8000' \
+  >/dev/null
 app_started=true
 
 ready=false

@@ -215,6 +215,8 @@ def test_shadow_deployment_is_isolated_and_cannot_trade() -> None:
     assert "EXECUTION_MODE=paper" in script
     assert "PAPER_AUTOTRADE=false" in script
     assert "LIVE_AUTOTRADE=false" in script
+    assert "PAPER_AUTO_INIT_DATABASE=false" in script
+    assert "alembic upgrade head && exec uvicorn" in script
     assert "--cap-drop ALL" in script
     assert "no-new-privileges:true" in script
     assert "--user 70:70" in script
