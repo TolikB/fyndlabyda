@@ -36,12 +36,13 @@ def test_docker_runtime_uses_immutable_base_and_lock_file() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     expected_base = (
-        "FROM python:3.12-alpine@sha256:"
-        "d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31"
+        "FROM python:3.12-alpine3.23@sha256:"
+        "167bc85084c9df34480efc26b4528fb68feaa8a79183b5658952137025b6f061"
     )
     assert dockerfile.count(expected_base) == 2
     assert dockerfile.count("libcrypto3=3.5.8-r0") == 2
     assert dockerfile.count("libssl3=3.5.8-r0") == 2
+    assert dockerfile.count("libuuid=2.41.6-r1") == 1
     assert "    gcc \\\n" in dockerfile
     assert "    musl-dev\n" in dockerfile
     assert "apt-get" not in dockerfile

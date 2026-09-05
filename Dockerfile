@@ -1,4 +1,4 @@
-FROM python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31 AS native-builder
+FROM python:3.12-alpine3.23@sha256:167bc85084c9df34480efc26b4528fb68feaa8a79183b5658952137025b6f061 AS native-builder
 
 RUN apk add --no-cache \
     gcc \
@@ -11,7 +11,7 @@ RUN gcc -O3 -std=c11 -Wall -Wextra -Werror native_low_latency.c \
     -o funding-native-low-latency \
     && ./funding-native-low-latency --self-test 200000
 
-FROM python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31 AS runtime
+FROM python:3.12-alpine3.23@sha256:167bc85084c9df34480efc26b4528fb68feaa8a79183b5658952137025b6f061 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
 WORKDIR /app
@@ -20,7 +20,7 @@ COPY requirements-linux.lock ./
 RUN apk add --no-cache \
       libcrypto3=3.5.8-r0 \
       libssl3=3.5.8-r0 \
-      libuuid=2.42.3-r0 \
+      libuuid=2.41.6-r1 \
     && pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock
 
 COPY src ./src
