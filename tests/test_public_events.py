@@ -841,6 +841,51 @@ async def test_required_quality_streams_survive_one_transient_snapshot_omission(
     assert supervisor.required_quality_streams == expected
 
 
+async def test_bounded_storage_profile_requires_funding_but_not_book_events() -> None:
+    collector = EventCollector()
+    supervisor = PublicEventSupervisor(
+        [],
+        collector,
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+        high_frequency_market_events_enabled=False,
+    )
+
+    await supervisor.observe_snapshot(_snapshot(open_interest=None))
+
+    assert {item.stream for item in supervisor.required_quality_streams} == {
+        EventKind.FUNDING_SNAPSHOT.value
+    }
+    assert [event.kind for event in collector.events] == [EventKind.FUNDING_SNAPSHOT]
+
+
+async def test_bounded_storage_profile_does_not_start_trade_streams() -> None:
+    exchange = FakePublicExchange()
+    account = PublicEventAccount(_profile(), exchange)
+    supervisor = PublicEventSupervisor(
+        [account],
+        EventCollector(),
+        symbol_limit=1,
+        rest_interval_seconds=60,
+        reconnect_initial_seconds=0.01,
+        reconnect_max_seconds=0.1,
+        high_frequency_market_events_enabled=False,
+    )
+
+    await supervisor.start()
+    await supervisor.observe_snapshot(_snapshot())
+    try:
+        for _ in range(100):
+            if supervisor._symbol_tasks:
+                break
+            await asyncio.sleep(0.01)
+        assert {key[2] for key in supervisor._symbol_tasks} == {"liquidations"}
+    finally:
+        await supervisor.close()
+
+
 async def test_required_quality_streams_are_registered_before_mirror_completes() -> None:
     mirror_started = asyncio.Event()
     release_mirror = asyncio.Event()

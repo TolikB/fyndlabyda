@@ -389,9 +389,7 @@ class LiveOrderRecord(Base):
     """Acknowledgements and terminal state for every authenticated order request."""
 
     __tablename__ = "live_orders"
-    __table_args__ = (
-        UniqueConstraint("exchange", "client_order_id", name="uq_live_order_client"),
-    )
+    __table_args__ = (UniqueConstraint("exchange", "client_order_id", name="uq_live_order_client"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     intent_id: Mapped[str] = mapped_column(String(64), index=True)
@@ -439,9 +437,7 @@ class LiveAccountSnapshotRecord(Base):
     """Venue balance snapshots used for actual equity-delta PnL reporting."""
 
     __tablename__ = "live_account_snapshots"
-    __table_args__ = (
-        Index("ix_live_account_snapshot_exchange_time", "exchange", "timestamp"),
-    )
+    __table_args__ = (Index("ix_live_account_snapshot_exchange_time", "exchange", "timestamp"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -480,9 +476,7 @@ class LiveFundingPaymentRecord(Base):
     """Actual venue funding cashflows from authenticated account history."""
 
     __tablename__ = "live_funding_payments"
-    __table_args__ = (
-        UniqueConstraint("exchange", "external_id", name="uq_live_funding_payment"),
-    )
+    __table_args__ = (UniqueConstraint("exchange", "external_id", name="uq_live_funding_payment"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     exchange: Mapped[str] = mapped_column(String(32), index=True)
@@ -531,6 +525,34 @@ class CanonicalEventRecord(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class CanonicalJournalProfileRecord(Base):
+    """Immutable boundary describing how subsequent canonical rows were recorded."""
+
+    __tablename__ = "canonical_journal_profiles"
+    __table_args__ = (
+        UniqueConstraint("boundary_id", name="uq_canonical_journal_profile_boundary"),
+        Index(
+            "ix_canonical_journal_profiles_event_boundary",
+            "after_event_row_id",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    boundary_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    after_event_row_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    profile: Mapped[str] = mapped_column(String(16), index=True)
+    high_frequency_events_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    minimum_interval_seconds: Mapped[str] = mapped_column(String(32), nullable=False)
+    simulation_versions: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    config_sha256: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+
+
 class MultiRegimeDecisionRecord(Base):
     """Durable feature, regime, signal, risk, and hypothetical-plan decision batch."""
 
@@ -561,6 +583,17 @@ class MultiRegimePaperCheckpointRecord(Base):
     event_row_id: Mapped[int] = mapped_column(BigInteger, index=True)
     event_id: Mapped[str] = mapped_column(String(80), index=True)
     event_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    journal_profile_boundary_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("canonical_journal_profiles.boundary_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    journal_profile_config_sha256: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -602,9 +635,7 @@ class OMSOrderStateRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_order_id: Mapped[str] = mapped_column(String(80), index=True)
-    simulation_version: Mapped[str] = mapped_column(
-        String(64), default="v1-legacy", index=True
-    )
+    simulation_version: Mapped[str] = mapped_column(String(64), default="v1-legacy", index=True)
     exchange_order_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     risk_decision_id: Mapped[str] = mapped_column(
         ForeignKey("risk_decisions.decision_id"), index=True
@@ -629,15 +660,11 @@ class ExecutionFillRecord(Base):
     """Venue fill truth, unique by venue fill ID and linked to the OMS client ID."""
 
     __tablename__ = "execution_fills"
-    __table_args__ = (
-        UniqueConstraint("venue", "fill_id", name="uq_execution_fill_venue_id"),
-    )
+    __table_args__ = (UniqueConstraint("venue", "fill_id", name="uq_execution_fill_venue_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     fill_id: Mapped[str] = mapped_column(String(160), index=True)
-    simulation_version: Mapped[str] = mapped_column(
-        String(64), default="v1-legacy", index=True
-    )
+    simulation_version: Mapped[str] = mapped_column(String(64), default="v1-legacy", index=True)
     client_order_id: Mapped[str] = mapped_column(String(80), index=True)
     exchange_order_id: Mapped[str] = mapped_column(String(160), index=True)
     venue: Mapped[str] = mapped_column(String(32), index=True)
@@ -660,9 +687,7 @@ class PositionStateRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     position_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    simulation_version: Mapped[str] = mapped_column(
-        String(64), default="v1-legacy", index=True
-    )
+    simulation_version: Mapped[str] = mapped_column(String(64), default="v1-legacy", index=True)
     strategy_id: Mapped[str] = mapped_column(String(80), index=True)
     venue: Mapped[str] = mapped_column(String(32), index=True)
     instrument_id: Mapped[str] = mapped_column(String(256), index=True)
@@ -683,9 +708,7 @@ class BalanceStateRecord(Base):
     """Latest authenticated balance projection for continuous reconciliation."""
 
     __tablename__ = "balance_states"
-    __table_args__ = (
-        UniqueConstraint("venue", "asset", name="uq_balance_state_venue_asset"),
-    )
+    __table_args__ = (UniqueConstraint("venue", "asset", name="uq_balance_state_venue_asset"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     venue: Mapped[str] = mapped_column(String(32), index=True)

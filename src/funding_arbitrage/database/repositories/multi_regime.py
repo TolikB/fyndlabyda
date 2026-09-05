@@ -14,6 +14,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.database.models import (
+    CanonicalEventRecord,
     MultiRegimeDecisionRecord,
     RiskDecisionRecord,
 )
@@ -53,9 +54,7 @@ class MultiRegimeDecisionIntegrityError(RuntimeError):
     """A deterministic identity was reused with different decision content."""
 
 
-async def save_multi_regime_batch(
-    session: AsyncSession, batch: MultiRegimeBatchLike
-) -> bool:
+async def save_multi_regime_batch(session: AsyncSession, batch: MultiRegimeBatchLike) -> bool:
     payload = batch.model_dump(mode="json")
     payload_hash = _hash(payload)
     for authorization in batch.risk_authorizations:
@@ -97,22 +96,50 @@ async def load_multi_regime_batches(
     start: datetime | None = None,
     mode: TradingMode | None = None,
     source_event_ids: Sequence[str] = (),
+    source_event_start: datetime | None = None,
+    source_event_row_id_after: int | None = None,
+    source_event_row_id_up_to: int | None = None,
 ) -> tuple[MultiRegimeDecisionBatch, ...]:
     """Load verified decision batches in deterministic source-event order."""
 
     from funding_arbitrage.services.multi_regime import MultiRegimeDecisionBatch
 
+    if source_event_row_id_after is not None and source_event_row_id_after < 0:
+        raise ValueError("source event lower row boundary cannot be negative")
+    if (
+        source_event_row_id_up_to is not None
+        and source_event_row_id_after is not None
+        and source_event_row_id_up_to < source_event_row_id_after
+    ):
+        raise ValueError("source event upper row boundary precedes lower boundary")
+    constrain_source_rows = any(
+        value is not None
+        for value in (
+            source_event_start,
+            source_event_row_id_after,
+            source_event_row_id_up_to,
+        )
+    )
     statement = select(MultiRegimeDecisionRecord)
+    if constrain_source_rows:
+        statement = statement.join(
+            CanonicalEventRecord,
+            CanonicalEventRecord.event_id == MultiRegimeDecisionRecord.source_event_id,
+        )
     if start is not None:
         statement = statement.where(MultiRegimeDecisionRecord.created_at >= start)
     if mode is not None:
         statement = statement.where(MultiRegimeDecisionRecord.mode == mode.value)
     if source_event_ids:
         statement = statement.where(
-            MultiRegimeDecisionRecord.source_event_id.in_(
-                tuple(dict.fromkeys(source_event_ids))
-            )
+            MultiRegimeDecisionRecord.source_event_id.in_(tuple(dict.fromkeys(source_event_ids)))
         )
+    if source_event_start is not None:
+        statement = statement.where(CanonicalEventRecord.exchange_timestamp >= source_event_start)
+    if source_event_row_id_after is not None:
+        statement = statement.where(CanonicalEventRecord.id > source_event_row_id_after)
+    if source_event_row_id_up_to is not None:
+        statement = statement.where(CanonicalEventRecord.id <= source_event_row_id_up_to)
     records = (
         await session.scalars(
             statement.order_by(
@@ -125,9 +152,7 @@ async def load_multi_regime_batches(
     batches: list[MultiRegimeDecisionBatch] = []
     for record in records:
         if _hash(record.payload) != record.payload_hash:
-            raise MultiRegimeDecisionIntegrityError(
-                "stored multi-regime batch checksum mismatch"
-            )
+            raise MultiRegimeDecisionIntegrityError("stored multi-regime batch checksum mismatch")
         batches.append(MultiRegimeDecisionBatch.model_validate(record.payload))
     return tuple(batches)
 
@@ -153,15 +178,11 @@ async def _save_risk_decision(session: AsyncSession, decision: RiskDecision) -> 
         unique_value=decision.decision_id,
     )
     stored = await session.scalar(
-        select(RiskDecisionRecord).where(
-            RiskDecisionRecord.decision_id == decision.decision_id
-        )
+        select(RiskDecisionRecord).where(RiskDecisionRecord.decision_id == decision.decision_id)
     )
     if stored is None or _hash(stored.payload) != _hash(payload):
         await session.rollback()
-        raise MultiRegimeDecisionIntegrityError(
-            "risk decision identity has conflicting content"
-        )
+        raise MultiRegimeDecisionIntegrityError("risk decision identity has conflicting content")
 
 
 async def _insert_once(
@@ -175,16 +196,16 @@ async def _insert_once(
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         result = await session.execute(
-            pg_insert(model).values(dict(values)).on_conflict_do_nothing(
-                index_elements=[unique_column]
-            )
+            pg_insert(model)
+            .values(dict(values))
+            .on_conflict_do_nothing(index_elements=[unique_column])
         )
         return bool(getattr(result, "rowcount", 0))
     if dialect == "sqlite":
         result = await session.execute(
-            sqlite_insert(model).values(dict(values)).on_conflict_do_nothing(
-                index_elements=[unique_column]
-            )
+            sqlite_insert(model)
+            .values(dict(values))
+            .on_conflict_do_nothing(index_elements=[unique_column])
         )
         return bool(getattr(result, "rowcount", 0))
     column = getattr(model, unique_column)

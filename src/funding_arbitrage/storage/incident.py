@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 GENESIS_HASH = "0" * 64
 IMMUTABLE_OPERATIONAL_TABLES = (
     "canonical_events",
+    "canonical_journal_profiles",
     "ledger_transactions",
     "ledger_postings",
     "reconciliation_audits",

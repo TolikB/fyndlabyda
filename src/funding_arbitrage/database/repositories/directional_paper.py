@@ -45,6 +45,8 @@ class DirectionalPaperCheckpoint:
     event_row_id: int
     event_id: str
     event_timestamp: datetime
+    journal_profile_boundary_id: str | None = None
+    journal_profile_config_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,8 @@ async def save_directional_paper_event(
     event_row_id: int,
     portfolio_snapshot: PortfolioSnapshot | None = None,
     consumer_name: str = "multi_regime_paper_v1",
+    journal_profile_boundary_id: str | None = None,
+    journal_profile_config_sha256: str | None = None,
 ) -> None:
     await save_directional_paper_page(
         session,
@@ -76,6 +80,8 @@ async def save_directional_paper_event(
             ),
         ),
         consumer_name=consumer_name,
+        journal_profile_boundary_id=journal_profile_boundary_id,
+        journal_profile_config_sha256=journal_profile_config_sha256,
     )
 
 
@@ -84,17 +90,26 @@ async def save_directional_paper_page(
     projections: Sequence[DirectionalPaperEventProjection],
     *,
     consumer_name: str = "multi_regime_paper_v1",
+    journal_profile_boundary_id: str | None = None,
+    journal_profile_config_sha256: str | None = None,
 ) -> None:
     """Persist one ordered replay page and advance its checkpoint atomically."""
 
     if not projections:
         raise ValueError("paper projection page cannot be empty")
+    if (journal_profile_boundary_id is None) is not (journal_profile_config_sha256 is None):
+        raise ValueError("paper checkpoint journal profile identity is incomplete")
+    if journal_profile_boundary_id is not None and not journal_profile_boundary_id.strip():
+        raise ValueError("paper checkpoint journal profile boundary is blank")
+    if journal_profile_config_sha256 is not None and (
+        len(journal_profile_config_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in journal_profile_config_sha256)
+    ):
+        raise ValueError("paper checkpoint journal profile hash is invalid")
     previous_row_id = 0
     for projection in projections:
         if projection.event_row_id <= previous_row_id:
-            raise ValueError(
-                "paper projection row IDs must be positive and strictly increasing"
-            )
+            raise ValueError("paper projection row IDs must be positive and strictly increasing")
         previous_row_id = projection.event_row_id
     try:
         for projection in projections:
@@ -164,9 +179,7 @@ async def save_directional_paper_page(
                         total_pnl=snapshot.total_pnl,
                         funding_pnl=snapshot.funding_pnl,
                         fees=snapshot.fees,
-                        balances={
-                            key: str(value) for key, value in snapshot.balances.items()
-                        },
+                        balances={key: str(value) for key, value in snapshot.balances.items()},
                     )
                 )
         final = projections[-1]
@@ -175,6 +188,8 @@ async def save_directional_paper_page(
             final.event,
             final.event_row_id,
             consumer_name,
+            journal_profile_boundary_id,
+            journal_profile_config_sha256,
         )
         await session.commit()
     except Exception:
@@ -215,9 +230,7 @@ async def load_advanced_paper_positions(
             .order_by(PositionStateRecord.updated_at, PositionStateRecord.position_id)
         )
     ).all()
-    return tuple(
-        AdvancedPaperPosition.model_validate(record.payload) for record in records
-    )
+    return tuple(AdvancedPaperPosition.model_validate(record.payload) for record in records)
 
 
 async def load_directional_paper_checkpoint(
@@ -236,6 +249,8 @@ async def load_directional_paper_checkpoint(
         event_row_id=record.event_row_id,
         event_id=record.event_id,
         event_timestamp=_utc(record.event_timestamp),
+        journal_profile_boundary_id=record.journal_profile_boundary_id,
+        journal_profile_config_sha256=record.journal_profile_config_sha256,
     )
 
 
@@ -360,12 +375,8 @@ async def _save_fills(
             "source_event_kind": source_event.kind.value,
             "source_event_source": source_event.metadata.source,
             "source_event_quality": source_event.metadata.quality.value,
-            "source_exchange_timestamp": (
-                source_event.metadata.exchange_timestamp.isoformat()
-            ),
-            "source_receive_timestamp": (
-                source_event.metadata.receive_timestamp.isoformat()
-            ),
+            "source_exchange_timestamp": (source_event.metadata.exchange_timestamp.isoformat()),
+            "source_receive_timestamp": (source_event.metadata.receive_timestamp.isoformat()),
             "source_instrument": position.instrument.model_dump(mode="json"),
         }
         record = await session.scalar(
@@ -421,10 +432,7 @@ async def _save_advanced_position(
         "instrument_id": primary.instrument.canonical_id,
         "status": position.status.value,
         "signed_quantity": sum(
-            (
-                position.signed_quantity(order.leg_index)
-                for order in position.entry_orders
-            ),
+            (position.signed_quantity(order.leg_index) for order in position.entry_orders),
             Decimal("0"),
         ),
         "entry_price": primary.average_fill_price,
@@ -438,18 +446,14 @@ async def _save_advanced_position(
         "payload": payload,
     }
     record = await session.scalar(
-        select(PositionStateRecord).where(
-            PositionStateRecord.position_id == position.position_id
-        )
+        select(PositionStateRecord).where(PositionStateRecord.position_id == position.position_id)
     )
     if record is None:
         session.add(PositionStateRecord(**values))
         await session.flush()
         return
     if _utc(record.updated_at) > position.updated_at:
-        raise DirectionalPaperIntegrityError(
-            "advanced paper position projection moved backwards"
-        )
+        raise DirectionalPaperIntegrityError("advanced paper position projection moved backwards")
     for key, value in values.items():
         setattr(record, key, value)
 
@@ -491,9 +495,7 @@ async def _save_advanced_order(
         await session.flush()
         return
     if record.version > order.version:
-        raise DirectionalPaperIntegrityError(
-            "advanced paper OMS order version moved backwards"
-        )
+        raise DirectionalPaperIntegrityError("advanced paper OMS order version moved backwards")
     if record.version == order.version and _hash(record.payload) != _hash(payload):
         raise DirectionalPaperIntegrityError(
             "advanced paper OMS order version has conflicting content"
@@ -524,12 +526,8 @@ async def _save_advanced_fills(
             "source_event_kind": source_event.kind.value,
             "source_event_source": source_event.metadata.source,
             "source_event_quality": source_event.metadata.quality.value,
-            "source_exchange_timestamp": (
-                source_event.metadata.exchange_timestamp.isoformat()
-            ),
-            "source_receive_timestamp": (
-                source_event.metadata.receive_timestamp.isoformat()
-            ),
+            "source_exchange_timestamp": (source_event.metadata.exchange_timestamp.isoformat()),
+            "source_receive_timestamp": (source_event.metadata.receive_timestamp.isoformat()),
             "source_instrument": order.instrument.model_dump(mode="json"),
             "advanced_position_id": position.position_id,
             "leg_index": order.leg_index,
@@ -544,9 +542,7 @@ async def _save_advanced_fills(
         if record is not None:
             stored_fill = _stored_fill_payload(record.payload)
             if stored_fill is None or _hash(stored_fill) != _hash(legacy_payload):
-                raise DirectionalPaperIntegrityError(
-                    "advanced paper fill identity collision"
-                )
+                raise DirectionalPaperIntegrityError("advanced paper fill identity collision")
             continue
         session.add(
             ExecutionFillRecord(
@@ -575,6 +571,8 @@ async def _save_checkpoint(
     event: EventEnvelope[Any],
     event_row_id: int,
     consumer_name: str,
+    journal_profile_boundary_id: str | None,
+    journal_profile_config_sha256: str | None,
 ) -> None:
     record = await session.scalar(
         select(MultiRegimePaperCheckpointRecord).where(
@@ -585,6 +583,8 @@ async def _save_checkpoint(
         "event_row_id": event_row_id,
         "event_id": event.metadata.event_id,
         "event_timestamp": event.metadata.exchange_timestamp,
+        "journal_profile_boundary_id": journal_profile_boundary_id,
+        "journal_profile_config_sha256": journal_profile_config_sha256,
         "updated_at": event.metadata.receive_timestamp,
     }
     if record is None:
@@ -595,6 +595,13 @@ async def _save_checkpoint(
     if record.event_row_id == event_row_id:
         if record.event_id != event.metadata.event_id:
             raise DirectionalPaperIntegrityError("paper checkpoint row identity collision")
+        if (
+            record.journal_profile_boundary_id != journal_profile_boundary_id
+            or record.journal_profile_config_sha256 != journal_profile_config_sha256
+        ):
+            raise DirectionalPaperIntegrityError(
+                "paper checkpoint journal profile identity collision"
+            )
         return
     for key, value in values.items():
         setattr(record, key, value)
@@ -630,6 +637,7 @@ def _stored_fill_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
 def _stable_id(prefix: str, *parts: str) -> str:
     encoded = json.dumps(parts, separators=(",", ":")).encode()
     return f"{prefix}_" + hashlib.sha256(encoded).hexdigest()[:32]
+
 
 def _utc(value: datetime) -> datetime:
     return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)

@@ -145,6 +145,7 @@ def test_live_factory_uses_native_mexc_adapter_without_network_calls() -> None:
     settings = Settings(
         _env_file=None,
         APP_ENV="production",
+        RELEASE_COMMIT_SHA="a" * 40,
         RUN_MODE="live",
         MARKET_DATA_MODE="live_public",
         EXECUTION_MODE="live",

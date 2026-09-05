@@ -46,13 +46,18 @@ public_event_capability = Gauge(
 )
 public_events_total = Counter(
     "funding_public_events_total",
-    "Canonical public market events accepted",
+    "Normalized public market observations accepted by canonical ingress",
     ["exchange", "stream", "source"],
 )
 canonical_stream_quality = Gauge(
     "funding_canonical_stream_quality",
     "One-hot canonical stream data quality state",
     ["exchange", "stream", "instrument", "quality"],
+)
+canonical_high_frequency_events_sampled_out_total = Counter(
+    "funding_canonical_high_frequency_events_sampled_out_total",
+    "Repeated canonical market observations omitted by the configured sampler",
+    ["kind"],
 )
 venue_rate_limit_milliseconds = Gauge(
     "funding_venue_rate_limit_milliseconds",

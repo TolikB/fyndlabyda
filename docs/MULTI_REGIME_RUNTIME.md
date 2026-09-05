@@ -21,6 +21,19 @@ paper, and replay flows. The decision path is:
       -> OMS/fill/position projections + paper checkpoint
       -> stop, target, time-stop, or failed/partial-leg compensation
 
+This runtime requires a complete canonical high-frequency journal. Configuration
+fails closed when `MULTI_REGIME_ENABLED=true` is combined with a sampled or disabled
+journal. A database-scoped writer lease serializes complete producer lifetimes;
+the lease owner records an immutable profile boundary before producers start.
+Warm-up is limited by canonical row ID to the latest contiguous window with the
+exact same profile, code revision, simulation versions, and recording config hash.
+Exchange timestamps independently bound the requested historical horizon, so a
+delayed event written after a boundary is not lost merely because its exchange
+time predates process startup. Unlabeled or cross-profile rows are never silently
+mixed into replay. Capacity-constrained sampled deployments therefore run
+the legacy funding paper loop only and expose `degraded=true` at
+`GET /system/canonical-journal`.
+
 `StrategySuite` is declarative and has no order or sizing authority. It normalizes
 directional, funding/basis, lead-lag/stat-arb, dated-futures basis, options,
 passive-market-making, Martingale, grid, and loss-averaging evaluations. Context
@@ -109,7 +122,12 @@ At process start, MULTI_REGIME_RESTORE_HOURS bounds feature warm-up. Historical 
 and strategy/AI decisions are not recomputed because portfolio/model state is
 time-dependent; persisted decision batches remain authoritative. PAPER positions
 are restored from their latest durable projection, and only canonical rows after
-the paper checkpoint are replayed.
+the paper checkpoint are replayed. The checkpoint is atomically bound to the
+latest compatible profile boundary that strictly covers its event row and to the
+config hash that produced its positions; legacy, missing, non-covering, or
+incompatible bindings fail startup even when the numeric cursor equals a new
+boundary. PostgreSQL schemas must reach the exact Alembic head before startup;
+`PAPER_AUTO_INIT_DATABASE` is limited to local non-PostgreSQL smoke tests.
 
 Multi-regime PAPER execution is enabled only when all of these conditions hold:
 

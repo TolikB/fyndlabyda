@@ -418,6 +418,34 @@ async def test_collector_rejects_rest_book_overtaken_by_websocket() -> None:
     assert selected.sequence == 2
     assert published == []
 
+    sampled_adapter = OvertakenRestMock()
+    sampled_collector = MarketDataCollector(
+        [sampled_adapter],
+        orderbook_symbol_limit=1,
+        enable_streams=True,
+        canonical_book_event_sink=capture,
+        canonical_book_snapshot_from_selected=True,
+    )
+    sampled_snapshot = await asyncio.wait_for(
+        sampled_collector.collect_once(
+            {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
+        ),
+        timeout=2,
+    )
+    await sampled_collector.close()
+
+    sampled_selected = sampled_snapshot.orderbook(
+        "bybit", "BTCUSDT", InstrumentType.PERPETUAL
+    )
+    assert sampled_selected is not None
+    assert sampled_selected.sequence == 2
+    assert len(published) == 1
+    assert published[0].payload.sequence == 2
+    assert (
+        published[0].metadata.source
+        == "BYBIT.PUBLIC.ORDERBOOK.COLLECTOR_SNAPSHOT"
+    )
+
 
 @pytest.mark.asyncio
 async def test_collector_records_ticker_and_orderbook_stream_heartbeats() -> None:

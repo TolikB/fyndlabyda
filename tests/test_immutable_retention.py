@@ -64,8 +64,12 @@ def test_retention_policy_is_fail_closed_and_complete() -> None:
 
 
 def test_postgres_migration_rejects_all_mutations_on_authoritative_tables() -> None:
-    migration = Path("migrations/versions/0013_append_only_retention.py").read_text(
-        encoding="utf-8"
+    migration = "\n".join(
+        Path(path).read_text(encoding="utf-8")
+        for path in (
+            "migrations/versions/0013_append_only_retention.py",
+            "migrations/versions/0018_journal_profiles.py",
+        )
     )
     for table in IMMUTABLE_OPERATIONAL_TABLES:
         assert f'"{table}"' in migration

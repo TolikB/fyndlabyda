@@ -145,6 +145,7 @@ jobs:
           tests/test_database_replay.py
           tests/test_historical_replay.py
           tests/test_event_journal.py
+          tests/test_journal_profiles.py
           tests/test_durable_oms.py
           tests/test_continuous_reconciliation.py
           tests/test_live_runner_lifecycle.py

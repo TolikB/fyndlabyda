@@ -30,6 +30,10 @@ def create_database(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker
 
 
 async def init_database(engine: AsyncEngine) -> None:
+    if engine.dialect.name == "postgresql":
+        raise RuntimeError(
+            "PostgreSQL schema auto-init is forbidden; run Alembic migrations first"
+        )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 

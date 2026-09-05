@@ -15,6 +15,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.database.models import CanonicalEventRecord
+from funding_arbitrage.database.repositories.journal_profiles import (
+    CanonicalJournalProfileSpec,
+    assert_canonical_journal_rows_compatible,
+)
 from funding_arbitrage.domain.events import (
     BalanceSnapshot,
     BookDelta,
@@ -98,9 +102,7 @@ async def append_event(session: AsyncSession, event: EventEnvelope[Any]) -> bool
     return await append_events(session, [event]) == 1
 
 
-async def append_events(
-    session: AsyncSession, events: Sequence[EventEnvelope[Any]]
-) -> int:
+async def append_events(session: AsyncSession, events: Sequence[EventEnvelope[Any]]) -> int:
     """Append a deduplicated batch in one transaction and return inserted rows."""
 
     unique: dict[str, dict[str, Any]] = {}
@@ -125,8 +127,7 @@ async def append_events(
         event_id: payload_hash for event_id, payload_hash in existing_rows
     }
     if any(
-        event_id in existing_hashes
-        and existing_hashes[event_id] != row["payload_hash"]
+        event_id in existing_hashes and existing_hashes[event_id] != row["payload_hash"]
         for event_id, row in unique.items()
     ):
         await session.rollback()
@@ -186,18 +187,12 @@ def event_query(
     if end is not None:
         statement = statement.where(CanonicalEventRecord.exchange_timestamp < end)
     if kinds:
-        statement = statement.where(
-            CanonicalEventRecord.kind.in_([kind.value for kind in kinds])
-        )
+        statement = statement.where(CanonicalEventRecord.kind.in_([kind.value for kind in kinds]))
     if source is not None:
         statement = statement.where(CanonicalEventRecord.source == source)
     if correlation_id is not None:
-        statement = statement.where(
-            CanonicalEventRecord.correlation_id == correlation_id
-        )
-    native_sequence_is_missing = case(
-        (CanonicalEventRecord.native_sequence.is_(None), 1), else_=0
-    )
+        statement = statement.where(CanonicalEventRecord.correlation_id == correlation_id)
+    native_sequence_is_missing = case((CanonicalEventRecord.native_sequence.is_(None), 1), else_=0)
     # The durable row ID preserves arrival order when a venue reuses native
     # snapshot identity, including across wall-clock changes and process restarts.
     return statement.order_by(
@@ -210,7 +205,7 @@ def event_query(
     )
 
 
-async def load_events(
+async def load_forensic_events(
     session: AsyncSession,
     *,
     start: datetime | None = None,
@@ -219,6 +214,8 @@ async def load_events(
     source: str | None = None,
     correlation_id: str | None = None,
 ) -> list[EventEnvelope[BaseModel]]:
+    """Read raw evidence without asserting one replay-compatible profile."""
+
     records = (
         await session.scalars(
             event_query(
@@ -230,6 +227,39 @@ async def load_events(
             )
         )
     ).all()
+    return [record_to_event(record) for record in records]
+
+
+async def load_replay_events(
+    session: AsyncSession,
+    *,
+    required_journal_profile: CanonicalJournalProfileSpec,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    kinds: Sequence[EventKind] = (),
+    source: str | None = None,
+    correlation_id: str | None = None,
+) -> list[EventEnvelope[BaseModel]]:
+    """Load replay rows only after proving one exact journal profile covers them."""
+
+    records = (
+        await session.scalars(
+            event_query(
+                start=start,
+                end=end,
+                kinds=kinds,
+                source=source,
+                correlation_id=correlation_id,
+            )
+        )
+    ).all()
+    if records:
+        await assert_canonical_journal_rows_compatible(
+            session,
+            required_journal_profile,
+            first_event_row_id=min(record.id for record in records),
+            last_event_row_id=max(record.id for record in records),
+        )
     return [record_to_event(record) for record in records]
 
 
@@ -249,17 +279,13 @@ async def load_ingestion_events(
         raise ValueError("canonical event upper cursor precedes lower cursor")
     if limit <= 0:
         raise ValueError("canonical event page limit must be positive")
-    statement = select(CanonicalEventRecord).where(
-        CanonicalEventRecord.id > after_row_id
-    )
+    statement = select(CanonicalEventRecord).where(CanonicalEventRecord.id > after_row_id)
     if up_to_row_id is not None:
         statement = statement.where(CanonicalEventRecord.id <= up_to_row_id)
     if start is not None:
         statement = statement.where(CanonicalEventRecord.exchange_timestamp >= start)
     records = (
-        await session.scalars(
-            statement.order_by(CanonicalEventRecord.id).limit(limit)
-        )
+        await session.scalars(statement.order_by(CanonicalEventRecord.id).limit(limit))
     ).all()
     return [(record.id, record_to_event(record)) for record in records]
 

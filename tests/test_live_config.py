@@ -12,6 +12,7 @@ from tests.live_security import live_credential_policy_json
 def _live_values() -> dict[str, object]:
     values: dict[str, object] = {
         "APP_ENV": "production",
+        "RELEASE_COMMIT_SHA": "a" * 40,
         "RUN_MODE": "live",
         "MARKET_DATA_MODE": "live_public",
         "EXECUTION_MODE": "live",
@@ -294,6 +295,7 @@ def test_venues_without_supported_live_sandbox_are_rejected() -> None:
 def test_live_example_is_complete_after_only_secrets_are_supplied() -> None:
     settings = Settings(
         _env_file=".env.live.example",
+        RELEASE_COMMIT_SHA="a" * 40,
         POSTGRES_PASSWORD="database-secret-0123456789abcdef",
         DATABASE_URL=(
             "postgresql+asyncpg://funding:"

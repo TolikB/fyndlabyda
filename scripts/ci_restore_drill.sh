@@ -162,6 +162,19 @@ pg_tool() {
     exec "$@"
   ' sh "$@"
 }
+assert_profile_boundary_immutable() {
+  local output status
+  set +e
+  output="$(pg_exec funding '
+    UPDATE canonical_journal_profiles
+    SET profile = $$disabled$$
+    WHERE boundary_id = $$ci-restore-profile$$
+  ' 2>&1)"
+  status=$?
+  set -e
+  test "$status" -ne 0
+  grep -Fq "is append-only" <<<"$output"
+}
 critical_state_sha256() {
   local payload
   payload="$(pg_scalar funding '
@@ -221,13 +234,18 @@ critical_state_sha256() {
              to_jsonb(api_idempotency_records)::text
       FROM api_idempotency_records
       WHERE principal_id = $$ci-restore$$ AND idempotency_key = $$ci-restore-key$$
+      UNION ALL
+      SELECT $$journal_profile$$, boundary_id,
+             to_jsonb(canonical_journal_profiles)::text
+      FROM canonical_journal_profiles
+      WHERE boundary_id = $$ci-restore-profile$$
     ) AS critical_state
   ')" || return 1
   if [[ -z "$payload" || "$payload" == "null" ]]; then
     echo "critical restore-state payload is empty" >&2
     return 1
   fi
-  if [[ "$(jq --raw-output 'length' <<<"$payload")" != "14" ]]; then
+  if [[ "$(jq --raw-output 'length' <<<"$payload")" != "15" ]]; then
     echo "critical restore-state entity coverage is incomplete" >&2
     return 1
   fi
@@ -253,6 +271,17 @@ pg_exec funding '
     $$2026-01-01T00:00:00.001Z$$::timestamptz,
     1, repeat($$a$$, 64),
     $json${"marker":"target","notional":"17.25"}$json$::json
+  );
+  INSERT INTO canonical_journal_profiles(
+    boundary_id, started_at, after_event_row_id, profile,
+    high_frequency_events_enabled, minimum_interval_seconds,
+    simulation_versions, config_sha256
+  ) VALUES (
+    $$ci-restore-profile$$,
+    $$2026-01-01T00:00:00.002Z$$::timestamptz,
+    (SELECT id FROM canonical_events WHERE event_id = $$ci-restore-target$$),
+    $$full$$, true, $$0$$, json_build_array($$ci-restore$$),
+    repeat($$c$$, 64)
   );
   INSERT INTO paper_positions(
     position_id, opportunity_id, state, asset, capital, simulation_version,
@@ -390,6 +419,7 @@ target_event_count_in_backup="$(
 )"
 test "$target_event_count_in_backup" = "1"
 test "$(pg_scalar funding 'SELECT id || $$|$$ || marker FROM restore_exactness_sentinel')" = "1|target-row"
+assert_profile_boundary_immutable
 target_critical_state_sha256="$(critical_state_sha256)"
 [[ "$target_critical_state_sha256" =~ ^[0-9a-f]{64}$ ]]
 
@@ -494,8 +524,9 @@ test "$restored_target_event_count" = "1"
 test "$restored_target_marker" = "target"
 test "$restored_post_target_event_count" = "0"
 test "$restored_sentinel" = "1|target-row"
-test "$restored_alembic_head" = "0017_multi_regime_runtime"
+test "$restored_alembic_head" = "0018_journal_profiles"
 test "$restored_critical_state_sha256" = "$target_critical_state_sha256"
+assert_profile_boundary_immutable
 test "$orphan_restore_database_count" = "0"
 test ! -e "$swap_state"
 

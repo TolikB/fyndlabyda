@@ -50,6 +50,8 @@ services:
         required: false
       - path: ${APP_TELEGRAM_SECRETS_ENV_FILE:-./secrets/exchange/telegram.env}
         required: false
+    environment:
+      RELEASE_COMMIT_SHA: ${RELEASE_COMMIT_SHA:-development}
     depends_on:
       postgres:
         condition: service_healthy

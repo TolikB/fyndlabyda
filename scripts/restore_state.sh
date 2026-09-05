@@ -306,7 +306,7 @@ validate_restored_database() {
   local database_name="$1"
   local expected_migration_head="$2"
   local context="$3"
-  local schema_count migration_head missing_critical_table_count
+  local schema_count migration_head missing_critical_table_count profile_trigger_count
 
   if ! schema_count="$(database_schema_count "$database_name")"; then
     echo "$context schema validation failed" >&2
@@ -358,6 +358,7 @@ validate_restored_database() {
                      ('live_daily_reports'),
                      ('live_funding_payments'),
                      ('canonical_events'),
+                     ('canonical_journal_profiles'),
                      ('multi_regime_decision_batches'),
                      ('multi_regime_paper_checkpoints'),
                      ('analytics_replication_checkpoints'),
@@ -395,6 +396,33 @@ validate_restored_database() {
   fi
   if (( missing_critical_table_count != 0 )); then
     echo "$context is missing required application tables" >&2
+    return 1
+  fi
+  if ! profile_trigger_count="$(
+    postgres_database_exec "$database_name" psql --tuples-only --no-align \
+      --set ON_ERROR_STOP=1 \
+      --command "SELECT COUNT(*)
+                 FROM pg_catalog.pg_trigger AS trigger
+                 JOIN pg_catalog.pg_class AS relation
+                   ON relation.oid = trigger.tgrelid
+                 JOIN pg_catalog.pg_namespace AS namespace
+                   ON namespace.oid = relation.relnamespace
+                 JOIN pg_catalog.pg_proc AS procedure
+                   ON procedure.oid = trigger.tgfoid
+                 WHERE namespace.nspname = 'public'
+                   AND relation.relname = 'canonical_journal_profiles'
+                   AND NOT trigger.tgisinternal
+                   AND procedure.proname = 'funding_reject_immutable_mutation'
+                   AND trigger.tgname IN (
+                     'trg_canonical_journal_profiles_reject_update_delete',
+                     'trg_canonical_journal_profiles_reject_truncate'
+                   )" | tr -d '\r\n'
+  )"; then
+    echo "$context canonical journal profile trigger validation failed" >&2
+    return 1
+  fi
+  if [[ "$profile_trigger_count" != "2" ]]; then
+    echo "$context is missing canonical journal profile immutability triggers" >&2
     return 1
   fi
 }

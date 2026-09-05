@@ -18,6 +18,27 @@ async def exchanges(runtime: Annotated[RuntimeState, Depends(get_runtime)]) -> l
     ]
 
 
+@router.get("/system/canonical-journal")
+async def canonical_journal_status(request: Request) -> dict[str, object]:
+    """Expose the non-secret recording contract used for replay compatibility."""
+
+    profile = request.app.state.canonical_journal_profile
+    boundary = request.app.state.canonical_journal_profile_boundary
+    return {
+        "recording_active": boundary is not None,
+        "profile": profile.profile,
+        "degraded": profile.profile != "full",
+        "high_frequency_events_enabled": profile.high_frequency_events_enabled,
+        "minimum_interval_seconds": profile.minimum_interval_seconds,
+        "simulation_versions": list(profile.simulation_versions),
+        "config_sha256": profile.config_sha256,
+        "boundary_id": boundary.boundary_id if boundary is not None else None,
+        "after_event_row_id": (
+            boundary.after_event_row_id if boundary is not None else None
+        ),
+    }
+
+
 @router.get("/system/live")
 async def live_status(request: Request) -> dict[str, object]:
     """Expose live safety state without returning credentials or private payloads."""

@@ -40,6 +40,11 @@ from funding_arbitrage.database.repositories.backtest_jobs import (
 from funding_arbitrage.database.repositories.control_plane import (
     DatabaseControlPlaneIdempotencyStore,
 )
+from funding_arbitrage.database.repositories.journal_profiles import (
+    append_canonical_journal_profile_boundary,
+    canonical_journal_profile_spec,
+    canonical_journal_writer_lease,
+)
 from funding_arbitrage.database.repositories.market_data import (
     load_portfolio_equity_high_water,
 )
@@ -64,6 +69,10 @@ from funding_arbitrage.security.control_plane import (
 from funding_arbitrage.security.rate_limit import create_control_plane_rate_limiter
 from funding_arbitrage.security.revocation import create_token_revocation_store
 from funding_arbitrage.services.event_router import CanonicalEventRouter
+from funding_arbitrage.services.event_sampling import (
+    CanonicalEventSink,
+    CanonicalHighFrequencyEventSampler,
+)
 from funding_arbitrage.services.event_writer import CanonicalEventWriter
 from funding_arbitrage.services.live_runner import LiveTradingRunner
 from funding_arbitrage.services.multi_regime import (
@@ -131,8 +140,57 @@ def _finalize_shutdown(
     raise BaseExceptionGroup("application shutdown failed", failures)
 
 
+def _required_public_event_kinds(settings: Settings) -> tuple[str, ...]:
+    kinds = [EventKind.FUNDING_SNAPSHOT.value]
+    if settings.canonical_high_frequency_market_events_enabled:
+        kinds.insert(0, "BOOK")
+    return tuple(kinds)
+
+
+def _canonical_stream_stale_seconds(settings: Settings, base_seconds: int) -> float:
+    if not settings.canonical_high_frequency_market_events_enabled:
+        return float(base_seconds)
+    return max(
+        float(base_seconds),
+        settings.canonical_high_frequency_market_event_min_interval_seconds * 2,
+    )
+
+
+def _canonical_high_frequency_event_sink(
+    settings: Settings,
+    sink: CanonicalEventSink,
+) -> CanonicalEventSink | None:
+    if not settings.canonical_high_frequency_market_events_enabled:
+        return None
+    interval = settings.canonical_high_frequency_market_event_min_interval_seconds
+    if interval <= 0:
+        return sink
+    return CanonicalHighFrequencyEventSampler(
+        sink,
+        minimum_interval_seconds=interval,
+    )
+
+
+def _canonical_native_book_event_sink(
+    settings: Settings,
+    high_frequency_sink: CanonicalEventSink | None,
+) -> CanonicalEventSink | None:
+    if settings.canonical_high_frequency_market_event_min_interval_seconds > 0:
+        return None
+    return high_frequency_sink
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
+    journal_profile_spec = canonical_journal_profile_spec(active_settings)
+    canonical_book_stale_seconds = _canonical_stream_stale_seconds(
+        active_settings,
+        active_settings.orderbook_stream_stale_seconds,
+    )
+    canonical_funding_stale_seconds = _canonical_stream_stale_seconds(
+        active_settings,
+        active_settings.funding_snapshot_stale_seconds,
+    )
     engine, session_factory = create_database(active_settings)
     market_replay_job_store = DurableMarketReplayJobStore(session_factory)
     market_replay_worker_id = "market-worker-" + uuid4().hex
@@ -144,9 +202,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         retry_window_seconds=active_settings.canonical_event_retry_window_seconds,
         retry_initial_seconds=active_settings.canonical_event_retry_initial_seconds,
         retry_max_seconds=active_settings.canonical_event_retry_max_seconds,
-        shutdown_timeout_seconds=(
-            active_settings.canonical_event_shutdown_timeout_seconds
-        ),
+        shutdown_timeout_seconds=(active_settings.canonical_event_shutdown_timeout_seconds),
     )
     clickhouse_writer: ClickHouseHttpWriter | None = None
     clickhouse_replicator: ClickHouseEventReplicator | None = None
@@ -161,9 +217,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 database=active_settings.clickhouse_database,
                 username=active_settings.clickhouse_username,
                 password=active_settings.clickhouse_password,
-                request_timeout_seconds=(
-                    active_settings.clickhouse_request_timeout_seconds
-                ),
+                request_timeout_seconds=(active_settings.clickhouse_request_timeout_seconds),
                 maximum_batch_rows=active_settings.clickhouse_replication_batch_size,
             ),
             tls_context=tls_context,
@@ -182,21 +236,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     event_quality_monitor = DataQualityMonitor(
         stale_after=timedelta(seconds=active_settings.market_data_stale_seconds),
-        unavailable_after=timedelta(
-            seconds=active_settings.market_data_stale_seconds * 3
-        ),
+        unavailable_after=timedelta(seconds=active_settings.market_data_stale_seconds * 3),
         stream_timeouts={
             "BOOK": (
-                timedelta(seconds=active_settings.orderbook_stream_stale_seconds),
-                timedelta(seconds=active_settings.orderbook_stream_stale_seconds * 3),
+                timedelta(seconds=canonical_book_stale_seconds),
+                timedelta(seconds=canonical_book_stale_seconds * 3),
             ),
             EventKind.FUNDING_SNAPSHOT.value: (
-                timedelta(seconds=active_settings.funding_snapshot_stale_seconds),
-                timedelta(seconds=active_settings.funding_snapshot_stale_seconds * 3),
-            )
+                timedelta(seconds=canonical_funding_stale_seconds),
+                timedelta(seconds=canonical_funding_stale_seconds * 3),
+            ),
         },
     )
     event_router = CanonicalEventRouter(event_writer, event_quality_monitor)
+    canonical_high_frequency_event_sink = _canonical_high_frequency_event_sink(
+        active_settings,
+        event_router.publish,
+    )
+    if canonical_high_frequency_event_sink is None:
+        logger.warning(
+            "canonical_high_frequency_market_event_journal_disabled",
+            extra={"reason": "bounded_storage_profile"},
+        )
+    elif active_settings.canonical_high_frequency_market_event_min_interval_seconds > 0:
+        logger.warning(
+            "canonical_high_frequency_market_event_journal_sampled",
+            extra={
+                "minimum_interval_seconds": (
+                    active_settings.canonical_high_frequency_market_event_min_interval_seconds
+                )
+            },
+        )
     multi_regime_runtime: DurableMultiRegimeRuntime | None = None
     decision_support_provider: RuntimeDecisionSupportProvider | None = None
     decision_support_drawdown_tracker: EquityHighWaterDrawdown | None = None
@@ -205,10 +275,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     paper_broker: DirectionalPaperBroker | None = None
     advanced_paper_broker: AdvancedStrategyPaperBroker | None = None
     adapters = create_public_adapters(
-        active_settings, canonical_book_event_sink=event_router.publish
+        active_settings,
+        # A sampled sequence cannot safely omit intermediate deltas. The bounded
+        # profile journals periodic complete selected snapshots from the collector.
+        canonical_book_event_sink=_canonical_native_book_event_sink(
+            active_settings,
+            canonical_high_frequency_event_sink,
+        ),
     )
     public_events = (
-        create_public_event_supervisor(active_settings, event_router.publish)
+        create_public_event_supervisor(
+            active_settings,
+            canonical_high_frequency_event_sink or event_router.publish,
+        )
         if active_settings.market_data_mode == "live_public"
         and active_settings.run_mode in {"paper_test", "live"}
         else None
@@ -228,8 +307,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return False, clickhouse_decision_replicator.health_reason
         if multi_regime_runtime is not None and not multi_regime_runtime.healthy:
             return False, (
-                "multi_regime_runtime_failed:"
-                + (multi_regime_runtime.failure_reason or "unknown")
+                "multi_regime_runtime_failed:" + (multi_regime_runtime.failure_reason or "unknown")
             )
         if public_events is not None:
             configured_venues = (
@@ -240,7 +318,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             healthy, _ = event_router.venue_streams_usable(
                 public_events.required_quality_streams,
                 configured_venues,
-                ("BOOK", EventKind.FUNDING_SNAPSHOT.value),
+                _required_public_event_kinds(active_settings),
                 now=datetime.now(UTC),
             )
             if not healthy:
@@ -263,13 +341,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 maximum_participation_rate=(
                     active_settings.multi_regime_paper_maximum_participation_rate
                 ),
-                impact_coefficient_bps=(
-                    active_settings.multi_regime_paper_impact_coefficient_bps
-                ),
+                impact_coefficient_bps=(active_settings.multi_regime_paper_impact_coefficient_bps),
             )
-            for venue, (maker_fee, taker_fee) in (
-                active_settings.fee_schedules.items()
-            )
+            for venue, (maker_fee, taker_fee) in (active_settings.fee_schedules.items())
         }
         paper_execution_enabled = (
             runtime_mode is TradingMode.PAPER
@@ -302,9 +376,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             paper_broker,
             advanced_paper_broker,
         )
-        execution_snapshot_provider = RuntimeStrategyExecutionSnapshotProvider(
-            runtime
-        )
+        execution_snapshot_provider = RuntimeStrategyExecutionSnapshotProvider(runtime)
         advanced_risk_provider = RuntimeAdvancedRiskContextProvider(
             runtime,
             paper_broker,
@@ -314,12 +386,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             artifacts = load_decision_support_artifacts(
                 active_settings.decision_support_artifact_root,
                 active_settings.decision_support_artifact_bundle_file,
-                expected_file_sha256=(
-                    active_settings.decision_support_artifact_sha256
-                ),
-                maximum_bytes=(
-                    active_settings.decision_support_artifact_maximum_bytes
-                ),
+                expected_file_sha256=(active_settings.decision_support_artifact_sha256),
+                maximum_bytes=(active_settings.decision_support_artifact_maximum_bytes),
             )
 
             if active_settings.run_mode != "live":
@@ -331,9 +399,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if active_settings.run_mode == "live":
                     live_runner = live_runner_for_decision_support
                     if live_runner is None or not live_runner.initialized:
-                        raise RuntimeError(
-                            "live decision-support equity is not initialized"
-                        )
+                        raise RuntimeError("live decision-support equity is not initialized")
                     live_state = live_runner.risk.state
                     return fresh_equity_drawdown(
                         current_equity=live_state.current_equity,
@@ -361,9 +427,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             decision_support_provider = RuntimeDecisionSupportProvider(
                 artifacts,
                 RuntimeDecisionSupportConfig(
-                    meta_label_enabled=(
-                        active_settings.decision_support_meta_label_enabled
-                    ),
+                    meta_label_enabled=(active_settings.decision_support_meta_label_enabled),
                     rl_enabled=active_settings.decision_support_rl_enabled,
                     meta_label_maximum_feature_zscore=(
                         active_settings.decision_support_meta_label_maximum_feature_zscore
@@ -399,27 +463,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             MultiRegimeEngineConfig(
                 mode=runtime_mode,
                 assets=active_settings.multi_regime_asset_values,
-                source_interval_seconds=(
-                    active_settings.multi_regime_source_interval_seconds
-                ),
-                strategy_interval_seconds=(
-                    active_settings.multi_regime_strategy_interval_seconds
-                ),
-                regime_interval_seconds=(
-                    active_settings.multi_regime_regime_interval_seconds
-                ),
-                stale_after_seconds=(
-                    active_settings.multi_regime_stale_after_seconds
-                ),
+                source_interval_seconds=(active_settings.multi_regime_source_interval_seconds),
+                strategy_interval_seconds=(active_settings.multi_regime_strategy_interval_seconds),
+                regime_interval_seconds=(active_settings.multi_regime_regime_interval_seconds),
+                stale_after_seconds=(active_settings.multi_regime_stale_after_seconds),
                 estimated_cost_bps=active_settings.multi_regime_estimated_cost_bps,
             ),
             risk_context_provider=risk_provider,
             # The mature legacy paper pipeline remains the sole funding execution
             # owner. The canonical suite still evaluates funding contexts, but it
             # cannot open a duplicate position or double-count a settlement.
-            executable_signal_types=(
-                PAPER_EXECUTABLE_SIGNAL_TYPES - {SignalType.FUNDING_BASIS}
-            ),
+            executable_signal_types=(PAPER_EXECUTABLE_SIGNAL_TYPES - {SignalType.FUNDING_BASIS}),
             supplemental_context_provider=supplemental_provider,
             decision_support_provider=decision_support_provider,
             execution_snapshot_provider=execution_snapshot_provider,
@@ -431,9 +485,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             paper_broker=paper_broker,
             advanced_paper_broker=advanced_paper_broker,
             runtime_state=runtime,
-            paper_execution_start_utc=(
-                active_settings.paper_autotrade_start_utc
-            ),
+            paper_execution_start_utc=(active_settings.paper_autotrade_start_utc),
+            canonical_journal_profile=journal_profile_spec,
         )
         event_router.subscribe(multi_regime_runtime.publish)
         if public_events is not None:
@@ -441,9 +494,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session_factory,
                 event_router.publish,
                 selector_config=UniverseSelectorConfig(
-                    maximum_assets=(
-                        active_settings.multi_regime_universe_maximum_assets
-                    ),
+                    maximum_assets=(active_settings.multi_regime_universe_maximum_assets),
                     maximum_new_assets_per_rebalance=(
                         active_settings.multi_regime_universe_maximum_new_assets
                     ),
@@ -456,9 +507,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     minimum_statistics_days=(
                         active_settings.multi_regime_universe_minimum_statistics_days
                     ),
-                    minimum_venue_count=(
-                        active_settings.multi_regime_universe_minimum_venue_count
-                    ),
+                    minimum_venue_count=(active_settings.multi_regime_universe_minimum_venue_count),
                     minimum_quote_volume_24h_usd=(
                         active_settings.multi_regime_universe_minimum_quote_volume_usd
                     ),
@@ -468,9 +517,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     minimum_open_interest_usd=(
                         active_settings.multi_regime_universe_minimum_open_interest_usd
                     ),
-                    maximum_spread_bps=(
-                        active_settings.multi_regime_universe_maximum_spread_bps
-                    ),
+                    maximum_spread_bps=(active_settings.multi_regime_universe_maximum_spread_bps),
                     maximum_slippage_10k_bps=(
                         active_settings.multi_regime_universe_maximum_slippage_bps
                     ),
@@ -480,30 +527,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     minimum_market_data_coverage=(
                         active_settings.multi_regime_universe_minimum_data_coverage
                     ),
-                    minimum_entry_score=(
-                        active_settings.multi_regime_universe_minimum_entry_score
-                    ),
+                    minimum_entry_score=(active_settings.multi_regime_universe_minimum_entry_score),
                     minimum_retention_score=(
                         active_settings.multi_regime_universe_minimum_retention_score
                     ),
                     target_funding_potential_bps_daily=(
                         active_settings.multi_regime_universe_target_funding_bps_daily
                     ),
-                    excluded_assets=(
-                        active_settings.multi_regime_universe_excluded_asset_values
-                    ),
+                    excluded_assets=(active_settings.multi_regime_universe_excluded_asset_values),
                 ),
-                rebalance_seconds=(
-                    active_settings.multi_regime_universe_rebalance_seconds
-                ),
+                rebalance_seconds=(active_settings.multi_regime_universe_rebalance_seconds),
                 enabled=active_settings.multi_regime_dynamic_universe_enabled,
             )
-            public_events.set_pre_mirror_snapshot_observer(
-                universe_publisher.observe_snapshot
-            )
+            public_events.set_pre_mirror_snapshot_observer(universe_publisher.observe_snapshot)
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def _runtime_lifespan(app: FastAPI) -> AsyncIterator[None]:
         nonlocal live_runner_for_decision_support
         configure_logging(active_settings.log_level)
         app.state.adapters = adapters
@@ -515,13 +554,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_quality_monitor = event_quality_monitor
         app.state.multi_regime_runtime = multi_regime_runtime
         app.state.decision_support_provider = decision_support_provider
-        app.state.decision_support_drawdown_tracker = (
-            decision_support_drawdown_tracker
-        )
+        app.state.decision_support_drawdown_tracker = decision_support_drawdown_tracker
         app.state.universe_publisher = universe_publisher
         app.state.clickhouse_replicator = clickhouse_replicator
         app.state.clickhouse_decision_replicator = clickhouse_decision_replicator
         app.state.public_events = public_events
+        app.state.canonical_journal_profile = journal_profile_spec
+        app.state.canonical_journal_profile_boundary = None
         runner: PaperTestRunner | SharedMarketPaperComparisonRunner | LiveTradingRunner | None = (
             None
         )
@@ -530,6 +569,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.live_runner = None
         if active_settings.run_mode == "paper_test" and active_settings.paper_auto_init_database:
             await init_database(engine)
+        if active_settings.run_mode in {"paper_test", "live"}:
+            async with session_factory() as session:
+                journal_boundary = await append_canonical_journal_profile_boundary(
+                    session,
+                    journal_profile_spec,
+                    writer_lease=app.state.canonical_journal_writer_lease,
+                )
+            app.state.canonical_journal_profile_boundary = journal_boundary
+            if multi_regime_runtime is not None:
+                multi_regime_runtime.bind_canonical_journal_boundary(journal_boundary)
+            logger.info(
+                "canonical_journal_profile_started",
+                extra={
+                    "profile": journal_profile_spec.profile,
+                    "after_event_row_id": journal_boundary.after_event_row_id,
+                    "config_sha256": journal_profile_spec.config_sha256,
+                },
+            )
         event_writer.start()
         if clickhouse_replicator is not None:
             analytics_task = asyncio.create_task(
@@ -543,9 +600,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 name="clickhouse-decision-replicator",
             )
             runtime.background_tasks.add(decision_analytics_task)
-            decision_analytics_task.add_done_callback(
-                runtime.background_tasks.discard
-            )
+            decision_analytics_task.add_done_callback(runtime.background_tasks.discard)
         recovery_task = asyncio.create_task(
             market_backtest_recovery_loop(
                 runtime,
@@ -562,18 +617,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 runtime,
                 session_factory,
                 public_events=public_events,
-                canonical_book_event_sink=event_router.publish,
-                canonical_option_event_sink=event_router.publish,
+                canonical_book_event_sink=canonical_high_frequency_event_sink,
+                canonical_option_event_sink=canonical_high_frequency_event_sink,
                 combined_snapshot_provider=(
                     multi_regime_runtime.combined_portfolio_snapshot
-                    if paper_broker is not None
-                    and multi_regime_runtime is not None
+                    if paper_broker is not None and multi_regime_runtime is not None
                     else None
                 ),
                 canonical_consumer_barrier=(
-                    multi_regime_runtime.flush
-                    if multi_regime_runtime is not None
-                    else None
+                    multi_regime_runtime.flush if multi_regime_runtime is not None else None
                 ),
             )
             if active_settings.paper_comparison_enabled:
@@ -624,17 +676,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if high_water is not None:
                     decision_support_drawdown_tracker.restore(high_water)
                 current = (
-                    multi_regime_runtime.combined_portfolio_snapshot(
-                        datetime.now(UTC)
-                    )
+                    multi_regime_runtime.combined_portfolio_snapshot(datetime.now(UTC))
                     if multi_regime_runtime is not None
                     else None
                 ) or runtime.portfolio.snapshot(datetime.now(UTC))
                 decision_support_drawdown_tracker.observe(current.equity)
-            if (
-                isinstance(runner, PaperTestRunner)
-                and runner.acceptance_collector is not None
-            ):
+            if isinstance(runner, PaperTestRunner) and runner.acceptance_collector is not None:
                 await runner.prepare_run()
             task = asyncio.create_task(runner.run(), name="paper-test-runner")
         elif active_settings.run_mode == "live":
@@ -654,8 +701,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 trading_adapters,
                 private_streams,
                 public_events,
-                canonical_book_event_sink=event_router.publish,
-                canonical_option_event_sink=event_router.publish,
+                canonical_book_event_sink=canonical_high_frequency_event_sink,
+                canonical_option_event_sink=canonical_high_frequency_event_sink,
             )
             live_runner_for_decision_support = runner
             app.state.live_runner = runner
@@ -750,6 +797,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await _attempt_shutdown("database_engine", engine.dispose, shutdown_failures)
             _finalize_shutdown(shutdown_failures, primary_error)
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if active_settings.run_mode not in {"paper_test", "live"}:
+            async with _runtime_lifespan(app):
+                yield
+            return
+        async with canonical_journal_writer_lease(engine) as writer_lease:
+            app.state.canonical_journal_writer_lease = writer_lease
+            try:
+                async with _runtime_lifespan(app):
+                    yield
+            finally:
+                app.state.canonical_journal_writer_lease = None
+
     app = FastAPI(title="Funding Arbitrage Bot", version="0.1.0", lifespan=lifespan)
     control_plane_security = ControlPlaneSecurity(ControlPlanePolicy.from_settings(active_settings))
     control_plane_audit_sink = DatabaseControlPlaneAuditSink(session_factory)
@@ -766,6 +827,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.control_plane_token_revocation_store = control_plane_token_revocation_store
     app.state.market_replay_job_store = market_replay_job_store
     app.state.market_replay_worker_id = market_replay_worker_id
+    app.state.canonical_journal_profile = journal_profile_spec
+    app.state.canonical_journal_profile_boundary = None
     app.add_middleware(
         ControlPlaneMiddleware,
         security=control_plane_security,

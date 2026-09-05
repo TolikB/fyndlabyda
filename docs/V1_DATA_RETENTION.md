@@ -1,10 +1,15 @@
 # V1 authoritative data retention and incident reconstruction
 
-V1 treats `canonical_events`, `ledger_transactions`, `ledger_postings`,
-`reconciliation_audits`, and `immutable_audit_log` as authoritative evidence.
+V1 treats `canonical_events`, `canonical_journal_profiles`,
+`ledger_transactions`, `ledger_postings`, `reconciliation_audits`, and
+`immutable_audit_log` as authoritative evidence.
 PostgreSQL rejects `UPDATE`, `DELETE`, and `TRUNCATE` on these tables. Normal
 application roles must have insert/select only; a schema owner is reserved for
 migrations and documented break-glass recovery.
+Migration downgrade refuses to remove journal-profile evidence once profile or
+profile-bound checkpoint rows exist. Restore validation requires both immutable
+profile triggers, and the restore drill checks a seeded profile row in the exact
+critical-state checksum and proves that mutation remains rejected after restore.
 
 ## Retention contract
 

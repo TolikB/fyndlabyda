@@ -179,6 +179,7 @@ class MarketDataCollector:
         option_strikes_per_expiry: int = 3,
         canonical_book_event_sink: CanonicalBookEventSink | None = None,
         canonical_option_event_sink: CanonicalOptionEventSink | None = None,
+        canonical_book_snapshot_from_selected: bool = False,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.adapters = tuple(adapters)
@@ -208,6 +209,9 @@ class MarketDataCollector:
         self.option_strikes_per_expiry = option_strikes_per_expiry
         self.canonical_book_event_sink = canonical_book_event_sink
         self.canonical_option_event_sink = canonical_option_event_sink
+        self.canonical_book_snapshot_from_selected = (
+            canonical_book_snapshot_from_selected
+        )
         self._clock = clock
         self.health = {adapter.name: CircuitBreaker() for adapter in self.adapters}
         self._funding_history_cache: dict[tuple[str, str], list[FundingHistoryPoint]] = {}
@@ -700,8 +704,29 @@ class MarketDataCollector:
                 if current is None or book_result.timestamp >= current.timestamp:
                     orderbooks[key] = book_result
                     accepted_rest_books.append(book_result)
+            books_to_publish = accepted_rest_books
+            book_event_source = (
+                f"{adapter.name.upper()}.PUBLIC.ORDERBOOK.REST_VALIDATION"
+            )
+            if self.canonical_book_snapshot_from_selected:
+                books_to_publish = [
+                    book
+                    for symbol, instrument_type in book_requests
+                    if (
+                        book := orderbooks.get(
+                            (adapter.name, symbol, instrument_type)
+                        )
+                    )
+                    is not None
+                ]
+                book_event_source = (
+                    f"{adapter.name.upper()}.PUBLIC.ORDERBOOK.COLLECTOR_SNAPSHOT"
+                )
             await self._publish_rest_book_events(
-                adapter.name, venue_instruments, accepted_rest_books
+                adapter.name,
+                venue_instruments,
+                books_to_publish,
+                source=book_event_source,
             )
             orderbook_coverage_ratio.labels(adapter.name).set(
                 len(orderbooks) / len(book_requests) if book_requests else 0
@@ -882,6 +907,8 @@ class MarketDataCollector:
         exchange: str,
         instruments: list[NormalizedInstrument],
         books: list[OrderBook],
+        *,
+        source: str,
     ) -> None:
         sink = self.canonical_book_event_sink
         if sink is None or not books:
@@ -925,9 +952,7 @@ class MarketDataCollector:
                     canonical_snapshot_event(
                         book,
                         canonical_instrument,
-                        source=(
-                            f"{exchange.upper()}.PUBLIC.ORDERBOOK.REST_VALIDATION"
-                        ),
+                        source=source,
                         receive_timestamp=observed_at,
                     )
                 )

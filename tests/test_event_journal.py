@@ -12,7 +12,7 @@ from funding_arbitrage.database.repositories.events import (
     EventJournalIntegrityError,
     append_event,
     append_events,
-    load_events,
+    load_forensic_events,
 )
 from funding_arbitrage.domain.events import (
     BookLevel,
@@ -92,7 +92,7 @@ async def test_journal_is_idempotent_and_replays_in_authoritative_order() -> Non
         assert await append_event(session, earlier) is False
 
         count = await session.scalar(select(func.count()).select_from(CanonicalEventRecord))
-        replay = await load_events(session, kinds=(EventKind.TRADE_TICK,))
+        replay = await load_forensic_events(session, kinds=(EventKind.TRADE_TICK,))
 
     await engine.dispose()
 
@@ -111,9 +111,7 @@ def _book_event(
 ) -> EventEnvelope[BookSnapshot]:
     received_at = NOW + timedelta(milliseconds=receive_offset_ms)
     observed_monotonic = (
-        receive_monotonic_ns
-        if receive_monotonic_ns is not None
-        else sequence + receive_offset_ms
+        receive_monotonic_ns if receive_monotonic_ns is not None else sequence + receive_offset_ms
     )
     payload = BookSnapshot(
         instrument=INSTRUMENT,
@@ -123,9 +121,7 @@ def _book_event(
         exchange_timestamp=NOW,
     )
     sequence_id = f"version:{sequence}"
-    occurrence_id = (
-        f"snapshot-observation-v1:{received_at.isoformat()}:{observed_monotonic}"
-    )
+    occurrence_id = f"snapshot-observation-v1:{received_at.isoformat()}:{observed_monotonic}"
     return EventEnvelope[BookSnapshot](
         kind=EventKind.BOOK_SNAPSHOT,
         metadata=EventMetadata(
@@ -158,7 +154,7 @@ async def test_replay_orders_equal_timestamp_books_by_numeric_native_sequence() 
     async with factory() as session:
         assert await append_event(session, _book_event(10))
         assert await append_event(session, _book_event(2))
-        replay = await load_events(session, kinds=(EventKind.BOOK_SNAPSHOT,))
+        replay = await load_forensic_events(session, kinds=(EventKind.BOOK_SNAPSHOT,))
         stored_sequences = (
             await session.scalars(
                 select(CanonicalEventRecord.native_sequence).order_by(
@@ -236,7 +232,7 @@ async def test_polled_snapshot_replay_uses_arrival_order_during_clock_rollback()
         assert await append_event(session, first) is True
         assert await append_event(session, second) is True
         assert await append_event(session, second) is False
-        replay = await load_events(session, kinds=(EventKind.FUNDING_SNAPSHOT,))
+        replay = await load_forensic_events(session, kinds=(EventKind.FUNDING_SNAPSHOT,))
 
     await engine.dispose()
     assert [event.payload.mark_price for event in replay] == [
@@ -251,36 +247,33 @@ async def test_revised_same_sequence_snapshot_appends_without_collision() -> Non
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     original = _book_event(10)
-    revised = _book_event(
-        10, bid_quantity=Decimal("2"), receive_offset_ms=1
-    )
-    restored = _book_event(
-        10, bid_quantity=Decimal("1"), receive_offset_ms=2
-    )
+    revised = _book_event(10, bid_quantity=Decimal("2"), receive_offset_ms=1)
+    restored = _book_event(10, bid_quantity=Decimal("1"), receive_offset_ms=2)
 
     async with factory() as session:
         assert await append_event(session, original) is True
         assert await append_event(session, revised) is True
         assert await append_event(session, restored) is True
         assert await append_event(session, restored) is False
-        replay = await load_events(
+        replay = await load_forensic_events(
             session,
             kinds=(EventKind.BOOK_SNAPSHOT,),
             source="mexc.public.book",
         )
-        count = await session.scalar(
-            select(func.count()).select_from(CanonicalEventRecord)
-        )
+        count = await session.scalar(select(func.count()).select_from(CanonicalEventRecord))
 
     await engine.dispose()
 
-    assert len(
-        {
-            original.metadata.event_id,
-            revised.metadata.event_id,
-            restored.metadata.event_id,
-        }
-    ) == 3
+    assert (
+        len(
+            {
+                original.metadata.event_id,
+                revised.metadata.event_id,
+                restored.metadata.event_id,
+            }
+        )
+        == 3
+    )
     assert len(replay) == 3
     assert [event.payload.bids[0].quantity for event in replay] == [
         Decimal("1"),
@@ -306,7 +299,7 @@ async def test_replay_uses_durable_arrival_order_during_clock_rollback() -> None
     async with factory() as session:
         assert await append_event(session, first) is True
         assert await append_event(session, second) is True
-        replay = await load_events(
+        replay = await load_forensic_events(
             session,
             kinds=(EventKind.BOOK_SNAPSHOT,),
             source="mexc.public.book",
@@ -330,7 +323,7 @@ async def test_journal_filters_by_source_correlation_and_half_open_time_range() 
     async with factory() as session:
         await append_event(session, _event(1))
         await append_event(session, _event(2, 100))
-        replay = await load_events(
+        replay = await load_forensic_events(
             session,
             start=NOW,
             end=NOW + timedelta(milliseconds=100),
@@ -352,17 +345,21 @@ def _hyperliquid_book_event(symbol: str) -> EventEnvelope[BookSnapshot]:
         instrument_type=InstrumentType.PERPETUAL,
         settlement_asset="USDC",
     )
-    return HyperliquidOrderBookNormalizer(instrument, depth=20).apply(
-        {
-            "coin": symbol,
-            "time": int(NOW.timestamp() * 1000),
-            "levels": [
-                [{"px": "100", "sz": "1"}],
-                [{"px": "101", "sz": "1"}],
-            ],
-        },
-        receive_timestamp=NOW,
-    ).event
+    return (
+        HyperliquidOrderBookNormalizer(instrument, depth=20)
+        .apply(
+            {
+                "coin": symbol,
+                "time": int(NOW.timestamp() * 1000),
+                "levels": [
+                    [{"px": "100", "sz": "1"}],
+                    [{"px": "101", "sz": "1"}],
+                ],
+            },
+            receive_timestamp=NOW,
+        )
+        .event
+    )
 
 
 async def test_same_time_different_instruments_append_replay_and_deduplicate() -> None:
@@ -376,14 +373,12 @@ async def test_same_time_different_instruments_append_replay_and_deduplicate() -
     async with factory() as session:
         assert await append_events(session, [btc, eth]) == 2
         assert await append_events(session, [btc, eth]) == 0
-        replay = await load_events(
+        replay = await load_forensic_events(
             session,
             kinds=(EventKind.BOOK_SNAPSHOT,),
             source="HYPERLIQUID.PUBLIC.L2BOOK",
         )
-        count = await session.scalar(
-            select(func.count()).select_from(CanonicalEventRecord)
-        )
+        count = await session.scalar(select(func.count()).select_from(CanonicalEventRecord))
 
     await engine.dispose()
 
@@ -447,9 +442,10 @@ async def test_journal_detects_stored_payload_tampering_before_replay() -> None:
         )
         await session.commit()
         with pytest.raises(EventJournalIntegrityError, match="payload checksum"):
-            await load_events(session)
+            await load_forensic_events(session)
 
     await engine.dispose()
+
 
 async def test_liquidation_event_round_trips_through_canonical_journal() -> None:
     timestamp = NOW + timedelta(seconds=1)
@@ -488,7 +484,7 @@ async def test_liquidation_event_round_trips_through_canonical_journal() -> None
 
     async with factory() as session:
         assert await append_event(session, event)
-        replay = await load_events(session, kinds=(EventKind.LIQUIDATION_TICK,))
+        replay = await load_forensic_events(session, kinds=(EventKind.LIQUIDATION_TICK,))
 
     await engine.dispose()
     assert len(replay) == 1
@@ -535,7 +531,7 @@ async def test_option_quote_round_trips_through_canonical_journal() -> None:
 
     async with factory() as session:
         assert await append_event(session, event)
-        replay = await load_events(
+        replay = await load_forensic_events(
             session,
             kinds=(EventKind.OPTION_QUOTE_SNAPSHOT,),
         )

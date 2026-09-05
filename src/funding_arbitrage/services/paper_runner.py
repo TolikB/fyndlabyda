@@ -200,6 +200,9 @@ class PaperTestRunner:
             option_strikes_per_expiry=settings.options_strikes_per_expiry,
             canonical_book_event_sink=canonical_book_event_sink,
             canonical_option_event_sink=canonical_option_event_sink,
+            canonical_book_snapshot_from_selected=(
+                settings.canonical_high_frequency_market_event_min_interval_seconds > 0
+            ),
         )
         self.executor = PaperTradingExecutor(
             fees={venue: schedule[1] for venue, schedule in settings.fee_schedules.items()},

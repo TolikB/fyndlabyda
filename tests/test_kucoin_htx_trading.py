@@ -45,6 +45,7 @@ def _live_settings() -> Settings:
     return Settings(
         _env_file=None,
         APP_ENV="production",
+        RELEASE_COMMIT_SHA="a" * 40,
         RUN_MODE="live",
         MARKET_DATA_MODE="live_public",
         EXECUTION_MODE="live",

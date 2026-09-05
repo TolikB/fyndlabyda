@@ -323,6 +323,7 @@ class PublicEventSupervisor:
         quality_stream_clock: Callable[[], float] = monotonic,
         reconnect_initial_seconds: float,
         reconnect_max_seconds: float,
+        high_frequency_market_events_enabled: bool = True,
     ) -> None:
         if symbol_limit <= 0 or rest_interval_seconds <= 0:
             raise ValueError("public event limits and intervals must be positive")
@@ -341,6 +342,7 @@ class PublicEventSupervisor:
         self._quality_stream_clock = quality_stream_clock
         self.reconnect_initial_seconds = reconnect_initial_seconds
         self.reconnect_max_seconds = reconnect_max_seconds
+        self.high_frequency_market_events_enabled = high_frequency_market_events_enabled
         self._normalizers = {
             self._key(account): CcxtPublicEventNormalizer(account.profile, account.exchange)
             for account in self.accounts
@@ -440,12 +442,15 @@ class PublicEventSupervisor:
 
     def _update_required_quality_streams(self, snapshot: MarketSnapshot) -> None:
         required: set[StreamIdentity] = set()
-        for exchange, symbol, instrument_type in snapshot.orderbooks:
-            instrument = snapshot.instrument(exchange, symbol, instrument_type)
-            if instrument is None:
-                continue
-            canonical = _legacy_instrument(instrument)
-            required.add(StreamIdentity(canonical.venue, "BOOK", canonical.canonical_id))
+        if self.high_frequency_market_events_enabled:
+            for exchange, symbol, instrument_type in snapshot.orderbooks:
+                instrument = snapshot.instrument(exchange, symbol, instrument_type)
+                if instrument is None:
+                    continue
+                canonical = _legacy_instrument(instrument)
+                required.add(
+                    StreamIdentity(canonical.venue, "BOOK", canonical.canonical_id)
+                )
         for funding in snapshot.funding:
             instrument = snapshot.instrument(
                 funding.exchange, funding.symbol, LegacyInstrumentType.PERPETUAL
@@ -517,7 +522,10 @@ class PublicEventSupervisor:
             return
         self._available.add(key)
         capabilities = {
-            "trades": bool(account.exchange.has.get("watchTrades")),
+            "trades": bool(
+                self.high_frequency_market_events_enabled
+                and account.exchange.has.get("watchTrades")
+            ),
             "ohlcv": bool(account.exchange.has.get("fetchOHLCV")),
             "open_interest": bool(account.exchange.has.get("fetchOpenInterest"))
             or (
@@ -586,7 +594,12 @@ class PublicEventSupervisor:
         profile = account.profile
         while not self._stop_event.is_set():
             desired = set(self._desired_symbols.get(self._key(account), ()))
-            streams = ["trades"] if account.exchange.has.get("watchTrades") else []
+            streams = (
+                ["trades"]
+                if self.high_frequency_market_events_enabled
+                and account.exchange.has.get("watchTrades")
+                else []
+            )
             if (
                 profile.instrument_type is not InstrumentType.SPOT
                 and account.exchange.has.get("watchLiquidations")
@@ -1122,9 +1135,18 @@ def create_public_event_supervisor(
         quality_stream_retention_seconds=max(
             settings.orderbook_stream_stale_seconds * 3,
             settings.funding_snapshot_stale_seconds * 3,
+            (
+                settings.canonical_high_frequency_market_event_min_interval_seconds
+                * 6
+                if settings.canonical_high_frequency_market_events_enabled
+                else 0
+            ),
         ),
         reconnect_initial_seconds=settings.public_event_reconnect_initial_seconds,
         reconnect_max_seconds=settings.public_event_reconnect_max_seconds,
+        high_frequency_market_events_enabled=(
+            settings.canonical_high_frequency_market_events_enabled
+        ),
     )
 
 

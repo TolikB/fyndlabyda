@@ -41,6 +41,13 @@ from funding_arbitrage.database.repositories.events import (
     latest_event_row_id,
     load_ingestion_events,
 )
+from funding_arbitrage.database.repositories.journal_profiles import (
+    CanonicalJournalProfileBoundary,
+    CanonicalJournalProfileSpec,
+    assert_canonical_journal_checkpoint_compatible,
+    load_canonical_journal_boundary_covering_row,
+    load_latest_compatible_journal_window,
+)
 from funding_arbitrage.database.repositories.multi_regime import (
     load_multi_regime_batches,
     save_multi_regime_batch,
@@ -88,21 +95,15 @@ class RuntimeSupplementalStrategyContextProvider:
         self.advanced_paper_broker = advanced_paper_broker
         self.synchronized = RuntimeSynchronizedContextBuilder(runtime)
 
-    def __call__(
-        self, snapshot: MultiRegimeStrategySnapshot
-    ) -> SupplementalStrategyContexts:
+    def __call__(self, snapshot: MultiRegimeStrategySnapshot) -> SupplementalStrategyContexts:
         supplemental = self.synchronized.build(snapshot)
         atr = snapshot.technical.atr
         price = snapshot.technical.close
-        fee_schedule = self.runtime.settings.fee_schedules.get(
-            snapshot.instrument.venue.lower()
-        )
+        fee_schedule = self.runtime.settings.fee_schedules.get(snapshot.instrument.venue.lower())
         if atr is None or atr <= 0 or price <= 0 or fee_schedule is None:
             return supplemental
         maker_fee, _ = fee_schedule
-        maximum_abs_quantity = (
-            self.runtime.settings.paper_position_size_usd / price
-        )
+        maximum_abs_quantity = self.runtime.settings.paper_position_size_usd / price
         if maximum_abs_quantity <= 0:
             return supplemental
         broker = self.paper_broker
@@ -119,9 +120,7 @@ class RuntimeSupplementalStrategyContextProvider:
             else Decimal("0")
         )
         signed_quantity = directional_quantity + (
-            self.advanced_paper_broker.instrument_signed_quantity(
-                snapshot.instrument
-            )
+            self.advanced_paper_broker.instrument_signed_quantity(snapshot.instrument)
             if self.advanced_paper_broker is not None
             else ZERO
         )
@@ -137,9 +136,7 @@ class RuntimeSupplementalStrategyContextProvider:
             costs=MarketMakingCosts(
                 maker_fee_bps_per_fill=maker_fee * BPS,
                 expected_adverse_selection_bps=Decimal("0"),
-                expected_hedging_bps=(
-                    self.runtime.settings.multi_regime_estimated_cost_bps
-                ),
+                expected_hedging_bps=(self.runtime.settings.multi_regime_estimated_cost_bps),
             ),
             short_horizon_volatility_bps=atr / price * BPS,
             timestamp=snapshot.timestamp,
@@ -168,9 +165,7 @@ class RuntimeStrategyExecutionSnapshotProvider:
         market = self.runtime.last_completed_snapshot or self.runtime.latest_snapshot
         if market is None:
             return None
-        unique_instruments = {
-            leg.instrument.canonical_id: leg.instrument for leg in intent.legs
-        }
+        unique_instruments = {leg.instrument.canonical_id: leg.instrument for leg in intent.legs}
         quotes: list[InstrumentExecutionQuote] = []
         for instrument in unique_instruments.values():
             if instrument.instrument_type is InstrumentType.OPTION:
@@ -182,13 +177,10 @@ class RuntimeStrategyExecutionSnapshotProvider:
                 )
                 if option is None or option_fee_schedule is None:
                     return None
-                book_age = (
-                    timestamp - option.exchange_timestamp
-                ).total_seconds()
+                book_age = (timestamp - option.exchange_timestamp).total_seconds()
                 if (
                     book_age < 0
-                    or book_age
-                    > self.runtime.settings.multi_regime_stale_after_seconds
+                    or book_age > self.runtime.settings.multi_regime_stale_after_seconds
                 ):
                     return None
                 maker_fee, taker_fee, fee_cap_rate = option_fee_schedule
@@ -209,9 +201,7 @@ class RuntimeStrategyExecutionSnapshotProvider:
                                     quantity=option.ask_quantity,
                                 ),
                             ),
-                            sequence=int(
-                                option.exchange_timestamp.timestamp() * 1000
-                            ),
+                            sequence=int(option.exchange_timestamp.timestamp() * 1000),
                             exchange_timestamp=option.exchange_timestamp,
                         ),
                         data_quality=DataQuality.VALID,
@@ -235,16 +225,13 @@ class RuntimeStrategyExecutionSnapshotProvider:
                     item
                     for item in market.instruments
                     if item.exchange.lower() == instrument.venue.lower()
-                    and item.exchange_symbol.upper()
-                    == instrument.exchange_symbol.upper()
+                    and item.exchange_symbol.upper() == instrument.exchange_symbol.upper()
                     and item.instrument_type is legacy_type
                     and item.is_active
                 ),
                 None,
             )
-            fee_schedule = self.runtime.settings.fee_schedules.get(
-                instrument.venue.lower()
-            )
+            fee_schedule = self.runtime.settings.fee_schedules.get(instrument.venue.lower())
             if metadata is None or fee_schedule is None:
                 return None
             if instrument == primary_book.instrument:
@@ -278,10 +265,7 @@ class RuntimeStrategyExecutionSnapshotProvider:
                     exchange_timestamp=legacy_book.timestamp,
                 )
             book_age = (timestamp - canonical_book.exchange_timestamp).total_seconds()
-            if (
-                book_age < 0
-                or book_age > self.runtime.settings.multi_regime_stale_after_seconds
-            ):
+            if book_age < 0 or book_age > self.runtime.settings.multi_regime_stale_after_seconds:
                 return None
             maker_fee, taker_fee = fee_schedule
             quotes.append(
@@ -323,9 +307,7 @@ class RuntimeAdvancedRiskContextProvider:
         snapshot: StrategyExecutionSnapshot,
         timestamp: datetime,
     ) -> RiskAuthorizationContext | None:
-        quotes = {
-            quote.instrument.canonical_id: quote for quote in snapshot.quotes
-        }
+        quotes = {quote.instrument.canonical_id: quote for quote in snapshot.quotes}
         primary = quotes.get(intent.primary_instrument.canonical_id)
         if primary is None or primary.best_bid is None or primary.best_ask is None:
             return None
@@ -340,12 +322,7 @@ class RuntimeAdvancedRiskContextProvider:
                 return None
             levels = quote.book.asks if leg.side is Side.BUY else quote.book.bids
             visible_notional = sum(
-                (
-                    level.price
-                    * level.quantity
-                    * quote.contract_multiplier
-                    for level in levels[:20]
-                ),
+                (level.price * level.quantity * quote.contract_multiplier for level in levels[:20]),
                 ZERO,
             )
             if visible_notional <= ZERO:
@@ -354,9 +331,7 @@ class RuntimeAdvancedRiskContextProvider:
             midpoint = (quote.best_bid + quote.best_ask) / Decimal("2")
             spread_bps.append((quote.best_ask - quote.best_bid) / midpoint * BPS)
             direction = Decimal("1") if leg.side is Side.BUY else Decimal("-1")
-            leg_unit_notional = (
-                leg.hedge_ratio * midpoint * quote.contract_multiplier
-            )
+            leg_unit_notional = leg.hedge_ratio * midpoint * quote.contract_multiplier
             package_unit_notional += leg_unit_notional
             signed_unit_notional += direction * leg_unit_notional
         reference_price = (
@@ -377,9 +352,7 @@ class RuntimeAdvancedRiskContextProvider:
             ):
                 return None
             try:
-                delta_notional = Decimal(
-                    str(risk_evidence["delta_notional_usd"])
-                )
+                delta_notional = Decimal(str(risk_evidence["delta_notional_usd"]))
             except (InvalidOperation, KeyError, TypeError, ValueError):
                 return None
             if not delta_notional.is_finite():
@@ -461,21 +434,16 @@ class RuntimeAdvancedRiskContextProvider:
             )
             requested_notional = min(
                 requested_notional,
-                self.runtime.settings.paper_max_funding_capital_usd
-                / gross_hedge_ratio,
+                self.runtime.settings.paper_max_funding_capital_usd / gross_hedge_ratio,
             )
-        operator_entries_enabled = (
-            intent.mode
-            in {
-                TradingMode.BACKTEST,
-                TradingMode.REPLAY,
-                TradingMode.SHADOW,
-            }
-            or (
-                intent.mode is TradingMode.PAPER
-                and self.runtime.settings.paper_autotrade
-                and self.runtime.entries_allowed()
-            )
+        operator_entries_enabled = intent.mode in {
+            TradingMode.BACKTEST,
+            TradingMode.REPLAY,
+            TradingMode.SHADOW,
+        } or (
+            intent.mode is TradingMode.PAPER
+            and self.runtime.settings.paper_autotrade
+            and self.runtime.entries_allowed()
         )
         volatility_bps = max(
             Decimal("100"),
@@ -504,13 +472,9 @@ class RuntimeAdvancedRiskContextProvider:
             correlation_multiplier=Decimal("1"),
             drawdown_multiplier=Decimal("1"),
             regime_multiplier=(
-                Decimal("0.5")
-                if intent.regime is MarketRegime.TRANSITION
-                else Decimal("1")
+                Decimal("0.5") if intent.regime is MarketRegime.TRANSITION else Decimal("1")
             ),
-            equity_usd=(
-                account.equity + directional_total_pnl + advanced_total_pnl
-            ),
+            equity_usd=(account.equity + directional_total_pnl + advanced_total_pnl),
             cash_usd=available_cash,
             portfolio_gross_notional_usd=(
                 account.locked_capital + directional_gross + advanced_gross
@@ -592,11 +556,7 @@ def _option_risk_capacity_notional(
         for risk_key, limit_key in dimensions:
             exposure = abs(Decimal(str(risk[risk_key])))
             limit = Decimal(str(limits[limit_key]))
-            if (
-                not exposure.is_finite()
-                or not limit.is_finite()
-                or limit <= ZERO
-            ):
+            if not exposure.is_finite() or not limit.is_finite() or limit <= ZERO:
                 return None
             if exposure > ZERO:
                 package_caps.append(limit / exposure)
@@ -633,17 +593,14 @@ class RuntimePortfolioRiskContextProvider:
         if snapshot is None:
             return None
         try:
-            legacy_type = LegacyInstrumentType(
-                intent.primary_instrument.instrument_type.value
-            )
+            legacy_type = LegacyInstrumentType(intent.primary_instrument.instrument_type.value)
         except ValueError:
             return None
         metadata = next(
             (
                 item
                 for item in snapshot.instruments
-                if item.exchange.lower()
-                == intent.primary_instrument.venue.lower()
+                if item.exchange.lower() == intent.primary_instrument.venue.lower()
                 and item.exchange_symbol.upper()
                 == intent.primary_instrument.exchange_symbol.upper()
                 and item.instrument_type is legacy_type
@@ -693,9 +650,7 @@ class RuntimePortfolioRiskContextProvider:
             else Decimal("0")
         )
         advanced_correlation_exposure = (
-            sum((advanced.asset_exposure(item) for item in group), ZERO)
-            if advanced
-            else ZERO
+            sum((advanced.asset_exposure(item) for item in group), ZERO) if advanced else ZERO
         )
         directional_reserved = broker.reserved_notional if broker else ZERO
         advanced_reserved = advanced.reserved_notional if advanced else ZERO
@@ -727,7 +682,8 @@ class RuntimePortfolioRiskContextProvider:
         )
         operator_entries_enabled = (
             True
-            if intent.mode in {
+            if intent.mode
+            in {
                 TradingMode.BACKTEST,
                 TradingMode.REPLAY,
                 TradingMode.SHADOW,
@@ -739,9 +695,7 @@ class RuntimePortfolioRiskContextProvider:
             )
         )
         spread_bps = orderflow.spread_bps or Decimal("0")
-        stop_distance_bps = (
-            abs(price - intent.structural_stop) / price * Decimal("10000")
-        )
+        stop_distance_bps = abs(price - intent.structural_stop) / price * Decimal("10000")
         available_margin = available_cash
         return RiskAuthorizationContext(
             intent=intent,
@@ -761,13 +715,9 @@ class RuntimePortfolioRiskContextProvider:
             correlation_multiplier=Decimal("1"),
             drawdown_multiplier=Decimal("1"),
             regime_multiplier=(
-                Decimal("0.5")
-                if intent.regime is MarketRegime.TRANSITION
-                else Decimal("1")
+                Decimal("0.5") if intent.regime is MarketRegime.TRANSITION else Decimal("1")
             ),
-            equity_usd=(
-                account.equity + directional_total_pnl + advanced_total_pnl
-            ),
+            equity_usd=(account.equity + directional_total_pnl + advanced_total_pnl),
             cash_usd=available_cash,
             portfolio_gross_notional_usd=(
                 account.locked_capital + directional_gross + advanced_gross
@@ -835,6 +785,7 @@ class DurableMultiRegimeRuntime:
         advanced_paper_broker: AdvancedStrategyPaperBroker | None = None,
         runtime_state: RuntimeState | None = None,
         paper_execution_start_utc: datetime | None = None,
+        canonical_journal_profile: CanonicalJournalProfileSpec | None = None,
     ) -> None:
         if (
             paper_broker is not None or advanced_paper_broker is not None
@@ -843,20 +794,18 @@ class DurableMultiRegimeRuntime:
         if (
             paper_broker is not None
             and advanced_paper_broker is not None
-            and paper_broker.simulation_version
-            != advanced_paper_broker.simulation_version
+            and paper_broker.simulation_version != advanced_paper_broker.simulation_version
         ):
             raise ValueError("paper brokers must share one simulation version")
-        if (
-            paper_execution_start_utc is not None
-            and paper_execution_start_utc.utcoffset() is None
-        ):
+        if paper_execution_start_utc is not None and paper_execution_start_utc.utcoffset() is None:
             raise ValueError("paper execution start must include a timezone")
         self.engine = engine
         self.session_factory = session_factory
         self.paper_broker = paper_broker
         self.advanced_paper_broker = advanced_paper_broker
         self.runtime_state = runtime_state
+        self.canonical_journal_profile = canonical_journal_profile
+        self._canonical_journal_boundary: CanonicalJournalProfileBoundary | None = None
         self.paper_execution_start_utc = (
             paper_execution_start_utc.astimezone(UTC)
             if paper_execution_start_utc is not None
@@ -882,9 +831,7 @@ class DurableMultiRegimeRuntime:
                 "multi_regime_paper_v1"
                 if simulation_version == "v1-legacy"
                 else "multi_regime_paper_"
-                + hashlib.sha256(
-                    simulation_version.encode()
-                ).hexdigest()[:32]
+                + hashlib.sha256(simulation_version.encode()).hexdigest()[:32]
             )
             if simulation_version is not None
             else "multi_regime_paper_disabled"
@@ -893,6 +840,22 @@ class DurableMultiRegimeRuntime:
         self._wake_event = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
         self._stop_requested = False
+
+    def bind_canonical_journal_boundary(
+        self,
+        boundary: CanonicalJournalProfileBoundary,
+    ) -> None:
+        """Bind paper state to the immutable profile boundary before restore."""
+
+        if self.canonical_journal_profile is None:
+            raise RuntimeError("canonical journal profile is not configured")
+        if boundary.spec != self.canonical_journal_profile:
+            raise RuntimeError("canonical journal boundary profile does not match runtime")
+        if self._canonical_journal_boundary is not None:
+            raise RuntimeError("canonical journal boundary is already bound")
+        if self._worker_task is not None or self._processed_event_row_id != 0:
+            raise RuntimeError("canonical journal boundary must be bound before restore")
+        self._canonical_journal_boundary = boundary
 
     async def restore_features(self, *, start: datetime) -> int:
         """Restore features and paper state with bounded keyset replay."""
@@ -903,8 +866,20 @@ class DurableMultiRegimeRuntime:
             provider = self.engine.risk_context_provider
             self.engine.risk_context_provider = None
             try:
+                profile_spec = self.canonical_journal_profile
+                if profile_spec is not None and self._canonical_journal_boundary is None:
+                    raise RuntimeError("canonical journal boundary is not bound")
                 async with self.session_factory() as session:
                     journal_tip = await latest_event_row_id(session)
+                    profile_window = (
+                        await load_latest_compatible_journal_window(
+                            session,
+                            profile_spec,
+                            up_to_event_row_id=journal_tip,
+                        )
+                        if profile_spec is not None
+                        else None
+                    )
                     positions = (
                         await load_directional_paper_positions(
                             session,
@@ -916,9 +891,7 @@ class DurableMultiRegimeRuntime:
                     advanced_positions = (
                         await load_advanced_paper_positions(
                             session,
-                            simulation_version=(
-                                self.advanced_paper_broker.simulation_version
-                            ),
+                            simulation_version=(self.advanced_paper_broker.simulation_version),
                         )
                         if self.advanced_paper_broker is not None
                         else ()
@@ -931,27 +904,58 @@ class DurableMultiRegimeRuntime:
                         if self._paper_execution_enabled
                         else None
                     )
-                if (
-                    checkpoint is not None
-                    and checkpoint.event_row_id > journal_tip
-                ):
+                    if checkpoint is not None and profile_spec is not None:
+                        if (
+                            checkpoint.journal_profile_config_sha256
+                            != profile_spec.config_sha256
+                            or checkpoint.journal_profile_boundary_id is None
+                        ):
+                            raise RuntimeError(
+                                "paper checkpoint canonical journal profile is incompatible"
+                            )
+                        await assert_canonical_journal_checkpoint_compatible(
+                            session,
+                            profile_spec,
+                            boundary_id=checkpoint.journal_profile_boundary_id,
+                            event_row_id=checkpoint.event_row_id,
+                        )
+                if checkpoint is not None and checkpoint.event_row_id > journal_tip:
                     raise RuntimeError("paper checkpoint exceeds canonical journal tip")
+                compatible_after_row_id = (
+                    profile_window.after_event_row_id if profile_window is not None else 0
+                )
+                if (
+                    profile_window is not None
+                    and self._canonical_journal_boundary is not None
+                    and profile_window.latest_boundary_id
+                    != self._canonical_journal_boundary.boundary_id
+                ):
+                    raise RuntimeError(
+                        "current canonical journal boundary is not the latest profile"
+                    )
+                if checkpoint is not None and checkpoint.event_row_id <= compatible_after_row_id:
+                    raise RuntimeError(
+                        "paper checkpoint predates compatible canonical journal profile"
+                    )
+                if (positions or advanced_positions) and checkpoint is None:
+                    raise RuntimeError("paper positions exist without a durable paper checkpoint")
                 restored = await self._restore_feature_pages(
                     start=start,
                     journal_tip=journal_tip,
+                    after_row_id=compatible_after_row_id,
                 )
                 if isinstance(self.engine, MultiRegimeEngine):
                     async with self.session_factory() as session:
                         persisted_batches = await load_multi_regime_batches(
                             session,
-                            start=start,
                             mode=self.engine.config.mode,
+                            source_event_start=start,
+                            source_event_row_id_after=compatible_after_row_id,
+                            source_event_row_id_up_to=journal_tip,
                         )
                     self.engine.restore_orchestration(persisted_batches)
                     for batch in persisted_batches:
-                        self.latest_by_instrument[
-                            batch.instrument.canonical_id
-                        ] = batch
+                        self.latest_by_instrument[batch.instrument.canonical_id] = batch
                 if self.paper_broker is not None:
                     self.paper_broker.restore(positions)
                 if self.advanced_paper_broker is not None:
@@ -967,7 +971,7 @@ class DurableMultiRegimeRuntime:
                         after_row_id=(
                             checkpoint.event_row_id
                             if checkpoint is not None
-                            else 0
+                            else compatible_after_row_id
                         ),
                         start=(paper_replay_start if checkpoint is None else None),
                         journal_tip=journal_tip,
@@ -986,8 +990,9 @@ class DurableMultiRegimeRuntime:
         *,
         start: datetime,
         journal_tip: int,
+        after_row_id: int = 0,
     ) -> int:
-        cursor = 0
+        cursor = after_row_id
         restored = 0
         while True:
             async with self.session_factory() as session:
@@ -1029,9 +1034,7 @@ class DurableMultiRegimeRuntime:
                     await load_multi_regime_batches(
                         session,
                         mode=TradingMode.PAPER,
-                        source_event_ids=tuple(
-                            event.metadata.event_id for _, event in page
-                        ),
+                        source_event_ids=tuple(event.metadata.event_id for _, event in page),
                     )
                     if page
                     else ()
@@ -1065,16 +1068,12 @@ class DurableMultiRegimeRuntime:
                 else []
             )
             for batch in (
-                batches_by_event.get(event.metadata.event_id, ())
-                if execution_allowed
-                else ()
+                batches_by_event.get(event.metadata.event_id, ()) if execution_allowed else ()
             ):
                 if self.paper_broker is not None:
                     updates.extend(self.paper_broker.submit(batch))
                 if self.advanced_paper_broker is not None:
-                    advanced_updates.extend(
-                        self.advanced_paper_broker.submit(batch)
-                    )
+                    advanced_updates.extend(self.advanced_paper_broker.submit(batch))
                 self.latest_by_instrument[batch.instrument.canonical_id] = batch
             projections.append(
                 DirectionalPaperEventProjection(
@@ -1083,19 +1082,23 @@ class DurableMultiRegimeRuntime:
                     event_row_id=row_id,
                     advanced_updates=tuple(advanced_updates),
                     portfolio_snapshot=(
-                        self.combined_portfolio_snapshot(
-                            event.metadata.exchange_timestamp
-                        )
+                        self.combined_portfolio_snapshot(event.metadata.exchange_timestamp)
                         if updates or advanced_updates
                         else None
                     ),
                 )
             )
         async with self.session_factory() as session:
+            boundary_id, config_sha256 = await self._checkpoint_journal_identity_for_row(
+                session,
+                event_row_id=projections[-1].event_row_id,
+            )
             await save_directional_paper_page(
                 session,
                 projections,
                 consumer_name=self._paper_consumer_name,
+                journal_profile_boundary_id=boundary_id,
+                journal_profile_config_sha256=config_sha256,
             )
         self.paper_replayed_events += len(events)
 
@@ -1128,17 +1131,14 @@ class DurableMultiRegimeRuntime:
                     )
                     advanced_updates = (
                         list(self.advanced_paper_broker.advance(event))
-                        if self.advanced_paper_broker is not None
-                        and execution_allowed
+                        if self.advanced_paper_broker is not None and execution_allowed
                         else []
                     )
                     if batch is not None and execution_allowed:
                         if self.paper_broker is not None:
                             updates.extend(self.paper_broker.submit(batch))
                         if self.advanced_paper_broker is not None:
-                            advanced_updates.extend(
-                                self.advanced_paper_broker.submit(batch)
-                            )
+                            advanced_updates.extend(self.advanced_paper_broker.submit(batch))
                     projections.append(
                         DirectionalPaperEventProjection(
                             event=event,
@@ -1146,9 +1146,7 @@ class DurableMultiRegimeRuntime:
                             event_row_id=row_id,
                             advanced_updates=tuple(advanced_updates),
                             portfolio_snapshot=(
-                                self.combined_portfolio_snapshot(
-                                    event.metadata.exchange_timestamp
-                                )
+                                self.combined_portfolio_snapshot(event.metadata.exchange_timestamp)
                                 if updates or advanced_updates
                                 else None
                             ),
@@ -1156,12 +1154,38 @@ class DurableMultiRegimeRuntime:
                     )
             if projections:
                 async with self.session_factory() as session:
+                    boundary_id, config_sha256 = (
+                        await self._checkpoint_journal_identity_for_row(
+                            session,
+                            event_row_id=projections[-1].event_row_id,
+                        )
+                    )
                     await save_directional_paper_page(
                         session,
                         projections,
                         consumer_name=self._paper_consumer_name,
+                        journal_profile_boundary_id=boundary_id,
+                        journal_profile_config_sha256=config_sha256,
                     )
             self._processed_event_row_id = pending[-1][0]
+
+    async def _checkpoint_journal_identity_for_row(
+        self,
+        session: AsyncSession,
+        *,
+        event_row_id: int,
+    ) -> tuple[str | None, str | None]:
+        profile = self.canonical_journal_profile
+        if profile is None:
+            return None, None
+        if self._canonical_journal_boundary is None:
+            raise RuntimeError("canonical journal boundary is not bound")
+        boundary = await load_canonical_journal_boundary_covering_row(
+            session,
+            profile,
+            event_row_id=event_row_id,
+        )
+        return boundary.boundary_id, profile.config_sha256
 
     def combined_portfolio_snapshot(
         self,
@@ -1171,9 +1195,7 @@ class DurableMultiRegimeRuntime:
             return None
         legacy = self.runtime_state.portfolio.snapshot(timestamp)
         reserved = (
-            self.paper_broker.reserved_notional
-            if self.paper_broker is not None
-            else ZERO
+            self.paper_broker.reserved_notional if self.paper_broker is not None else ZERO
         ) + (
             self.advanced_paper_broker.reserved_notional
             if self.advanced_paper_broker is not None
@@ -1185,11 +1207,7 @@ class DurableMultiRegimeRuntime:
         locked = legacy.locked_capital + reserved
         total_pnl = (
             legacy.total_pnl
-            + (
-                self.paper_broker.total_net_pnl
-                if self.paper_broker is not None
-                else ZERO
-            )
+            + (self.paper_broker.total_net_pnl if self.paper_broker is not None else ZERO)
             + (
                 self.advanced_paper_broker.total_net_pnl
                 if self.advanced_paper_broker is not None
@@ -1204,10 +1222,7 @@ class DurableMultiRegimeRuntime:
             )
         if self.advanced_paper_broker is not None:
             fees += sum(
-                (
-                    position.total_fee
-                    for position in self.advanced_paper_broker.positions
-                ),
+                (position.total_fee for position in self.advanced_paper_broker.positions),
                 ZERO,
             )
         equity = cash + locked + total_pnl
@@ -1237,10 +1252,7 @@ class DurableMultiRegimeRuntime:
 
     @property
     def _paper_execution_enabled(self) -> bool:
-        return (
-            self.paper_broker is not None
-            or self.advanced_paper_broker is not None
-        )
+        return self.paper_broker is not None or self.advanced_paper_broker is not None
 
     def _paper_event_execution_allowed(
         self,

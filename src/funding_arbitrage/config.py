@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
     app_env: str = Field(default="development", alias="APP_ENV")
+    release_commit_sha: str = Field(
+        default="development",
+        alias="RELEASE_COMMIT_SHA",
+    )
     run_mode: Literal["api", "paper_test", "live"] = Field(default="api", alias="RUN_MODE")
     market_data_mode: Literal["live_public", "mock"] = Field(
         default="live_public", alias="MARKET_DATA_MODE"
@@ -45,9 +49,7 @@ class Settings(BaseSettings):
     internal_service_tls_required: bool = Field(
         default=False, alias="INTERNAL_SERVICE_TLS_REQUIRED"
     )
-    internal_tls_ca_file: str = Field(
-        default="", alias="INTERNAL_TLS_CA_FILE", repr=False
-    )
+    internal_tls_ca_file: str = Field(default="", alias="INTERNAL_TLS_CA_FILE", repr=False)
     internal_tls_client_cert_file: str = Field(
         default="", alias="INTERNAL_TLS_CLIENT_CERT_FILE", repr=False
     )
@@ -58,15 +60,9 @@ class Settings(BaseSettings):
     clickhouse_url: str = Field(
         default="https://clickhouse:8443", alias="CLICKHOUSE_URL", repr=False
     )
-    clickhouse_database: str = Field(
-        default="funding_analytics", alias="CLICKHOUSE_DATABASE"
-    )
-    clickhouse_username: str = Field(
-        default="funding_analytics", alias="CLICKHOUSE_USER"
-    )
-    clickhouse_password: SecretStr = Field(
-        default=SecretStr(""), alias="CLICKHOUSE_PASSWORD"
-    )
+    clickhouse_database: str = Field(default="funding_analytics", alias="CLICKHOUSE_DATABASE")
+    clickhouse_username: str = Field(default="funding_analytics", alias="CLICKHOUSE_USER")
+    clickhouse_password: SecretStr = Field(default=SecretStr(""), alias="CLICKHOUSE_PASSWORD")
     clickhouse_request_timeout_seconds: float = Field(
         default=10.0, alias="CLICKHOUSE_REQUEST_TIMEOUT_SECONDS"
     )
@@ -76,12 +72,8 @@ class Settings(BaseSettings):
     clickhouse_replication_poll_seconds: float = Field(
         default=1.0, alias="CLICKHOUSE_REPLICATION_POLL_SECONDS"
     )
-    canonical_event_queue_size: int = Field(
-        default=50_000, alias="CANONICAL_EVENT_QUEUE_SIZE"
-    )
-    canonical_event_batch_size: int = Field(
-        default=500, alias="CANONICAL_EVENT_BATCH_SIZE"
-    )
+    canonical_event_queue_size: int = Field(default=50_000, alias="CANONICAL_EVENT_QUEUE_SIZE")
+    canonical_event_batch_size: int = Field(default=500, alias="CANONICAL_EVENT_BATCH_SIZE")
     canonical_event_flush_interval_seconds: float = Field(
         default=0.10, alias="CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS"
     )
@@ -97,12 +89,17 @@ class Settings(BaseSettings):
     canonical_event_shutdown_timeout_seconds: float = Field(
         default=30.0, alias="CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS"
     )
-    multi_regime_enabled: bool = Field(
-        default=True, alias="MULTI_REGIME_ENABLED"
+    canonical_high_frequency_market_events_enabled: bool = Field(
+        default=True, alias="CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED"
     )
-    multi_regime_assets: str = Field(
-        default="BTC,ETH", alias="MULTI_REGIME_ASSETS"
+    canonical_high_frequency_market_event_min_interval_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        le=900,
+        alias="CANONICAL_HIGH_FREQUENCY_MARKET_EVENT_MIN_INTERVAL_SECONDS",
     )
+    multi_regime_enabled: bool = Field(default=True, alias="MULTI_REGIME_ENABLED")
+    multi_regime_assets: str = Field(default="BTC,ETH", alias="MULTI_REGIME_ASSETS")
     multi_regime_dynamic_universe_enabled: bool = Field(
         default=True, alias="MULTI_REGIME_DYNAMIC_UNIVERSE_ENABLED"
     )
@@ -178,18 +175,14 @@ class Settings(BaseSettings):
     multi_regime_stale_after_seconds: int = Field(
         default=5, alias="MULTI_REGIME_STALE_AFTER_SECONDS"
     )
-    multi_regime_restore_hours: int = Field(
-        default=168, alias="MULTI_REGIME_RESTORE_HOURS"
-    )
+    multi_regime_restore_hours: int = Field(default=168, alias="MULTI_REGIME_RESTORE_HOURS")
     multi_regime_estimated_cost_bps: Decimal = Field(
         default=Decimal("5"), alias="MULTI_REGIME_ESTIMATED_COST_BPS"
     )
     multi_regime_paper_execution_enabled: bool = Field(
         default=True, alias="MULTI_REGIME_PAPER_EXECUTION_ENABLED"
     )
-    multi_regime_paper_latency_ms: int = Field(
-        default=100, alias="MULTI_REGIME_PAPER_LATENCY_MS"
-    )
+    multi_regime_paper_latency_ms: int = Field(default=100, alias="MULTI_REGIME_PAPER_LATENCY_MS")
     multi_regime_paper_maximum_participation_rate: Decimal = Field(
         default=Decimal("0.10"),
         alias="MULTI_REGIME_PAPER_MAXIMUM_PARTICIPATION_RATE",
@@ -198,9 +191,7 @@ class Settings(BaseSettings):
         default=Decimal("10"),
         alias="MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS",
     )
-    decision_support_enabled: bool = Field(
-        default=False, alias="DECISION_SUPPORT_ENABLED"
-    )
+    decision_support_enabled: bool = Field(default=False, alias="DECISION_SUPPORT_ENABLED")
     decision_support_artifact_root: str = Field(
         default="artifacts/decision-support",
         alias="DECISION_SUPPORT_ARTIFACT_ROOT",
@@ -223,9 +214,7 @@ class Settings(BaseSettings):
         default=Decimal("6"),
         alias="DECISION_SUPPORT_META_LABEL_MAXIMUM_FEATURE_ZSCORE",
     )
-    decision_support_rl_enabled: bool = Field(
-        default=False, alias="DECISION_SUPPORT_RL_ENABLED"
-    )
+    decision_support_rl_enabled: bool = Field(default=False, alias="DECISION_SUPPORT_RL_ENABLED")
     decision_support_rl_maximum_state_age_seconds: Decimal = Field(
         default=Decimal("2"),
         alias="DECISION_SUPPORT_RL_MAXIMUM_STATE_AGE_SECONDS",
@@ -234,18 +223,10 @@ class Settings(BaseSettings):
         default=Decimal("0.10"),
         alias="DECISION_SUPPORT_RL_MAXIMUM_DRAWDOWN_FRACTION",
     )
-    options_market_data_enabled: bool = Field(
-        default=True, alias="OPTIONS_MARKET_DATA_ENABLED"
-    )
-    options_refresh_seconds: float = Field(
-        default=5.0, alias="OPTIONS_REFRESH_SECONDS"
-    )
-    options_maximum_expiries: int = Field(
-        default=2, alias="OPTIONS_MAXIMUM_EXPIRIES"
-    )
-    options_strikes_per_expiry: int = Field(
-        default=3, alias="OPTIONS_STRIKES_PER_EXPIRY"
-    )
+    options_market_data_enabled: bool = Field(default=True, alias="OPTIONS_MARKET_DATA_ENABLED")
+    options_refresh_seconds: float = Field(default=5.0, alias="OPTIONS_REFRESH_SECONDS")
+    options_maximum_expiries: int = Field(default=2, alias="OPTIONS_MAXIMUM_EXPIRIES")
+    options_strikes_per_expiry: int = Field(default=3, alias="OPTIONS_STRIKES_PER_EXPIRY")
     public_event_symbol_limit_per_profile: int = Field(
         default=3, alias="PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE"
     )
@@ -468,13 +449,9 @@ class Settings(BaseSettings):
         lt=300,
         alias="FUNDING_SNAPSHOT_STALE_SECONDS",
     )
-    acceptance_collector_enabled: bool = Field(
-        default=False, alias="ACCEPTANCE_COLLECTOR_ENABLED"
-    )
+    acceptance_collector_enabled: bool = Field(default=False, alias="ACCEPTANCE_COLLECTOR_ENABLED")
     acceptance_window_id: str = Field(default="", alias="ACCEPTANCE_WINDOW_ID")
-    acceptance_journal_path: str = Field(
-        default="", alias="ACCEPTANCE_JOURNAL_PATH"
-    )
+    acceptance_journal_path: str = Field(default="", alias="ACCEPTANCE_JOURNAL_PATH")
     acceptance_sample_interval_seconds: int = Field(
         default=240,
         ge=1,
@@ -577,9 +554,7 @@ class Settings(BaseSettings):
     paper_max_adverse_basis_percent: Decimal = Field(
         default=Decimal("0.005"), alias="PAPER_MAX_ADVERSE_BASIS_PERCENT"
     )
-    backtest_fill_model_enabled: bool = Field(
-        default=True, alias="BACKTEST_FILL_MODEL_ENABLED"
-    )
+    backtest_fill_model_enabled: bool = Field(default=True, alias="BACKTEST_FILL_MODEL_ENABLED")
     backtest_order_latency_ms: int = Field(
         default=50, ge=0, le=60_000, alias="BACKTEST_ORDER_LATENCY_MS"
     )
@@ -641,12 +616,8 @@ class Settings(BaseSettings):
     gate_taker_fee: Decimal = Field(default=Decimal("0.0005"), alias="GATE_TAKER_FEE")
     okx_maker_fee: Decimal = Field(default=Decimal("0.0002"), alias="OKX_MAKER_FEE")
     okx_taker_fee: Decimal = Field(default=Decimal("0.0005"), alias="OKX_TAKER_FEE")
-    okx_option_maker_fee: Decimal = Field(
-        default=Decimal("0.0002"), alias="OKX_OPTION_MAKER_FEE"
-    )
-    okx_option_taker_fee: Decimal = Field(
-        default=Decimal("0.0003"), alias="OKX_OPTION_TAKER_FEE"
-    )
+    okx_option_maker_fee: Decimal = Field(default=Decimal("0.0002"), alias="OKX_OPTION_MAKER_FEE")
+    okx_option_taker_fee: Decimal = Field(default=Decimal("0.0003"), alias="OKX_OPTION_TAKER_FEE")
     okx_option_fee_cap_rate: Decimal = Field(
         default=Decimal("0.07"), alias="OKX_OPTION_FEE_CAP_RATE"
     )
@@ -681,9 +652,7 @@ class Settings(BaseSettings):
     control_plane_jwt_audience: str = Field(
         default="funding-arbitrage-control", alias="CONTROL_PLANE_JWT_AUDIENCE"
     )
-    control_plane_mtls_required: bool = Field(
-        default=False, alias="CONTROL_PLANE_MTLS_REQUIRED"
-    )
+    control_plane_mtls_required: bool = Field(default=False, alias="CONTROL_PLANE_MTLS_REQUIRED")
     control_plane_mtls_certificate_header_required: bool = Field(
         default=False,
         alias="CONTROL_PLANE_MTLS_CERTIFICATE_HEADER_REQUIRED",
@@ -733,9 +702,7 @@ class Settings(BaseSettings):
     @property
     def multi_regime_asset_values(self) -> frozenset[str]:
         return frozenset(
-            value.strip().upper()
-            for value in self.multi_regime_assets.split(",")
-            if value.strip()
+            value.strip().upper() for value in self.multi_regime_assets.split(",") if value.strip()
         )
 
     @property
@@ -762,9 +729,7 @@ class Settings(BaseSettings):
         try:
             values = tuple(Decimal(value) for value in raw_values)
         except InvalidOperation as exc:
-            raise ValueError(
-                "PAPER_SIZE_GRID_USD must contain positive decimal values"
-            ) from exc
+            raise ValueError("PAPER_SIZE_GRID_USD must contain positive decimal values") from exc
         if any(value <= 0 for value in values):
             raise ValueError("PAPER_SIZE_GRID_USD must contain positive decimal values")
         return tuple(sorted(set(values)))
@@ -1024,10 +989,15 @@ def get_settings() -> Settings:
 
 def _validate_safe_values(settings: Settings) -> None:
     mode = settings.effective_trading_mode
+    if re.fullmatch(r"(?:development|[0-9a-f]{40})", settings.release_commit_sha) is None:
+        raise ValueError("RELEASE_COMMIT_SHA must be 'development' or a lowercase 40-character SHA")
+    if (
+        settings.run_mode == "live" or settings.app_env == "paper_test_live_data"
+    ) and settings.release_commit_sha == "development":
+        raise ValueError("production-like runtime requires an exact RELEASE_COMMIT_SHA")
     if settings.funding_snapshot_stale_seconds < settings.market_data_stale_seconds:
         raise ValueError(
-            "FUNDING_SNAPSHOT_STALE_SECONDS cannot be lower than "
-            "MARKET_DATA_STALE_SECONDS"
+            "FUNDING_SNAPSHOT_STALE_SECONDS cannot be lower than MARKET_DATA_STALE_SECONDS"
         )
     allowed_modes = {
         "api": {TradingMode.BACKTEST, TradingMode.REPLAY, TradingMode.SAFE_MODE},
@@ -1038,6 +1008,16 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError(
             f"TRADING_MODE={mode.value} is incompatible with RUN_MODE={settings.run_mode}"
         )
+    if settings.run_mode == "live" and (
+        not settings.canonical_high_frequency_market_events_enabled
+        or settings.canonical_high_frequency_market_event_min_interval_seconds > 0
+    ):
+        raise ValueError("RUN_MODE=live requires the complete canonical market journal")
+    if settings.multi_regime_enabled and (
+        not settings.canonical_high_frequency_market_events_enabled
+        or settings.canonical_high_frequency_market_event_min_interval_seconds > 0
+    ):
+        raise ValueError("MULTI_REGIME_ENABLED requires the complete canonical market journal")
     if mode in {
         TradingMode.BACKTEST,
         TradingMode.REPLAY,
@@ -1064,9 +1044,7 @@ def _validate_safe_values(settings: Settings) -> None:
     if settings.canonical_event_queue_size <= 0:
         raise ValueError("CANONICAL_EVENT_QUEUE_SIZE must be positive")
     if not 0 < settings.canonical_event_batch_size <= settings.canonical_event_queue_size:
-        raise ValueError(
-            "CANONICAL_EVENT_BATCH_SIZE must be positive and not exceed queue size"
-        )
+        raise ValueError("CANONICAL_EVENT_BATCH_SIZE must be positive and not exceed queue size")
     if settings.canonical_event_flush_interval_seconds <= 0:
         raise ValueError("CANONICAL_EVENT_FLUSH_INTERVAL_SECONDS must be positive")
     canonical_retry_values = (
@@ -1085,21 +1063,14 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError("CANONICAL_EVENT_RETRY_MAX_SECONDS must be positive")
     if settings.canonical_event_shutdown_timeout_seconds <= 0:
         raise ValueError("CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS must be positive")
-    if (
-        settings.canonical_event_retry_initial_seconds
-        > settings.canonical_event_retry_max_seconds
-    ):
+    if settings.canonical_event_retry_initial_seconds > settings.canonical_event_retry_max_seconds:
         raise ValueError(
             "CANONICAL_EVENT_RETRY_INITIAL_SECONDS must not exceed "
             "CANONICAL_EVENT_RETRY_MAX_SECONDS"
         )
-    if (
-        settings.canonical_event_retry_max_seconds
-        > settings.canonical_event_retry_window_seconds
-    ):
+    if settings.canonical_event_retry_max_seconds > settings.canonical_event_retry_window_seconds:
         raise ValueError(
-            "CANONICAL_EVENT_RETRY_MAX_SECONDS must not exceed "
-            "CANONICAL_EVENT_RETRY_WINDOW_SECONDS"
+            "CANONICAL_EVENT_RETRY_MAX_SECONDS must not exceed CANONICAL_EVENT_RETRY_WINDOW_SECONDS"
         )
     if (
         settings.canonical_event_retry_window_seconds
@@ -1110,56 +1081,35 @@ def _validate_safe_values(settings: Settings) -> None:
             "CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS"
         )
     if settings.canonical_event_shutdown_timeout_seconds > 45:
-        raise ValueError(
-            "CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS must not exceed 45 seconds"
-        )
+        raise ValueError("CANONICAL_EVENT_SHUTDOWN_TIMEOUT_SECONDS must not exceed 45 seconds")
     if settings.decision_support_enabled and not settings.multi_regime_enabled:
         raise ValueError("DECISION_SUPPORT_ENABLED requires MULTI_REGIME_ENABLED=true")
     decision_support_components_enabled = (
-        settings.decision_support_meta_label_enabled
-        or settings.decision_support_rl_enabled
+        settings.decision_support_meta_label_enabled or settings.decision_support_rl_enabled
     )
     if decision_support_components_enabled and not settings.decision_support_enabled:
-        raise ValueError(
-            "decision-support components require DECISION_SUPPORT_ENABLED=true"
-        )
+        raise ValueError("decision-support components require DECISION_SUPPORT_ENABLED=true")
     if settings.decision_support_enabled:
         if not decision_support_components_enabled:
             raise ValueError("DECISION_SUPPORT_ENABLED requires an ML or RL component")
         if not settings.decision_support_artifact_root.strip():
             raise ValueError("DECISION_SUPPORT_ARTIFACT_ROOT cannot be empty")
         bundle_path = Path(settings.decision_support_artifact_bundle_file.strip())
-        if (
-            not bundle_path.parts
-            or bundle_path.is_absolute()
-            or ".." in bundle_path.parts
-        ):
-            raise ValueError(
-                "DECISION_SUPPORT_ARTIFACT_BUNDLE_FILE must be a relative path"
-            )
+        if not bundle_path.parts or bundle_path.is_absolute() or ".." in bundle_path.parts:
+            raise ValueError("DECISION_SUPPORT_ARTIFACT_BUNDLE_FILE must be a relative path")
         artifact_hash = settings.decision_support_artifact_sha256.strip().lower()
         if not re.fullmatch(r"[0-9a-f]{64}", artifact_hash):
-            raise ValueError(
-                "DECISION_SUPPORT_ARTIFACT_SHA256 must be a 64-character hex hash"
-            )
+            raise ValueError("DECISION_SUPPORT_ARTIFACT_SHA256 must be a 64-character hex hash")
         if settings.decision_support_artifact_maximum_bytes <= 0:
             raise ValueError("DECISION_SUPPORT_ARTIFACT_MAXIMUM_BYTES must be positive")
         if settings.decision_support_meta_label_maximum_feature_zscore <= 0:
-            raise ValueError(
-                "DECISION_SUPPORT_META_LABEL_MAXIMUM_FEATURE_ZSCORE must be positive"
-            )
+            raise ValueError("DECISION_SUPPORT_META_LABEL_MAXIMUM_FEATURE_ZSCORE must be positive")
         if settings.decision_support_rl_maximum_state_age_seconds <= 0:
-            raise ValueError(
-                "DECISION_SUPPORT_RL_MAXIMUM_STATE_AGE_SECONDS must be positive"
-            )
+            raise ValueError("DECISION_SUPPORT_RL_MAXIMUM_STATE_AGE_SECONDS must be positive")
         if not (
-            Decimal("0")
-            < settings.decision_support_rl_maximum_drawdown_fraction
-            <= Decimal("1")
+            Decimal("0") < settings.decision_support_rl_maximum_drawdown_fraction <= Decimal("1")
         ):
-            raise ValueError(
-                "DECISION_SUPPORT_RL_MAXIMUM_DRAWDOWN_FRACTION must be in (0, 1]"
-            )
+            raise ValueError("DECISION_SUPPORT_RL_MAXIMUM_DRAWDOWN_FRACTION must be in (0, 1]")
     if settings.multi_regime_enabled:
         if not settings.multi_regime_asset_values:
             raise ValueError("MULTI_REGIME_ASSETS cannot be empty")
@@ -1189,9 +1139,7 @@ def _validate_safe_values(settings: Settings) -> None:
                 settings.multi_regime_universe_maximum_new_assets
                 > settings.multi_regime_universe_maximum_assets
             ):
-                raise ValueError(
-                    "dynamic-universe new-asset limit cannot exceed maximum assets"
-                )
+                raise ValueError("dynamic-universe new-asset limit cannot exceed maximum assets")
             for name in (
                 "multi_regime_universe_minimum_data_coverage",
                 "multi_regime_universe_minimum_entry_score",
@@ -1204,13 +1152,9 @@ def _validate_safe_values(settings: Settings) -> None:
                 settings.multi_regime_universe_minimum_retention_score
                 > settings.multi_regime_universe_minimum_entry_score
             ):
-                raise ValueError(
-                    "dynamic-universe retention score cannot exceed entry score"
-                )
+                raise ValueError("dynamic-universe retention score cannot exceed entry score")
             if not settings.multi_regime_universe_excluded_asset_values:
-                raise ValueError(
-                    "MULTI_REGIME_UNIVERSE_EXCLUDED_ASSETS cannot be empty"
-                )
+                raise ValueError("MULTI_REGIME_UNIVERSE_EXCLUDED_ASSETS cannot be empty")
         intervals = (
             settings.multi_regime_source_interval_seconds,
             settings.multi_regime_strategy_interval_seconds,
@@ -1226,16 +1170,12 @@ def _validate_safe_values(settings: Settings) -> None:
             % settings.multi_regime_source_interval_seconds
             != 0
         ):
-            raise ValueError(
-                "multi-regime strategy/regime intervals must be source multiples"
-            )
+            raise ValueError("multi-regime strategy/regime intervals must be source multiples")
         if (
             settings.multi_regime_strategy_interval_seconds
             > settings.multi_regime_regime_interval_seconds
         ):
-            raise ValueError(
-                "MULTI_REGIME_STRATEGY_INTERVAL_SECONDS cannot exceed regime interval"
-            )
+            raise ValueError("MULTI_REGIME_STRATEGY_INTERVAL_SECONDS cannot exceed regime interval")
         if settings.multi_regime_stale_after_seconds <= 0:
             raise ValueError("MULTI_REGIME_STALE_AFTER_SECONDS must be positive")
         if settings.multi_regime_restore_hours <= 0:
@@ -1245,24 +1185,15 @@ def _validate_safe_values(settings: Settings) -> None:
         if settings.multi_regime_paper_latency_ms < 0:
             raise ValueError("MULTI_REGIME_PAPER_LATENCY_MS cannot be negative")
         if not (
-            Decimal("0")
-            < settings.multi_regime_paper_maximum_participation_rate
-            <= Decimal("1")
+            Decimal("0") < settings.multi_regime_paper_maximum_participation_rate <= Decimal("1")
         ):
-            raise ValueError(
-                "MULTI_REGIME_PAPER_MAXIMUM_PARTICIPATION_RATE must be in (0, 1]"
-            )
+            raise ValueError("MULTI_REGIME_PAPER_MAXIMUM_PARTICIPATION_RATE must be in (0, 1]")
         if settings.multi_regime_paper_impact_coefficient_bps < 0:
-            raise ValueError(
-                "MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS cannot be negative"
-            )
+            raise ValueError("MULTI_REGIME_PAPER_IMPACT_COEFFICIENT_BPS cannot be negative")
         if settings.options_market_data_enabled:
             if settings.options_refresh_seconds <= 0:
                 raise ValueError("OPTIONS_REFRESH_SECONDS must be positive")
-            if (
-                settings.options_maximum_expiries <= 0
-                or settings.options_strikes_per_expiry <= 0
-            ):
+            if settings.options_maximum_expiries <= 0 or settings.options_strikes_per_expiry <= 0:
                 raise ValueError("option chain bounds must be positive")
             if any(
                 maker < 0
@@ -1281,7 +1212,8 @@ def _validate_safe_values(settings: Settings) -> None:
     if settings.public_metadata_refresh_seconds <= 0:
         raise ValueError("PUBLIC_METADATA_REFRESH_SECONDS must be positive")
     if not (
-        0 < settings.public_event_reconnect_initial_seconds
+        0
+        < settings.public_event_reconnect_initial_seconds
         <= settings.public_event_reconnect_max_seconds
     ):
         raise ValueError("public event reconnect bounds are invalid")
@@ -1294,22 +1226,26 @@ def _validate_safe_values(settings: Settings) -> None:
             "LIVE_RECONCILIATION_INTERVAL_SECONDS"
         )
     if not (
-        0 < settings.live_private_stream_reconnect_initial_seconds
+        0
+        < settings.live_private_stream_reconnect_initial_seconds
         <= settings.live_private_stream_reconnect_max_seconds
     ):
         raise ValueError("live private stream reconnect bounds are invalid")
     size_grid = settings.paper_size_grid_values
     if settings.paper_max_funding_capital_usd > settings.paper_initial_balance_usd:
-        raise ValueError(
-            "PAPER_MAX_FUNDING_CAPITAL_USD cannot exceed PAPER_INITIAL_BALANCE_USD"
-        )
+        raise ValueError("PAPER_MAX_FUNDING_CAPITAL_USD cannot exceed PAPER_INITIAL_BALANCE_USD")
     if size_grid[0] * Decimal("2") > settings.paper_max_funding_capital_usd:
         raise ValueError(
-            "PAPER_SIZE_GRID_USD must include a two-leg size within "
-            "PAPER_MAX_FUNDING_CAPITAL_USD"
+            "PAPER_SIZE_GRID_USD must include a two-leg size within PAPER_MAX_FUNDING_CAPITAL_USD"
         )
     if settings.run_mode == "paper_test" and settings.execution_mode != "paper":
         raise ValueError("paper_test requires EXECUTION_MODE=paper")
+    if (
+        settings.run_mode == "paper_test"
+        and settings.paper_auto_init_database
+        and settings.database_url.startswith("postgresql+")
+    ):
+        raise ValueError("PAPER_AUTO_INIT_DATABASE is forbidden for PostgreSQL; run Alembic first")
     if settings.run_mode == "paper_test" and settings.market_data_mode not in {
         "mock",
         "live_public",
@@ -1376,9 +1312,7 @@ def _validate_safe_values(settings: Settings) -> None:
             not _is_hex_credential(value, 64)
             for value in settings.control_plane_mtls_client_fingerprint_values
         ):
-            raise ValueError(
-                "live run mode requires valid CONTROL_PLANE_MTLS_CLIENT_FINGERPRINTS"
-            )
+            raise ValueError("live run mode requires valid CONTROL_PLANE_MTLS_CLIENT_FINGERPRINTS")
         if not settings.live_armed:
             raise ValueError("live run mode requires LIVE_ARMED=true")
         if settings.live_trading_confirm != "I_UNDERSTAND_THIS_SENDS_REAL_ORDERS":
@@ -1576,9 +1510,7 @@ def _validate_safe_values(settings: Settings) -> None:
             credential_identifiers=credential_identifiers,
             expected_egress_ip=settings.live_expected_egress_ip,
             maximum_age_days=settings.live_credential_max_age_days,
-            maximum_attestation_age_hours=(
-                settings.live_credential_attestation_max_age_hours
-            ),
+            maximum_attestation_age_hours=(settings.live_credential_attestation_max_age_hours),
         )
         if "hyperliquid" in settings.live_venue_values:
             wallet = settings.hyperliquid_wallet_address.get_secret_value()
@@ -1724,9 +1656,7 @@ def _validate_safe_values(settings: Settings) -> None:
     if settings.paper_funding_horizon_hours <= 0:
         raise ValueError("PAPER_FUNDING_HORIZON_HOURS must be positive")
     if not 0 < settings.paper_funding_reconciliation_window_seconds <= 21_600:
-        raise ValueError(
-            "PAPER_FUNDING_RECONCILIATION_WINDOW_SECONDS must be between 1 and 21600"
-        )
+        raise ValueError("PAPER_FUNDING_RECONCILIATION_WINDOW_SECONDS must be between 1 and 21600")
     if not (
         5
         <= settings.paper_funding_reconciliation_poll_seconds
@@ -1738,8 +1668,7 @@ def _validate_safe_values(settings: Settings) -> None:
         )
     if not 1 <= settings.paper_funding_reconciliation_max_post_deadline_attempts <= 60:
         raise ValueError(
-            "PAPER_FUNDING_RECONCILIATION_MAX_POST_DEADLINE_ATTEMPTS must be "
-            "between 1 and 60"
+            "PAPER_FUNDING_RECONCILIATION_MAX_POST_DEADLINE_ATTEMPTS must be between 1 and 60"
         )
     if settings.paper_entry_window_hours <= 0:
         raise ValueError("PAPER_ENTRY_WINDOW_HOURS must be positive")
@@ -1786,14 +1715,18 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError("acceptance collection requires a migrated dedicated database")
         if not settings.acceptance_window_id.strip():
             raise ValueError("ACCEPTANCE_WINDOW_ID is required for acceptance collection")
-        if re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
-            settings.acceptance_window_id,
-        ) is None:
+        if (
+            re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                settings.acceptance_window_id,
+            )
+            is None
+        ):
             raise ValueError("ACCEPTANCE_WINDOW_ID has an invalid format")
-        if not settings.acceptance_journal_path.strip() or not Path(
-            settings.acceptance_journal_path
-        ).is_absolute():
+        if (
+            not settings.acceptance_journal_path.strip()
+            or not Path(settings.acceptance_journal_path).is_absolute()
+        ):
             raise ValueError("ACCEPTANCE_JOURNAL_PATH must be an absolute path")
         if mode is TradingMode.PAPER and not settings.paper_autotrade:
             raise ValueError("PAPER acceptance collection requires PAPER_AUTOTRADE=true")
@@ -1809,11 +1742,7 @@ def _validate_safe_values(settings: Settings) -> None:
             for value in settings.live_credentials(venue).values()
         ):
             raise ValueError("acceptance collection forbids private exchange credentials")
-        if (
-            settings.live_armed
-            or settings.live_autotrade
-            or settings.live_trading_confirm.strip()
-        ):
+        if settings.live_armed or settings.live_autotrade or settings.live_trading_confirm.strip():
             raise ValueError("acceptance collection forbids live-trading authorization")
     if not 0 <= settings.telegram_report_hour <= 23:
         raise ValueError("TELEGRAM_REPORT_HOUR must be between 0 and 23")
