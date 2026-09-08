@@ -1717,6 +1717,11 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError("acceptance collection requires live_public market data")
         if settings.execution_mode != "paper":
             raise ValueError("acceptance collection forbids live execution")
+        if not settings.multi_regime_enabled:
+            raise ValueError(
+                "acceptance collection requires the complete canonical "
+                "multi-regime runtime"
+            )
         if tuple(sorted(settings.paper_venue_values)) != acceptance_venues:
             raise ValueError("acceptance collection requires the exact eight-venue set")
         if settings.paper_loop_interval_seconds > 10:

@@ -13,6 +13,13 @@ earlier run.
   start the collector if any is present.
 - Use exactly `bybit,gate,okx,binance,hyperliquid,mexc,kucoin,htx` with
   `MARKET_DATA_MODE=live_public` and `EXECUTION_MODE=paper`.
+- Keep the complete canonical multi-regime path enabled:
+  `MARKET_DATA_STREAMS_ENABLED=true`,
+  `PUBLIC_EVENT_ENRICHMENT_ENABLED=true`,
+  `CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED=true`,
+  `CANONICAL_HIGH_FREQUENCY_MARKET_EVENT_MIN_INTERVAL_SECONDS=0`, and
+  `MULTI_REGIME_ENABLED=true`. Bounded REST-only funding profiles are valid for
+  ordinary paper testing but cannot start a formal V1 acceptance window.
 - The app remains unable to submit exchange orders in both acceptance modes.
   Entry simulation is blocked until the first healthy eight-venue checkpoint;
   any later runtime, accounting, venue, freshness, or journal failure disables

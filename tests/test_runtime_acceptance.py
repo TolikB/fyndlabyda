@@ -201,6 +201,39 @@ def test_acceptance_config_rejects_private_exchange_credentials(tmp_path: Path) 
         )
 
 
+def test_acceptance_config_rejects_bounded_legacy_runtime(tmp_path: Path) -> None:
+    common = {
+        "RUN_MODE": "paper_test",
+        "TRADING_MODE": TradingMode.SHADOW,
+        "ACCEPTANCE_COLLECTOR_ENABLED": True,
+        "ACCEPTANCE_WINDOW_ID": "shadow-window",
+        "ACCEPTANCE_JOURNAL_PATH": str(tmp_path / "acceptance.jsonl"),
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="requires the complete canonical multi-regime runtime",
+    ):
+        Settings(
+            _env_file=None,
+            **common,
+            MULTI_REGIME_ENABLED=False,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="requires the complete canonical multi-regime runtime",
+    ):
+        Settings(
+            _env_file=None,
+            **common,
+            MULTI_REGIME_ENABLED=False,
+            CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED=False,
+            MARKET_DATA_STREAMS_ENABLED=False,
+            PUBLIC_EVENT_ENRICHMENT_ENABLED=False,
+        )
+
+
 def test_runtime_identity_cli_hashes_exact_effective_settings_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
