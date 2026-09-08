@@ -94,7 +94,10 @@ from funding_arbitrage.signals import (
 from funding_arbitrage.strategies import (
     DirectionalStrategyContext,
     DirectionalStrategyEvaluation,
+    GridResearchStrategy,
     LiquiditySweepReversionStrategy,
+    LossAveragingResearchStrategy,
+    MartingaleResearchStrategy,
     OrderFlowBreakoutStrategy,
     option_quote_assets_compatible,
 )
@@ -566,6 +569,12 @@ class MultiRegimeEngine:
         sweep_strategy: DirectionalStrategy | None = None,
         strategy_suite: StrategySuite | None = None,
         executable_signal_types: frozenset[SignalType] | None = None,
+        dangerous_research_strategies: tuple[
+            MartingaleResearchStrategy,
+            GridResearchStrategy,
+            LossAveragingResearchStrategy,
+        ]
+        | None = None,
         supplemental_context_provider: SupplementalStrategyContextProvider
         | None = None,
         decision_support_provider: DecisionSupportProvider | None = None,
@@ -579,6 +588,7 @@ class MultiRegimeEngine:
             breakout_strategy is not None
             or sweep_strategy is not None
             or executable_signal_types is not None
+            or dangerous_research_strategies is not None
         ):
             raise ValueError(
                 "strategy_suite cannot be combined with strategy policy overrides"
@@ -588,6 +598,11 @@ class MultiRegimeEngine:
         self.risk_authority = risk_authority or PortfolioRiskAuthority()
         self.breakout_strategy = breakout_strategy or OrderFlowBreakoutStrategy()
         self.sweep_strategy = sweep_strategy or LiquiditySweepReversionStrategy()
+        martingale, grid, loss_averaging = (
+            dangerous_research_strategies
+            if dangerous_research_strategies is not None
+            else (None, None, None)
+        )
         self.strategy_suite = strategy_suite or StrategySuite(
             directional_strategies=(
                 self.breakout_strategy,
@@ -598,6 +613,9 @@ class MultiRegimeEngine:
                 if executable_signal_types is not None
                 else PAPER_EXECUTABLE_SIGNAL_TYPES
             ),
+            martingale=martingale,
+            grid=grid,
+            loss_averaging=loss_averaging,
         )
         self.supplemental_context_provider = supplemental_context_provider
         self.decision_support_provider = decision_support_provider

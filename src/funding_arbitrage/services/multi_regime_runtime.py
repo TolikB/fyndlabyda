@@ -27,11 +27,17 @@ from funding_arbitrage.features.technical import TechnicalFeatureSnapshot
 from funding_arbitrage.portfolio.portfolio import PortfolioSnapshot
 from funding_arbitrage.risk.margin import PortfolioMarginAssessment
 from funding_arbitrage.risk.portfolio import RiskAuthorizationContext
+from funding_arbitrage.services.runtime_dangerous_research import (
+    build_dangerous_research_contexts,
+    dangerous_research_enabled,
+)
+from funding_arbitrage.services.runtime_decision_support import EquityHighWaterDrawdown
 from funding_arbitrage.services.runtime_margin import (
     RuntimeMarginSimulator,
     parse_venue_margin_rules,
     unconstrained_assessment,
 )
+from funding_arbitrage.strategies.dangerous_research import DangerousResearchContext
 
 if TYPE_CHECKING:
     from funding_arbitrage.config import Settings
@@ -132,9 +138,17 @@ class RuntimeSupplementalStrategyContextProvider:
         self.paper_broker = paper_broker
         self.advanced_paper_broker = advanced_paper_broker
         self.synchronized = RuntimeSynchronizedContextBuilder(runtime)
+        self._drawdown = EquityHighWaterDrawdown(
+            max(runtime.settings.paper_initial_balance_usd, Decimal("1"))
+        )
 
     def __call__(self, snapshot: MultiRegimeStrategySnapshot) -> SupplementalStrategyContexts:
         supplemental = self.synchronized.build(snapshot)
+        research = self._dangerous_research_contexts(snapshot)
+        if research:
+            supplemental = supplemental.model_copy(
+                update={"dangerous_research": research},
+            )
         atr = snapshot.technical.atr
         price = snapshot.technical.close
         fee_schedule = self.runtime.settings.fee_schedules.get(snapshot.instrument.venue.lower())
@@ -184,6 +198,50 @@ class RuntimeSupplementalStrategyContextProvider:
         )
         return supplemental.model_copy(
             update={"passive_market_making": (context,)},
+        )
+
+    def _dangerous_research_contexts(
+        self,
+        snapshot: MultiRegimeStrategySnapshot,
+    ) -> tuple[DangerousResearchContext, ...]:
+        """Project broker state for the research strategies, or nothing at all.
+
+        The whole projection is skipped unless the operator switched a research
+        capability on, so the default runtime never builds this input.
+        """
+
+        settings = self.runtime.settings
+        if not dangerous_research_enabled(settings):
+            return ()
+        broker = self.paper_broker
+        positions = broker.positions if broker is not None else ()
+        account = self.runtime.portfolio.snapshot(snapshot.timestamp)
+        reserved = broker.reserved_notional if broker is not None else ZERO
+        advanced_reserved = (
+            self.advanced_paper_broker.reserved_notional
+            if self.advanced_paper_broker is not None
+            else ZERO
+        )
+        available_cash = max(ZERO, account.cash - reserved - advanced_reserved)
+        signed_quantity = sum(
+            (
+                position.signed_quantity
+                for position in positions
+                if position.instrument == snapshot.instrument
+            ),
+            ZERO,
+        ) + (
+            self.advanced_paper_broker.instrument_signed_quantity(snapshot.instrument)
+            if self.advanced_paper_broker is not None
+            else ZERO
+        )
+        return build_dangerous_research_contexts(
+            snapshot,
+            settings=settings,
+            positions=positions,
+            signed_quantity=signed_quantity,
+            margin_available=available_cash > ZERO,
+            portfolio_drawdown_fraction=self._drawdown.observe(account.equity),
         )
 
 

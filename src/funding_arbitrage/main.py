@@ -91,6 +91,9 @@ from funding_arbitrage.services.paper_runner import (
     SharedMarketPaperComparisonRunner,
 )
 from funding_arbitrage.services.runtime import RuntimeState
+from funding_arbitrage.services.runtime_dangerous_research import (
+    build_dangerous_research_strategies,
+)
 from funding_arbitrage.services.runtime_decision_support import (
     EquityHighWaterDrawdown,
     RuntimeDecisionSupportConfig,
@@ -474,6 +477,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # owner. The canonical suite still evaluates funding contexts, but it
             # cannot open a duplicate position or double-count a settlement.
             executable_signal_types=(PAPER_EXECUTABLE_SIGNAL_TYPES - {SignalType.FUNDING_BASIS}),
+            # Martingale, grid, and loss averaging stay fully disabled unless the
+            # operator switched them on and separately authorized them.
+            dangerous_research_strategies=build_dangerous_research_strategies(
+                active_settings
+            ),
             supplemental_context_provider=supplemental_provider,
             decision_support_provider=decision_support_provider,
             execution_snapshot_provider=execution_snapshot_provider,
