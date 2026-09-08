@@ -727,6 +727,10 @@ class Settings(BaseSettings):
     protective_stop_maximum_unknown_seconds: float = Field(
         default=120.0, alias="PROTECTIVE_STOP_MAXIMUM_UNKNOWN_SECONDS"
     )
+    protective_stop_journal_path: str = Field(
+        default=".runtime/protective-stops.jsonl",
+        alias="PROTECTIVE_STOP_JOURNAL_PATH",
+    )
     smart_order_router_enabled: bool = Field(default=True, alias="SMART_ORDER_ROUTER_ENABLED")
     smart_order_router_maximum_child_orders: int = Field(
         default=5, ge=1, le=50, alias="SMART_ORDER_ROUTER_MAXIMUM_CHILD_ORDERS"
@@ -2027,6 +2031,8 @@ def _validate_guarded_capabilities(settings: Settings, mode: TradingMode) -> Non
         raise ValueError("PROTECTIVE_STOP_MAXIMUM_UNKNOWN_SECONDS must be positive")
     if live_mode and not settings.protective_stops_enabled:
         raise ValueError("live trading requires PROTECTIVE_STOPS_ENABLED=true")
+    if settings.protective_stops_enabled and not settings.protective_stop_journal_path.strip():
+        raise ValueError("PROTECTIVE_STOPS_ENABLED requires PROTECTIVE_STOP_JOURNAL_PATH")
 
     if settings.native_low_latency_enabled:
         if not settings.native_low_latency_host.strip():

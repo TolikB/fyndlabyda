@@ -100,6 +100,9 @@ from funding_arbitrage.services.runtime_decision_support import (
     RuntimeDecisionSupportProvider,
     fresh_equity_drawdown,
 )
+from funding_arbitrage.services.runtime_protective import (
+    RuntimeProtectiveStopCoordinator,
+)
 from funding_arbitrage.services.runtime_universe import RuntimeUniversePublisher
 from funding_arbitrage.services.strategy_suite import PAPER_EXECUTABLE_SIGNAL_TYPES
 from funding_arbitrage.storage.clickhouse import (
@@ -493,6 +496,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             paper_broker=paper_broker,
             advanced_paper_broker=advanced_paper_broker,
             runtime_state=runtime,
+            protective_stops=(
+                RuntimeProtectiveStopCoordinator(
+                    active_settings.protective_stop_journal_path
+                )
+                if active_settings.protective_stops_enabled
+                else None
+            ),
             paper_execution_start_utc=(active_settings.paper_autotrade_start_utc),
             canonical_journal_profile=journal_profile_spec,
         )

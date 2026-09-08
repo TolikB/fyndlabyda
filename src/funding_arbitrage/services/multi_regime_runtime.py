@@ -37,6 +37,9 @@ from funding_arbitrage.services.runtime_margin import (
     parse_venue_margin_rules,
     unconstrained_assessment,
 )
+from funding_arbitrage.services.runtime_protective import (
+    RuntimeProtectiveStopCoordinator,
+)
 from funding_arbitrage.strategies.dangerous_research import DangerousResearchContext
 
 if TYPE_CHECKING:
@@ -875,6 +878,7 @@ class DurableMultiRegimeRuntime:
         runtime_state: RuntimeState | None = None,
         paper_execution_start_utc: datetime | None = None,
         canonical_journal_profile: CanonicalJournalProfileSpec | None = None,
+        protective_stops: RuntimeProtectiveStopCoordinator | None = None,
     ) -> None:
         if (
             paper_broker is not None or advanced_paper_broker is not None
@@ -893,6 +897,7 @@ class DurableMultiRegimeRuntime:
         self.paper_broker = paper_broker
         self.advanced_paper_broker = advanced_paper_broker
         self.runtime_state = runtime_state
+        self.protective_stops = protective_stops
         self.canonical_journal_profile = canonical_journal_profile
         self._canonical_journal_boundary: CanonicalJournalProfileBoundary | None = None
         self.paper_execution_start_utc = (
@@ -1228,6 +1233,10 @@ class DurableMultiRegimeRuntime:
                             updates.extend(self.paper_broker.submit(batch))
                         if self.advanced_paper_broker is not None:
                             advanced_updates.extend(self.advanced_paper_broker.submit(batch))
+                    if updates:
+                        self._synchronize_protection(
+                            event.metadata.exchange_timestamp
+                        )
                     projections.append(
                         DirectionalPaperEventProjection(
                             event=event,
@@ -1257,6 +1266,29 @@ class DurableMultiRegimeRuntime:
                         journal_profile_config_sha256=config_sha256,
                     )
             self._processed_event_row_id = pending[-1][0]
+
+    def _synchronize_protection(self, timestamp: datetime) -> None:
+        """Keep durable protective orders in step with open paper positions.
+
+        A reconciliation failure engages the runtime interlock so no further
+        entry is approved while an open position's protection is unaccounted for.
+        """
+
+        coordinator = self.protective_stops
+        broker = self.paper_broker
+        if coordinator is None or broker is None:
+            return
+        result = coordinator.synchronize(broker.positions, timestamp)
+        state = self.runtime_state
+        if state is None:
+            return
+        if result.safe:
+            if not coordinator.interlock_engaged:
+                state.clear_protective_interlock()
+            return
+        state.engage_protective_interlock(
+            "protective_stop_" + (result.issues[0] if result.issues else "divergence")
+        )
 
     async def _checkpoint_journal_identity_for_row(
         self,

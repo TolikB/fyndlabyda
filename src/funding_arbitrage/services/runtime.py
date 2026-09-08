@@ -96,6 +96,7 @@ class RuntimeState:
         self.background_tasks: set[asyncio.Task[None]] = set()
         self._acceptance_entries_enabled = True
         self._acceptance_entries_permanently_disabled = False
+        self._protective_interlock_reason: str | None = None
 
     def update_market(self, snapshot: MarketSnapshot) -> list[Opportunity]:
         self.latest_snapshot = snapshot
@@ -241,9 +242,29 @@ class RuntimeState:
         if (
             not self.mode_contract.new_positions_enabled
             or not self._acceptance_entries_enabled
+            or self._protective_interlock_reason is not None
         ):
             return False
         return self.entry_health is None or self.entry_health()[0]
+
+    def engage_protective_interlock(self, reason: str) -> None:
+        """Block new entries while expected protection diverges from the venue.
+
+        An open position whose protective order is missing, mismatched, or
+        unexpectedly cancelled is exactly the state in which more exposure must
+        not be added.
+        """
+
+        if not reason.strip():
+            raise ValueError("protective interlock requires a reason")
+        self._protective_interlock_reason = reason
+
+    def clear_protective_interlock(self) -> None:
+        self._protective_interlock_reason = None
+
+    @property
+    def protective_interlock_reason(self) -> str | None:
+        return self._protective_interlock_reason
 
     def set_acceptance_entries_enabled(self, enabled: bool) -> None:
         """Apply the collector's temporary pre-window entry boundary."""
@@ -263,6 +284,8 @@ class RuntimeState:
             return f"trading_mode_{self.trading_mode.value.lower()}_blocks_entries"
         if not self._acceptance_entries_enabled:
             return "acceptance_window_not_ready"
+        if self._protective_interlock_reason is not None:
+            return self._protective_interlock_reason
         if self.entry_health is None:
             return None
         healthy, reason = self.entry_health()
