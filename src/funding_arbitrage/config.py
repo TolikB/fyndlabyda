@@ -22,6 +22,32 @@ from funding_arbitrage.credential_policy import (
 from funding_arbitrage.domain.events import TradingMode
 from funding_arbitrage.domain.modes import ModeContract, mode_contract
 
+#: Canonical names of the capabilities the approved specification marks
+#: financially dangerous. This tuple must stay identical to
+#: ``safety.dangerous_capabilities`` in ``config/v1_acceptance.yaml``; a test
+#: enforces the equality so the two cannot drift apart.
+DANGEROUS_CAPABILITIES: tuple[str, ...] = (
+    "automated_withdrawals",
+    "dex_execution",
+    "grid_averaging",
+    "live_llm_decisions",
+    "live_rl_decisions",
+    "loss_averaging",
+    "martingale",
+    "mev_execution",
+)
+
+#: Capabilities whose authorization is required only once the runtime can place
+#: orders with real money. Everything else in ``DANGEROUS_CAPABILITIES``
+#: requires authorization the moment it is enabled at all.
+LIVE_ONLY_DANGEROUS_CAPABILITIES: frozenset[str] = frozenset(
+    {"live_llm_decisions", "live_rl_decisions"}
+)
+
+LIVE_TRADING_MODES: frozenset[TradingMode] = frozenset(
+    {TradingMode.LIMITED_LIVE, TradingMode.LIVE}
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
@@ -684,6 +710,104 @@ class Settings(BaseSettings):
         default=86400, alias="CONTROL_PLANE_IDEMPOTENCY_TTL_SECONDS"
     )
 
+    # Guarded capability switches.
+    #
+    # Every capability below is fail-closed. For a capability named in
+    # DANGEROUS_CAPABILITIES an ``*_ENABLED`` flag is never sufficient on its
+    # own: its exact canonical name must also appear in
+    # DANGEROUS_CAPABILITY_AUTHORIZATION, so enabling one is always two
+    # independent, auditable operator decisions.
+    dangerous_capability_authorization: str = Field(
+        default="", alias="DANGEROUS_CAPABILITY_AUTHORIZATION"
+    )
+    protective_stops_enabled: bool = Field(default=True, alias="PROTECTIVE_STOPS_ENABLED")
+    protective_stop_reconcile_interval_seconds: float = Field(
+        default=30.0, alias="PROTECTIVE_STOP_RECONCILE_INTERVAL_SECONDS"
+    )
+    protective_stop_maximum_unknown_seconds: float = Field(
+        default=120.0, alias="PROTECTIVE_STOP_MAXIMUM_UNKNOWN_SECONDS"
+    )
+    smart_order_router_enabled: bool = Field(default=True, alias="SMART_ORDER_ROUTER_ENABLED")
+    smart_order_router_maximum_child_orders: int = Field(
+        default=5, ge=1, le=50, alias="SMART_ORDER_ROUTER_MAXIMUM_CHILD_ORDERS"
+    )
+    smart_order_router_maximum_participation_rate: Decimal = Field(
+        default=Decimal("0.10"), alias="SMART_ORDER_ROUTER_MAXIMUM_PARTICIPATION_RATE"
+    )
+    portfolio_margin_simulation_enabled: bool = Field(
+        default=True, alias="PORTFOLIO_MARGIN_SIMULATION_ENABLED"
+    )
+    # venue:mode:initial_rate:maintenance_rate:liquidation_fee_rate:max_leverage
+    # These are deliberately conservative defaults, not venue-authoritative
+    # tiers. A venue with no rule fails margin simulation closed.
+    venue_margin_rules: str = Field(
+        default=(
+            "bybit:CROSS:0.05:0.025:0.0006:20,"
+            "gate:CROSS:0.05:0.025:0.0006:20,"
+            "okx:CROSS:0.05:0.025:0.0006:20,"
+            "binance:CROSS:0.05:0.025:0.0006:20,"
+            "hyperliquid:CROSS:0.05:0.025:0.0006:20,"
+            "mexc:CROSS:0.05:0.025:0.0006:20,"
+            "kucoin:CROSS:0.05:0.025:0.0006:20,"
+            "htx:CROSS:0.05:0.025:0.0006:20"
+        ),
+        alias="VENUE_MARGIN_RULES",
+    )
+    native_low_latency_enabled: bool = Field(
+        default=False, alias="NATIVE_LOW_LATENCY_ENABLED"
+    )
+    native_low_latency_host: str = Field(default="", alias="NATIVE_LOW_LATENCY_HOST")
+    native_low_latency_port: int = Field(
+        default=0, ge=0, le=65535, alias="NATIVE_LOW_LATENCY_PORT"
+    )
+    native_low_latency_timeout_ms: float = Field(
+        default=5.0, alias="NATIVE_LOW_LATENCY_TIMEOUT_MS"
+    )
+    native_low_latency_p99_budget_ms: float = Field(
+        default=10.0, alias="NATIVE_LOW_LATENCY_P99_BUDGET_MS"
+    )
+    martingale_research_enabled: bool = Field(
+        default=False, alias="MARTINGALE_RESEARCH_ENABLED"
+    )
+    grid_research_enabled: bool = Field(default=False, alias="GRID_RESEARCH_ENABLED")
+    loss_averaging_research_enabled: bool = Field(
+        default=False, alias="LOSS_AVERAGING_RESEARCH_ENABLED"
+    )
+    dex_execution_enabled: bool = Field(default=False, alias="DEX_EXECUTION_ENABLED")
+    dex_chain_id: int = Field(default=0, ge=0, alias="DEX_CHAIN_ID")
+    dex_rpc_url: str = Field(default="", alias="DEX_RPC_URL")
+    dex_journal_path: str = Field(default="", alias="DEX_JOURNAL_PATH")
+    dex_signer_reference: str = Field(default="", alias="DEX_SIGNER_REFERENCE")
+    mev_execution_enabled: bool = Field(default=False, alias="MEV_EXECUTION_ENABLED")
+    mev_relay_url: str = Field(default="", alias="MEV_RELAY_URL")
+    mev_journal_path: str = Field(default="", alias="MEV_JOURNAL_PATH")
+    withdrawals_enabled: bool = Field(default=False, alias="WITHDRAWALS_ENABLED")
+    withdrawal_journal_path: str = Field(default="", alias="WITHDRAWAL_JOURNAL_PATH")
+    withdrawal_destination_allowlist: str = Field(
+        default="", alias="WITHDRAWAL_DESTINATION_ALLOWLIST"
+    )
+    decision_support_llm_enabled: bool = Field(
+        default=False, alias="DECISION_SUPPORT_LLM_ENABLED"
+    )
+    decision_support_llm_base_url: str = Field(
+        default="https://api.anthropic.com", alias="DECISION_SUPPORT_LLM_BASE_URL"
+    )
+    decision_support_llm_model: str = Field(
+        default="claude-sonnet-5", alias="DECISION_SUPPORT_LLM_MODEL"
+    )
+    decision_support_llm_api_key: SecretStr = Field(
+        default=SecretStr(""), alias="DECISION_SUPPORT_LLM_API_KEY"
+    )
+    decision_support_llm_timeout_seconds: float = Field(
+        default=5.0, alias="DECISION_SUPPORT_LLM_TIMEOUT_SECONDS"
+    )
+    decision_support_llm_maximum_output_tokens: int = Field(
+        default=512, ge=1, le=8192, alias="DECISION_SUPPORT_LLM_MAXIMUM_OUTPUT_TOKENS"
+    )
+    decision_support_llm_daily_budget_usd: Decimal = Field(
+        default=Decimal("0"), alias="DECISION_SUPPORT_LLM_DAILY_BUDGET_USD"
+    )
+
     @model_validator(mode="after")
     def validate_safe_modes(self) -> Settings:
         _validate_safe_values(self)
@@ -777,6 +901,73 @@ class Settings(BaseSettings):
         return frozenset(
             value.strip().lower().replace(":", "")
             for value in self.control_plane_mtls_client_fingerprints.split(",")
+            if value.strip()
+        )
+
+    @property
+    def authorized_dangerous_capabilities(self) -> frozenset[str]:
+        """Canonical capability names the operator has explicitly authorized.
+
+        Unknown names are rejected at validation time rather than ignored, so a
+        typo fails the runtime closed instead of silently authorizing nothing.
+        """
+
+        return frozenset(
+            value.strip().lower()
+            for value in self.dangerous_capability_authorization.split(",")
+            if value.strip()
+        )
+
+    @property
+    def enabled_dangerous_capabilities(self) -> frozenset[str]:
+        """Canonical names of every dangerous capability currently switched on."""
+
+        enabled = {
+            "automated_withdrawals": self.withdrawals_enabled,
+            "dex_execution": self.dex_execution_enabled,
+            "grid_averaging": self.grid_research_enabled,
+            "live_llm_decisions": self.decision_support_llm_enabled,
+            "live_rl_decisions": self.decision_support_rl_enabled,
+            "loss_averaging": self.loss_averaging_research_enabled,
+            "martingale": self.martingale_research_enabled,
+            "mev_execution": self.mev_execution_enabled,
+        }
+        return frozenset(name for name, active in enabled.items() if active)
+
+    @property
+    def venue_margin_rule_values(self) -> tuple[tuple[str, str, str, str, str, str], ...]:
+        """Parsed venue margin rules as raw six-field records.
+
+        The typed :class:`~funding_arbitrage.risk.margin.VenueMarginRule` is
+        built by :mod:`funding_arbitrage.services.runtime_margin`; settings stay
+        free of any dependency on the risk package.
+        """
+
+        records: list[tuple[str, str, str, str, str, str]] = []
+        for entry in self.venue_margin_rules.split(","):
+            candidate = entry.strip()
+            if not candidate:
+                continue
+            fields = tuple(part.strip() for part in candidate.split(":"))
+            if len(fields) != 6:
+                raise ValueError(f"VENUE_MARGIN_RULES entry is malformed: {candidate}")
+            records.append(
+                (
+                    fields[0].lower(),
+                    fields[1].upper(),
+                    fields[2],
+                    fields[3],
+                    fields[4],
+                    fields[5],
+                )
+            )
+        return tuple(records)
+
+    @property
+    def withdrawal_destination_allowlist_values(self) -> tuple[str, ...]:
+        return tuple(
+            value.strip()
+            for value in self.withdrawal_destination_allowlist.split(",")
             if value.strip()
         )
 
@@ -1122,6 +1313,7 @@ def _validate_safe_values(settings: Settings) -> None:
             Decimal("0") < settings.decision_support_rl_maximum_drawdown_fraction <= Decimal("1")
         ):
             raise ValueError("DECISION_SUPPORT_RL_MAXIMUM_DRAWDOWN_FRACTION must be in (0, 1]")
+    _validate_guarded_capabilities(settings, mode)
     if settings.multi_regime_enabled:
         if not settings.multi_regime_asset_values:
             raise ValueError("MULTI_REGIME_ASSETS cannot be empty")
@@ -1765,6 +1957,141 @@ def _validate_safe_values(settings: Settings) -> None:
         raise ValueError("TELEGRAM_REPORT_HOUR must be between 0 and 23")
     if not 0 <= settings.telegram_report_minute <= 59:
         raise ValueError("TELEGRAM_REPORT_MINUTE must be between 0 and 59")
+
+
+def _validate_guarded_capabilities(settings: Settings, mode: TradingMode) -> None:
+    """Fail closed on every financially dangerous capability.
+
+    Enabling one is always two independent operator decisions: the capability
+    flag, and the exact canonical name in ``DANGEROUS_CAPABILITY_AUTHORIZATION``.
+    Capabilities whose canonical name is scoped to live trading only require the
+    authorization once the effective mode can place real orders.
+    """
+
+    authorized = settings.authorized_dangerous_capabilities
+    unknown = authorized - set(DANGEROUS_CAPABILITIES)
+    if unknown:
+        raise ValueError(
+            "DANGEROUS_CAPABILITY_AUTHORIZATION names unknown capabilities: "
+            + ", ".join(sorted(unknown))
+        )
+    live_mode = mode in LIVE_TRADING_MODES
+    for capability in sorted(settings.enabled_dangerous_capabilities):
+        if capability in LIVE_ONLY_DANGEROUS_CAPABILITIES and not live_mode:
+            continue
+        if capability not in authorized:
+            raise ValueError(
+                f"{capability} requires explicit DANGEROUS_CAPABILITY_AUTHORIZATION"
+            )
+
+    if settings.portfolio_margin_simulation_enabled:
+        rules = settings.venue_margin_rule_values
+        if not rules:
+            raise ValueError("PORTFOLIO_MARGIN_SIMULATION_ENABLED requires VENUE_MARGIN_RULES")
+        venues = [record[0] for record in rules]
+        if len(set(venues)) != len(venues):
+            raise ValueError("VENUE_MARGIN_RULES must be unique by venue")
+        for venue, margin_mode, initial, maintenance, liquidation_fee, leverage in rules:
+            if margin_mode not in {"ISOLATED", "CROSS"}:
+                raise ValueError(f"VENUE_MARGIN_RULES mode must be ISOLATED or CROSS: {venue}")
+            try:
+                rates = tuple(
+                    Decimal(value)
+                    for value in (initial, maintenance, liquidation_fee, leverage)
+                )
+            except InvalidOperation as exc:
+                raise ValueError(f"VENUE_MARGIN_RULES has non-numeric fields: {venue}") from exc
+            if not all(rate.is_finite() for rate in rates):
+                raise ValueError(f"VENUE_MARGIN_RULES must be finite: {venue}")
+            if not Decimal("0") < rates[0] <= Decimal("1"):
+                raise ValueError(f"VENUE_MARGIN_RULES initial rate must be in (0, 1]: {venue}")
+            if not Decimal("0") < rates[1] < rates[0]:
+                raise ValueError(
+                    f"VENUE_MARGIN_RULES maintenance rate must be below initial: {venue}"
+                )
+            if not Decimal("0") <= rates[2] <= Decimal("1"):
+                raise ValueError(
+                    f"VENUE_MARGIN_RULES liquidation fee must be in [0, 1]: {venue}"
+                )
+            if rates[3] <= 0 or rates[3] > Decimal("1") / rates[0]:
+                raise ValueError(
+                    f"VENUE_MARGIN_RULES leverage exceeds the initial-margin rule: {venue}"
+                )
+    if settings.smart_order_router_maximum_participation_rate <= 0:
+        raise ValueError("SMART_ORDER_ROUTER_MAXIMUM_PARTICIPATION_RATE must be positive")
+    if settings.smart_order_router_maximum_participation_rate > 1:
+        raise ValueError("SMART_ORDER_ROUTER_MAXIMUM_PARTICIPATION_RATE cannot exceed 1")
+    if settings.protective_stop_reconcile_interval_seconds <= 0:
+        raise ValueError("PROTECTIVE_STOP_RECONCILE_INTERVAL_SECONDS must be positive")
+    if settings.protective_stop_maximum_unknown_seconds <= 0:
+        raise ValueError("PROTECTIVE_STOP_MAXIMUM_UNKNOWN_SECONDS must be positive")
+    if live_mode and not settings.protective_stops_enabled:
+        raise ValueError("live trading requires PROTECTIVE_STOPS_ENABLED=true")
+
+    if settings.native_low_latency_enabled:
+        if not settings.native_low_latency_host.strip():
+            raise ValueError("NATIVE_LOW_LATENCY_ENABLED requires NATIVE_LOW_LATENCY_HOST")
+        if settings.native_low_latency_port <= 0:
+            raise ValueError("NATIVE_LOW_LATENCY_ENABLED requires NATIVE_LOW_LATENCY_PORT")
+        if settings.native_low_latency_timeout_ms <= 0:
+            raise ValueError("NATIVE_LOW_LATENCY_TIMEOUT_MS must be positive")
+        if settings.native_low_latency_p99_budget_ms <= 0:
+            raise ValueError("NATIVE_LOW_LATENCY_P99_BUDGET_MS must be positive")
+
+    if settings.dex_execution_enabled:
+        if settings.dex_chain_id <= 0:
+            raise ValueError("DEX_EXECUTION_ENABLED requires a positive DEX_CHAIN_ID")
+        _require_https_origin(settings.dex_rpc_url, label="DEX_RPC_URL")
+        if not settings.dex_journal_path.strip():
+            raise ValueError("DEX_EXECUTION_ENABLED requires DEX_JOURNAL_PATH")
+        if not settings.dex_signer_reference.strip():
+            raise ValueError("DEX_EXECUTION_ENABLED requires DEX_SIGNER_REFERENCE")
+
+    if settings.mev_execution_enabled:
+        if not settings.dex_execution_enabled:
+            raise ValueError("MEV_EXECUTION_ENABLED requires DEX_EXECUTION_ENABLED=true")
+        _require_https_origin(settings.mev_relay_url, label="MEV_RELAY_URL")
+        if not settings.mev_journal_path.strip():
+            raise ValueError("MEV_EXECUTION_ENABLED requires MEV_JOURNAL_PATH")
+
+    if settings.withdrawals_enabled:
+        if not settings.withdrawal_journal_path.strip():
+            raise ValueError("WITHDRAWALS_ENABLED requires WITHDRAWAL_JOURNAL_PATH")
+        if not settings.withdrawal_destination_allowlist_values:
+            raise ValueError("WITHDRAWALS_ENABLED requires WITHDRAWAL_DESTINATION_ALLOWLIST")
+
+    if settings.decision_support_llm_enabled:
+        if not settings.decision_support_enabled:
+            raise ValueError("decision-support components require DECISION_SUPPORT_ENABLED=true")
+        _require_https_origin(
+            settings.decision_support_llm_base_url,
+            label="DECISION_SUPPORT_LLM_BASE_URL",
+        )
+        if not settings.decision_support_llm_model.strip():
+            raise ValueError("DECISION_SUPPORT_LLM_ENABLED requires DECISION_SUPPORT_LLM_MODEL")
+        if not settings.decision_support_llm_api_key.get_secret_value().strip():
+            raise ValueError("DECISION_SUPPORT_LLM_ENABLED requires DECISION_SUPPORT_LLM_API_KEY")
+        if settings.decision_support_llm_timeout_seconds <= 0:
+            raise ValueError("DECISION_SUPPORT_LLM_TIMEOUT_SECONDS must be positive")
+        if settings.decision_support_llm_daily_budget_usd <= 0:
+            raise ValueError("DECISION_SUPPORT_LLM_DAILY_BUDGET_USD must be positive")
+
+
+def _require_https_origin(value: str, *, label: str) -> None:
+    """Require an exact ``https`` origin with no path, query, or fragment."""
+
+    candidate = value.strip()
+    parts = urlsplit(candidate)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+        or parts.username
+        or parts.password
+    ):
+        raise ValueError(f"{label} must be an https origin without a path")
 
 
 def _is_hex_credential(value: str, digits: int) -> bool:

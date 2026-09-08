@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
@@ -26,8 +27,14 @@ from funding_arbitrage.features.technical import TechnicalFeatureSnapshot
 from funding_arbitrage.portfolio.portfolio import PortfolioSnapshot
 from funding_arbitrage.risk.margin import PortfolioMarginAssessment
 from funding_arbitrage.risk.portfolio import RiskAuthorizationContext
+from funding_arbitrage.services.runtime_margin import (
+    RuntimeMarginSimulator,
+    parse_venue_margin_rules,
+    unconstrained_assessment,
+)
 
 if TYPE_CHECKING:
+    from funding_arbitrage.config import Settings
     from funding_arbitrage.services.runtime import RuntimeState
 
 from funding_arbitrage.database.repositories.directional_paper import (
@@ -79,6 +86,37 @@ logger = logging.getLogger(__name__)
 
 BPS = Decimal("10000")
 ZERO = Decimal("0")
+
+
+_MARGIN_SIMULATORS: dict[str, RuntimeMarginSimulator] = {}
+
+
+def _margin_assessment(
+    settings: Settings,
+    *,
+    venue_exposures_usd: Mapping[str, Decimal],
+    available_margin_usd: Decimal,
+) -> PortfolioMarginAssessment:
+    """Assess venue and portfolio margin for the current runtime exposure.
+
+    With simulation disabled the runtime keeps the cash-only view. With it
+    enabled the configured venue rules constrain sizing, and an exposure on a
+    venue without a reviewed rule fails closed.
+    """
+
+    if not settings.portfolio_margin_simulation_enabled:
+        return unconstrained_assessment(available_margin_usd)
+    spec = settings.venue_margin_rules
+    simulator = _MARGIN_SIMULATORS.get(spec)
+    if simulator is None:
+        simulator = RuntimeMarginSimulator(
+            parse_venue_margin_rules(settings.venue_margin_rule_values)
+        )
+        _MARGIN_SIMULATORS[spec] = simulator
+    return simulator.assess(
+        venue_exposures_usd=venue_exposures_usd,
+        available_margin_usd=available_margin_usd,
+    )
 
 
 class RuntimeSupplementalStrategyContextProvider:
@@ -522,14 +560,10 @@ class RuntimeAdvancedRiskContextProvider:
                 )
             },
             correlation_group=correlation_key,
-            margin=PortfolioMarginAssessment(
-                approved=available_margin > ZERO,
-                venues=(),
-                total_initial_margin_required_usd=ZERO,
-                total_maintenance_margin_required_usd=ZERO,
-                total_available_initial_margin_usd=available_margin,
-                worst_liquidation_buffer_usd=available_margin,
-                reasons=() if available_margin > ZERO else ("paper_cash_unavailable",),
+            margin=_margin_assessment(
+                self.runtime.settings,
+                venue_exposures_usd=venue_exposures,
+                available_margin_usd=available_margin,
             ),
             data_fresh=True,
             reconciliation_healthy=True,
@@ -697,6 +731,13 @@ class RuntimePortfolioRiskContextProvider:
         spread_bps = orderflow.spread_bps or Decimal("0")
         stop_distance_bps = abs(price - intent.structural_stop) / price * Decimal("10000")
         available_margin = available_cash
+        venue_margin_exposures = {
+            venue: (
+                portfolio.exchange_exposure(venue.lower())
+                + directional_venue_exposure
+                + advanced_venue_exposure
+            )
+        }
         return RiskAuthorizationContext(
             intent=intent,
             timestamp=timestamp,
@@ -742,13 +783,7 @@ class RuntimePortfolioRiskContextProvider:
                     + advanced_strategy_exposure
                 )
             },
-            venue_exposures_usd={
-                venue: (
-                    portfolio.exchange_exposure(venue.lower())
-                    + directional_venue_exposure
-                    + advanced_venue_exposure
-                )
-            },
+            venue_exposures_usd=venue_margin_exposures,
             correlation_exposures_usd={
                 "runtime:" + ",".join(sorted(group)): (
                     portfolio.correlated_exposure(
@@ -760,14 +795,10 @@ class RuntimePortfolioRiskContextProvider:
                 )
             },
             correlation_group="runtime:" + ",".join(sorted(group)),
-            margin=PortfolioMarginAssessment(
-                approved=available_margin > 0,
-                venues=(),
-                total_initial_margin_required_usd=Decimal("0"),
-                total_maintenance_margin_required_usd=Decimal("0"),
-                total_available_initial_margin_usd=available_margin,
-                worst_liquidation_buffer_usd=available_margin,
-                reasons=() if available_margin > 0 else ("paper_cash_unavailable",),
+            margin=_margin_assessment(
+                self.runtime.settings,
+                venue_exposures_usd=venue_margin_exposures,
+                available_margin_usd=available_margin,
             ),
             data_fresh=orderflow.data_quality is DataQuality.VALID,
             reconciliation_healthy=True,
