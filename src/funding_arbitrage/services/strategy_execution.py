@@ -32,6 +32,11 @@ from funding_arbitrage.domain.events import (
     Side,
 )
 from funding_arbitrage.services.decision_support import intent_fingerprint
+from funding_arbitrage.services.runtime_router import (
+    RouteUnavailableError,
+    RuntimeSmartOrderRouter,
+    route_quote,
+)
 
 BPS = Decimal("10000")
 ZERO = Decimal("0")
@@ -61,6 +66,7 @@ class StrategyPlanningBlockCode(StrEnum):
     INSTRUMENT_RULE_INVALID = "instrument_rule_invalid"
     QUANTITY_BELOW_MINIMUM = "execution_quantity_below_minimum"
     INSUFFICIENT_DEPTH = "execution_depth_insufficient"
+    ROUTE_UNAVAILABLE = "execution_route_unavailable"
     POST_ONLY_PRICE_MISSING = "post_only_price_missing"
     POST_ONLY_PRICE_OFF_TICK = "post_only_price_off_tick"
     POST_ONLY_WOULD_CROSS = "post_only_would_cross"
@@ -159,8 +165,11 @@ class AdvancedStrategyExecutionPlanner:
     def __init__(
         self,
         config: AdvancedStrategyExecutionPlannerConfig | None = None,
+        *,
+        router: RuntimeSmartOrderRouter | None = None,
     ) -> None:
         self.config = config or AdvancedStrategyExecutionPlannerConfig()
+        self.router = router
 
     def build(
         self,
@@ -302,6 +311,8 @@ class AdvancedStrategyExecutionPlanner:
             )
         if leg.post_only:
             limit_price = self._post_only_price(leg.side, leg.preferred_limit_price, quote)
+        elif self.router is not None:
+            limit_price = self._routed_limit(leg.side, quantity, decision, quote)
         else:
             limit_price = self._aggressive_limit(
                 leg.side,
@@ -353,6 +364,64 @@ class AdvancedStrategyExecutionPlanner:
                 quote.instrument.canonical_id,
             )
         return preferred
+
+    def _routed_limit(
+        self,
+        side: Side,
+        quantity: Decimal,
+        decision: RiskDecision,
+        quote: InstrumentExecutionQuote,
+    ) -> Decimal:
+        """Derive the limit price by walking real depth under the cost guards.
+
+        The router refuses any quantity it cannot fill inside the slippage and
+        all-in cost budgets, so this replaces the coarse best-price plus
+        visible-depth pair with one consistent all-in decision.
+        """
+
+        assert self.router is not None
+        reference = quote.best_ask if side is Side.BUY else quote.best_bid
+        if reference is None or reference <= ZERO:
+            raise StrategyExecutionPlanningError(
+                StrategyPlanningBlockCode.BOOK_UNAVAILABLE,
+                quote.instrument.canonical_id,
+            )
+        try:
+            plan = self.router.plan_leg(
+                side=side,
+                quantity=quantity,
+                reference_price=reference,
+                quotes=(
+                    route_quote(
+                        book=quote.book,
+                        receive_timestamp=quote.book.exchange_timestamp,
+                        data_quality=quote.data_quality,
+                        taker_fee_bps=quote.taker_fee_bps,
+                    ),
+                ),
+                as_of=quote.book.exchange_timestamp,
+                maximum_slippage_bps=decision.max_slippage_bps,
+                maximum_all_in_cost_bps=(
+                    decision.max_slippage_bps + max(ZERO, quote.taker_fee_bps)
+                ),
+            )
+            price = self.router.executable_limit_price(plan)
+        except RouteUnavailableError as exc:
+            raise StrategyExecutionPlanningError(
+                StrategyPlanningBlockCode.ROUTE_UNAVAILABLE,
+                f"{quote.instrument.canonical_id}:{exc}",
+            ) from exc
+        rounded = (
+            _ceil_step(price, quote.price_tick)
+            if side is Side.BUY
+            else _floor_step(price, quote.price_tick)
+        )
+        if rounded <= ZERO:
+            raise StrategyExecutionPlanningError(
+                StrategyPlanningBlockCode.INSTRUMENT_RULE_INVALID,
+                quote.instrument.canonical_id,
+            )
+        return rounded
 
     @staticmethod
     def _aggressive_limit(

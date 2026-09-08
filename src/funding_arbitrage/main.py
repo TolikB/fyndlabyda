@@ -103,7 +103,12 @@ from funding_arbitrage.services.runtime_decision_support import (
 from funding_arbitrage.services.runtime_protective import (
     RuntimeProtectiveStopCoordinator,
 )
+from funding_arbitrage.services.runtime_router import RuntimeSmartOrderRouter
 from funding_arbitrage.services.runtime_universe import RuntimeUniversePublisher
+from funding_arbitrage.services.strategy_execution import (
+    AdvancedStrategyExecutionPlanner,
+    AdvancedStrategyExecutionPlannerConfig,
+)
 from funding_arbitrage.services.strategy_suite import PAPER_EXECUTABLE_SIGNAL_TYPES
 from funding_arbitrage.storage.clickhouse import (
     ClickHouseHttpWriter,
@@ -465,6 +470,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 drawdown_provider=decision_support_drawdown,
                 reconciliation_health_provider=lambda: entry_health()[0],
             )
+        planner_config = AdvancedStrategyExecutionPlannerConfig()
         multi_regime_engine = MultiRegimeEngine(
             MultiRegimeEngineConfig(
                 mode=runtime_mode,
@@ -489,6 +495,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             decision_support_provider=decision_support_provider,
             execution_snapshot_provider=execution_snapshot_provider,
             advanced_risk_context_provider=advanced_risk_provider,
+            advanced_execution_planner=AdvancedStrategyExecutionPlanner(
+                planner_config,
+                # With routing enabled the limit price and the depth decision
+                # both come from the router's all-in cost model.
+                router=(
+                    RuntimeSmartOrderRouter(
+                        maximum_book_age_seconds=planner_config.maximum_book_age_seconds,
+                        maximum_child_orders=(
+                            active_settings.smart_order_router_maximum_child_orders
+                        ),
+                        maximum_participation_rate=(
+                            active_settings.smart_order_router_maximum_participation_rate
+                        ),
+                    )
+                    if active_settings.smart_order_router_enabled
+                    else None
+                ),
+            ),
         )
         multi_regime_runtime = DurableMultiRegimeRuntime(
             multi_regime_engine,
