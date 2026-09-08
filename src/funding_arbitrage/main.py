@@ -100,6 +100,8 @@ from funding_arbitrage.services.runtime_decision_support import (
     RuntimeDecisionSupportProvider,
     fresh_equity_drawdown,
 )
+from funding_arbitrage.services.runtime_llm import build_llm_gateway
+from funding_arbitrage.services.runtime_low_latency import build_native_gateway
 from funding_arbitrage.services.runtime_onchain import (
     build_dex_engine,
     build_mev_engine,
@@ -609,6 +611,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # key is ever read, generated, or stored by the application.
         app.state.dex_engine = build_dex_engine(active_settings)
         app.state.mev_engine = build_mev_engine(active_settings)
+        # Opens a socket to the colocated C sidecar only when configured.
+        app.state.native_low_latency_gateway = build_native_gateway(active_settings)
+        # Advisory only, disabled by default, and never granted execution
+        # authority even when live LLM decisions are separately authorized.
+        app.state.llm_gateway = build_llm_gateway(active_settings)
         app.state.decision_support_provider = decision_support_provider
         app.state.decision_support_drawdown_tracker = decision_support_drawdown_tracker
         app.state.universe_publisher = universe_publisher

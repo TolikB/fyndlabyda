@@ -858,6 +858,17 @@ class Settings(BaseSettings):
     decision_support_llm_daily_budget_usd: Decimal = Field(
         default=Decimal("0"), alias="DECISION_SUPPORT_LLM_DAILY_BUDGET_USD"
     )
+    decision_support_llm_maximum_daily_calls: int = Field(
+        default=100, ge=1, alias="DECISION_SUPPORT_LLM_MAXIMUM_DAILY_CALLS"
+    )
+    # Published per-million-token prices. Cost accounting is auditable rather
+    # than hardcoded, because provider prices change independently of releases.
+    decision_support_llm_input_usd_per_mtok: Decimal = Field(
+        default=Decimal("3"), alias="DECISION_SUPPORT_LLM_INPUT_USD_PER_MTOK"
+    )
+    decision_support_llm_output_usd_per_mtok: Decimal = Field(
+        default=Decimal("15"), alias="DECISION_SUPPORT_LLM_OUTPUT_USD_PER_MTOK"
+    )
 
     @model_validator(mode="after")
     def validate_safe_modes(self) -> Settings:
@@ -2219,6 +2230,18 @@ def _validate_guarded_capabilities(settings: Settings, mode: TradingMode) -> Non
             raise ValueError("DECISION_SUPPORT_LLM_TIMEOUT_SECONDS must be positive")
         if settings.decision_support_llm_daily_budget_usd <= 0:
             raise ValueError("DECISION_SUPPORT_LLM_DAILY_BUDGET_USD must be positive")
+        for label, price in (
+            (
+                "DECISION_SUPPORT_LLM_INPUT_USD_PER_MTOK",
+                settings.decision_support_llm_input_usd_per_mtok,
+            ),
+            (
+                "DECISION_SUPPORT_LLM_OUTPUT_USD_PER_MTOK",
+                settings.decision_support_llm_output_usd_per_mtok,
+            ),
+        ):
+            if price < 0 or not price.is_finite():
+                raise ValueError(f"{label} cannot be negative")
 
 
 def _require_https_origin(value: str, *, label: str) -> None:

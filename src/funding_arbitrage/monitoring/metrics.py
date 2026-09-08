@@ -209,3 +209,19 @@ live_trading_paused = Gauge(
 paper_runner_last_cycle_timestamp = Gauge(
     "funding_paper_runner_last_cycle_timestamp", "Unix timestamp of the last paper cycle"
 )
+native_low_latency_roundtrip_p99_seconds = Gauge(
+    "funding_native_low_latency_roundtrip_p99_seconds",
+    "Measured P99 round-trip latency of the native execution path",
+)
+native_low_latency_ready = Gauge(
+    "funding_native_low_latency_ready",
+    "Whether the native execution path meets its measured latency budget",
+)
+native_low_latency_interlock = Gauge(
+    "funding_native_low_latency_interlock",
+    "Whether the native latency interlock has disabled the fast path",
+)
+native_low_latency_violations_total = Gauge(
+    "funding_native_low_latency_violations_total",
+    "Cumulative native latency budget violations observed in the telemetry window",
+)
