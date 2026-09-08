@@ -24,7 +24,7 @@ CAPABILITY_FLAGS: dict[str, tuple[str, dict[str, object], tuple[str, ...]]] = {
         "WITHDRAWALS_ENABLED",
         {
             "WITHDRAWAL_JOURNAL_PATH": "/var/lib/funding/withdrawals.jsonl",
-            "WITHDRAWAL_DESTINATION_ALLOWLIST": "bc1qexampledestination",
+            "WITHDRAWAL_DESTINATION_ALLOWLIST": "cold-1:USDT:TRON:TXexample:bybit:500",
         },
         (),
     ),
@@ -51,6 +51,7 @@ CAPABILITY_FLAGS: dict[str, tuple[str, dict[str, object], tuple[str, ...]]] = {
             "DEX_SIGNER_REFERENCE": "vault://funding/v1/dex-signer",
             "MEV_RELAY_URL": "https://relay.example.org",
             "MEV_JOURNAL_PATH": "/var/lib/funding/mev.jsonl",
+            "MEV_PRIVATE_RELAY_IDS": "flashbots",
         },
         ("dex_execution",),
     ),

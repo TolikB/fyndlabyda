@@ -100,11 +100,18 @@ from funding_arbitrage.services.runtime_decision_support import (
     RuntimeDecisionSupportProvider,
     fresh_equity_drawdown,
 )
+from funding_arbitrage.services.runtime_onchain import (
+    build_dex_engine,
+    build_mev_engine,
+)
 from funding_arbitrage.services.runtime_protective import (
     RuntimeProtectiveStopCoordinator,
 )
 from funding_arbitrage.services.runtime_router import RuntimeSmartOrderRouter
 from funding_arbitrage.services.runtime_universe import RuntimeUniversePublisher
+from funding_arbitrage.services.runtime_withdrawal import (
+    build_withdrawal_manager,
+)
 from funding_arbitrage.services.strategy_execution import (
     AdvancedStrategyExecutionPlanner,
     AdvancedStrategyExecutionPlannerConfig,
@@ -595,6 +602,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_router = event_router
         app.state.event_quality_monitor = event_quality_monitor
         app.state.multi_regime_runtime = multi_regime_runtime
+        # None unless the operator both enabled and authorized withdrawals,
+        # so the default runtime holds no object able to move money.
+        app.state.withdrawal_manager = build_withdrawal_manager(active_settings)
+        # Likewise None unless enabled and separately authorized. No signing
+        # key is ever read, generated, or stored by the application.
+        app.state.dex_engine = build_dex_engine(active_settings)
+        app.state.mev_engine = build_mev_engine(active_settings)
         app.state.decision_support_provider = decision_support_provider
         app.state.decision_support_drawdown_tracker = decision_support_drawdown_tracker
         app.state.universe_publisher = universe_publisher

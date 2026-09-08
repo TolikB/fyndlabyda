@@ -782,13 +782,60 @@ class Settings(BaseSettings):
     dex_rpc_url: str = Field(default="", alias="DEX_RPC_URL")
     dex_journal_path: str = Field(default="", alias="DEX_JOURNAL_PATH")
     dex_signer_reference: str = Field(default="", alias="DEX_SIGNER_REFERENCE")
+    dex_required_confirmations: int = Field(
+        default=12, ge=1, alias="DEX_REQUIRED_CONFIRMATIONS"
+    )
+    dex_maximum_slippage_bps: Decimal = Field(
+        default=Decimal("50"), alias="DEX_MAXIMUM_SLIPPAGE_BPS"
+    )
+    dex_maximum_fee_per_gas_gwei: Decimal = Field(
+        default=Decimal("60"), alias="DEX_MAXIMUM_FEE_PER_GAS_GWEI"
+    )
+    dex_maximum_priority_fee_gwei: Decimal = Field(
+        default=Decimal("3"), alias="DEX_MAXIMUM_PRIORITY_FEE_GWEI"
+    )
+    dex_maximum_gas_cost_wei: int = Field(
+        default=20_000_000_000_000_000, ge=1, alias="DEX_MAXIMUM_GAS_COST_WEI"
+    )
     mev_execution_enabled: bool = Field(default=False, alias="MEV_EXECUTION_ENABLED")
     mev_relay_url: str = Field(default="", alias="MEV_RELAY_URL")
     mev_journal_path: str = Field(default="", alias="MEV_JOURNAL_PATH")
+    mev_private_relay_ids: str = Field(default="", alias="MEV_PRIVATE_RELAY_IDS")
+    mev_minimum_expected_profit_usdt: Decimal = Field(
+        default=Decimal("25"), alias="MEV_MINIMUM_EXPECTED_PROFIT_USDT"
+    )
+    mev_maximum_loss_usdt: Decimal = Field(
+        default=Decimal("50"), alias="MEV_MAXIMUM_LOSS_USDT"
+    )
+    mev_maximum_capital_at_risk_usdt: Decimal = Field(
+        default=Decimal("500"), alias="MEV_MAXIMUM_CAPITAL_AT_RISK_USDT"
+    )
+    mev_maximum_gas_cost_usdt: Decimal = Field(
+        default=Decimal("50"), alias="MEV_MAXIMUM_GAS_COST_USDT"
+    )
+    mev_maximum_builder_payment_usdt: Decimal = Field(
+        default=Decimal("25"), alias="MEV_MAXIMUM_BUILDER_PAYMENT_USDT"
+    )
+    mev_maximum_simulation_dispersion_usdt: Decimal = Field(
+        default=Decimal("5"), alias="MEV_MAXIMUM_SIMULATION_DISPERSION_USDT"
+    )
     withdrawals_enabled: bool = Field(default=False, alias="WITHDRAWALS_ENABLED")
     withdrawal_journal_path: str = Field(default="", alias="WITHDRAWAL_JOURNAL_PATH")
+    # id:asset:network:address:venue1|venue2:max_amount — one per destination.
     withdrawal_destination_allowlist: str = Field(
         default="", alias="WITHDRAWAL_DESTINATION_ALLOWLIST"
+    )
+    withdrawal_maximum_single_usdt: Decimal = Field(
+        default=Decimal("1000"), alias="WITHDRAWAL_MAXIMUM_SINGLE_USDT"
+    )
+    withdrawal_maximum_daily_usdt: Decimal = Field(
+        default=Decimal("5000"), alias="WITHDRAWAL_MAXIMUM_DAILY_USDT"
+    )
+    withdrawal_maximum_fee_usdt: Decimal = Field(
+        default=Decimal("25"), alias="WITHDRAWAL_MAXIMUM_FEE_USDT"
+    )
+    withdrawal_minimum_confirmations: int = Field(
+        default=12, ge=1, alias="WITHDRAWAL_MINIMUM_CONFIRMATIONS"
     )
     decision_support_llm_enabled: bool = Field(
         default=False, alias="DECISION_SUPPORT_LLM_ENABLED"
@@ -968,12 +1015,62 @@ class Settings(BaseSettings):
         return tuple(records)
 
     @property
-    def withdrawal_destination_allowlist_values(self) -> tuple[str, ...]:
+    def mev_private_relay_id_values(self) -> tuple[str, ...]:
         return tuple(
             value.strip()
-            for value in self.withdrawal_destination_allowlist.split(",")
+            for value in self.mev_private_relay_ids.split(",")
             if value.strip()
         )
+
+    @property
+    def withdrawal_destination_allowlist_values(
+        self,
+    ) -> tuple[tuple[str, str, str, str, tuple[str, ...], Decimal], ...]:
+        """Parsed withdrawal destinations as raw records.
+
+        The typed destination is built by
+        :mod:`funding_arbitrage.services.runtime_withdrawal`; settings stay free
+        of any dependency on the portfolio package.
+        """
+
+        records: list[tuple[str, str, str, str, tuple[str, ...], Decimal]] = []
+        for entry in self.withdrawal_destination_allowlist.split(","):
+            candidate = entry.strip()
+            if not candidate:
+                continue
+            fields = tuple(part.strip() for part in candidate.split(":"))
+            if len(fields) != 6 or not all(fields):
+                raise ValueError(
+                    f"WITHDRAWAL_DESTINATION_ALLOWLIST entry is malformed: {candidate}"
+                )
+            venues = tuple(
+                venue.strip().lower() for venue in fields[4].split("|") if venue.strip()
+            )
+            if not venues:
+                raise ValueError(
+                    f"withdrawal destination requires source venues: {fields[0]}"
+                )
+            try:
+                maximum_amount = Decimal(fields[5])
+            except InvalidOperation as exc:
+                raise ValueError(
+                    f"withdrawal destination amount is not numeric: {fields[0]}"
+                ) from exc
+            if not maximum_amount.is_finite() or maximum_amount <= 0:
+                raise ValueError(
+                    f"withdrawal destination amount must be positive: {fields[0]}"
+                )
+            records.append(
+                (
+                    fields[0],
+                    fields[1].upper(),
+                    fields[2].upper(),
+                    fields[3],
+                    venues,
+                    maximum_amount,
+                )
+            )
+        return tuple(records)
 
     def live_credentials(self, venue: str) -> dict[str, str]:
         credentials: dict[str, dict[str, SecretStr]] = {
@@ -2052,6 +2149,14 @@ def _validate_guarded_capabilities(settings: Settings, mode: TradingMode) -> Non
             raise ValueError("DEX_EXECUTION_ENABLED requires DEX_JOURNAL_PATH")
         if not settings.dex_signer_reference.strip():
             raise ValueError("DEX_EXECUTION_ENABLED requires DEX_SIGNER_REFERENCE")
+        for label, value in (
+            ("DEX_MAXIMUM_FEE_PER_GAS_GWEI", settings.dex_maximum_fee_per_gas_gwei),
+            ("DEX_MAXIMUM_PRIORITY_FEE_GWEI", settings.dex_maximum_priority_fee_gwei),
+        ):
+            if value <= 0 or not value.is_finite():
+                raise ValueError(f"{label} must be positive")
+        if settings.dex_maximum_slippage_bps < 0:
+            raise ValueError("DEX_MAXIMUM_SLIPPAGE_BPS cannot be negative")
 
     if settings.mev_execution_enabled:
         if not settings.dex_execution_enabled:
@@ -2059,12 +2164,45 @@ def _validate_guarded_capabilities(settings: Settings, mode: TradingMode) -> Non
         _require_https_origin(settings.mev_relay_url, label="MEV_RELAY_URL")
         if not settings.mev_journal_path.strip():
             raise ValueError("MEV_EXECUTION_ENABLED requires MEV_JOURNAL_PATH")
+        relays = settings.mev_private_relay_id_values
+        if not relays:
+            raise ValueError("MEV_EXECUTION_ENABLED requires MEV_PRIVATE_RELAY_IDS")
+        if len(set(relays)) != len(relays):
+            raise ValueError("MEV_PRIVATE_RELAY_IDS must be unique")
+        for label, bound in (
+            ("MEV_MINIMUM_EXPECTED_PROFIT_USDT", settings.mev_minimum_expected_profit_usdt),
+            ("MEV_MAXIMUM_LOSS_USDT", settings.mev_maximum_loss_usdt),
+            ("MEV_MAXIMUM_CAPITAL_AT_RISK_USDT", settings.mev_maximum_capital_at_risk_usdt),
+            ("MEV_MAXIMUM_GAS_COST_USDT", settings.mev_maximum_gas_cost_usdt),
+        ):
+            if bound <= 0 or not bound.is_finite():
+                raise ValueError(f"{label} must be positive")
+        if settings.mev_maximum_builder_payment_usdt < 0:
+            raise ValueError("MEV_MAXIMUM_BUILDER_PAYMENT_USDT cannot be negative")
+        if settings.mev_maximum_simulation_dispersion_usdt < 0:
+            raise ValueError("MEV_MAXIMUM_SIMULATION_DISPERSION_USDT cannot be negative")
+        if settings.mev_maximum_loss_usdt > settings.mev_maximum_capital_at_risk_usdt:
+            raise ValueError(
+                "MEV_MAXIMUM_LOSS_USDT cannot exceed MEV_MAXIMUM_CAPITAL_AT_RISK_USDT"
+            )
 
     if settings.withdrawals_enabled:
         if not settings.withdrawal_journal_path.strip():
             raise ValueError("WITHDRAWALS_ENABLED requires WITHDRAWAL_JOURNAL_PATH")
-        if not settings.withdrawal_destination_allowlist_values:
+        destinations = settings.withdrawal_destination_allowlist_values
+        if not destinations:
             raise ValueError("WITHDRAWALS_ENABLED requires WITHDRAWAL_DESTINATION_ALLOWLIST")
+        identifiers = [record[0] for record in destinations]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("withdrawal destination IDs must be unique")
+        if settings.withdrawal_maximum_single_usdt <= 0:
+            raise ValueError("WITHDRAWAL_MAXIMUM_SINGLE_USDT must be positive")
+        if settings.withdrawal_maximum_daily_usdt < settings.withdrawal_maximum_single_usdt:
+            raise ValueError(
+                "WITHDRAWAL_MAXIMUM_DAILY_USDT cannot be below the single-transfer cap"
+            )
+        if settings.withdrawal_maximum_fee_usdt < 0:
+            raise ValueError("WITHDRAWAL_MAXIMUM_FEE_USDT cannot be negative")
 
     if settings.decision_support_llm_enabled:
         if not settings.decision_support_enabled:
