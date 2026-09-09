@@ -36,14 +36,21 @@ from funding_arbitrage.acceptance_seal import render_requirements, split_manifes
 #: something it did not run.
 EXTERNAL_COMMAND_PREFIXES = ("gh ",)
 
-#: A test module counts as integration-grade when it stands up a real database
-#: engine or applies the migration chain, rather than exercising one unit in
-#: isolation. Committed artifacts under `evidence/` also qualify.
+#: `ops/V1_SPEC_NORMALIZATION.md` accepts integration, replay, sandbox, or
+#: failure-injection evidence. A test module qualifies when it stands up a real
+#: database engine or applies the migration chain, or when it drives the replay
+#: or failure-evidence machinery by name. Importing a library a unit test
+#: happens to use is deliberately not enough. Committed artifacts under
+#: `evidence/` also qualify.
 INTEGRATION_MARKERS = (
     "create_async_engine",
     "Base.metadata.create_all",
     "RUN_POSTGRES",
     "alembic",
+    "funding_arbitrage.backtest.historical_replay",
+    "funding_arbitrage.backtest.database_replay",
+    "funding_arbitrage.qa.disaster_recovery",
+    "funding_arbitrage.qa.acceptance_window",
 )
 
 ENVIRONMENT_ASSIGNMENT = re.compile(r"^([A-Z][A-Z0-9_]*)=(\S*)$")

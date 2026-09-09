@@ -246,3 +246,24 @@ def test_every_validated_requirement_has_a_passing_recorded_run() -> None:
         outcome = outcomes[requirement["id"]]
         assert outcome["failed_commands"] == [], requirement["id"]
         assert outcome["integration_evidence"], requirement["id"]
+
+
+def test_replay_and_failure_injection_modules_are_integration_grade(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "tests").mkdir()
+    modules = {
+        "test_replay.py": "from funding_arbitrage.backtest.historical_replay import x\n",
+        "test_dr.py": "from funding_arbitrage.qa.disaster_recovery import x\n",
+        "test_window.py": "from funding_arbitrage.qa.acceptance_window import x\n",
+        "test_library.py": "from funding_arbitrage.monitoring.metrics import x\n",
+    }
+    for name, body in modules.items():
+        (tmp_path / "tests" / name).write_text(body, encoding="utf-8")
+
+    graded = integration_grade_evidence(
+        [f"tests/{name}" for name in sorted(modules)],
+        repository_root=tmp_path,
+    )
+    # Replay and failure-evidence machinery count; a plain library import does not.
+    assert graded == ("tests/test_dr.py", "tests/test_replay.py", "tests/test_window.py")
