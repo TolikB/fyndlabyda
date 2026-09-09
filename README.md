@@ -48,6 +48,37 @@ conservatively as unavailable rather than inferred. Funding is normalized to
 daily and annualized comparison metrics; realized paper PnL is settled from
 timestamped funding events.
 
+## Guarded capabilities
+
+Eight capabilities the specification marks financially dangerous are fail-closed
+and disabled by default. Enabling one is always two independent operator
+decisions: its own `*_ENABLED` flag, and its exact canonical name in
+`DANGEROUS_CAPABILITY_AUTHORIZATION`. An unknown name in that list fails the
+runtime closed rather than being ignored, and each capability additionally
+requires its own endpoints, journals, allowlists, and economic bounds before it
+can start.
+
+| Capability | Flag | Notes |
+| --- | --- | --- |
+| `automated_withdrawals` | `WITHDRAWALS_ENABLED` | Dual-role approval, per-destination venue and amount bounds |
+| `dex_execution` | `DEX_EXECUTION_ENABLED` | Signer named by reference; no key material is read, generated, or stored |
+| `mev_execution` | `MEV_EXECUTION_ENABLED` | Requires the DEX engine beneath it and a private relay |
+| `martingale` | `MARTINGALE_RESEARCH_ENABLED` | Research only; live use needs the authorization too |
+| `grid_averaging` | `GRID_RESEARCH_ENABLED` | Research only |
+| `loss_averaging` | `LOSS_AVERAGING_RESEARCH_ENABLED` | Research only |
+| `live_rl_decisions` | `DECISION_SUPPORT_RL_ENABLED` | Advisory; authorization required only in live modes |
+| `live_llm_decisions` | `DECISION_SUPPORT_LLM_ENABLED` | Advisory; never granted execution authority |
+
+Three further capabilities are safety features rather than risks and default to
+on: exchange-side reduce-only protective stops (`PROTECTIVE_STOPS_ENABLED`,
+mandatory in live modes), smart order routing (`SMART_ORDER_ROUTER_ENABLED`),
+and venue margin simulation (`PORTFOLIO_MARGIN_SIMULATION_ENABLED`). The
+colocation-capable native path (`NATIVE_LOW_LATENCY_ENABLED`) is off until a
+sidecar host and port are configured.
+
+`.env.example` documents every switch. `docs/V1_EVIDENCE_SEALING.md` describes
+how delivery status is sealed and proved.
+
 ## Docker
 
 For the real public-market-data paper deployment:

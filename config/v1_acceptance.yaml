@@ -54,20 +54,27 @@ requirements:
     category: architecture
     title: Strategy intent is separated from validation, risk, execution plan, OMS, and adapter
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_decision_pipeline.py
+      - PYTHONPATH=src python -m pytest tests/test_domain_decisions.py
+      - PYTHONPATH=src python -m pytest tests/test_durable_oms.py
+      - PYTHONPATH=src python -m pytest tests/test_live_executor.py
     evidence:
       - src/funding_arbitrage/domain/decisions.py
+      - src/funding_arbitrage/execution/live.py
+      - src/funding_arbitrage/execution/oms.py
       - src/funding_arbitrage/services/decision_pipeline.py
       - src/funding_arbitrage/services/live_runner.py
-      - src/funding_arbitrage/execution/oms.py
-      - src/funding_arbitrage/execution/live.py
-      - tests/test_domain_decisions.py
       - tests/test_decision_pipeline.py
+      - tests/test_domain_decisions.py
       - tests/test_durable_oms.py
       - tests/test_live_executor.py
   - id: ARCH-002
     category: architecture
     title: Canonical typed models cover market, account, order, fill, position, and balance events
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_domain_events.py
     evidence:
       - src/funding_arbitrage/domain/events.py
       - tests/test_domain_events.py
@@ -75,152 +82,399 @@ requirements:
     category: architecture
     title: Every event carries exchange, receive, monotonic, sequence, source, correlation, and payload-version metadata
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_domain_events.py
     evidence:
       - src/funding_arbitrage/domain/events.py
       - tests/test_domain_events.py
   - id: ARCH-004
     category: architecture
     title: Event processing is idempotent, restart-safe, deterministic, and replayable
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_directional_paper_restore.py
+      - PYTHONPATH=src python -m pytest tests/test_domain_events.py
+      - PYTHONPATH=src python -m pytest tests/test_event_journal.py
+      - PYTHONPATH=src python -m pytest tests/test_event_writer.py
     evidence:
-      - src/funding_arbitrage/domain/events.py
-      - src/funding_arbitrage/database/repositories/events.py
       - migrations/versions/0011_canonical_events.py
-      - src/funding_arbitrage/services/event_writer.py
-      - src/funding_arbitrage/services/event_router.py
-      - src/funding_arbitrage/services/multi_regime_runtime.py
       - src/funding_arbitrage/database/repositories/directional_paper.py
+      - src/funding_arbitrage/database/repositories/events.py
+      - src/funding_arbitrage/domain/events.py
+      - src/funding_arbitrage/services/event_router.py
+      - src/funding_arbitrage/services/event_writer.py
+      - src/funding_arbitrage/services/multi_regime_runtime.py
       - tests/test_directional_paper_restore.py
       - tests/test_domain_events.py
       - tests/test_event_journal.py
       - tests/test_event_writer.py
+    evidence_sha256:
+      migrations/versions/0011_canonical_events.py: 10a94bf3216dc9b31892c1808b6874d72f0e88ebf0f382c3a7b9e4428f7d80f3
+      src/funding_arbitrage/database/repositories/directional_paper.py: 2f4f48a68278daf930c8f7913d0b1c7b1ae6b7d8ea8153a3687bddb31175d912
+      src/funding_arbitrage/database/repositories/events.py: cbad5ec99ba39ac31671f5b47efd15ece7bd0446a03be0165d38c780b20694ff
+      src/funding_arbitrage/domain/events.py: 731b6cc059dd7a91f02bf77f475e5b684b339b677327e3851f0618e62e3a1b60
+      src/funding_arbitrage/services/event_router.py: f137a8d81f2418f19daa4e67254b9448cac255182593c62ef590fcbb36e42f3e
+      src/funding_arbitrage/services/event_writer.py: 906853858de0b5ef696bcbebab30df37bc741bd19a87485d4d885925569b7a50
+      src/funding_arbitrage/services/multi_regime_runtime.py: 1e0406126e7f91042b3aaf0b82d2be82db713febc9ce021b44e0d37a6f2009e7
+      tests/test_directional_paper_restore.py: 8933201997dcbd66a40085c8c52fb201195e7f0017d6279e999e280f8e4aed8f
+      tests/test_domain_events.py: f6c0504042e5e61f1296ffa035c5c9a5d25e90036a2c6be5bf4064a6d7506c09
+      tests/test_event_journal.py: 588c80c6e7afb947f56138f633b260d9bd7c1387de5fd7b88ca47257a9355e66
+      tests/test_event_writer.py: 8ccc39f85b848bd48fbf7ce6bb03db2de94fd29d7ccb2c544b5acc848fa015d0
   - id: MODE-001
     category: architecture
     title: BACKTEST, REPLAY, SHADOW, PAPER, LIMITED_LIVE, LIVE, and SAFE_MODE share explicit contracts
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_runtime_modes.py
     evidence:
-      - src/funding_arbitrage/domain/modes.py
-      - src/funding_arbitrage/domain/decisions.py
-      - src/funding_arbitrage/config.py
-      - src/funding_arbitrage/services/runtime.py
-      - src/funding_arbitrage/services/multi_regime_runtime.py
-      - src/funding_arbitrage/execution/directional_paper.py
-      - tests/test_runtime_modes.py
       - docs/V1_RUNTIME_MODES.md
+      - src/funding_arbitrage/config.py
+      - src/funding_arbitrage/domain/decisions.py
+      - src/funding_arbitrage/domain/modes.py
+      - src/funding_arbitrage/execution/directional_paper.py
+      - src/funding_arbitrage/services/multi_regime_runtime.py
+      - src/funding_arbitrage/services/runtime.py
+      - tests/test_runtime_modes.py
   - id: MD-001
     category: market_data
     title: Native public WebSocket and REST recovery adapters cover all eight existing CEX venues
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_binance_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_bybit_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_bybit_event_pipeline.py
+      - PYTHONPATH=src python -m pytest tests/test_gate_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_hyperliquid_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_mexc_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_native_market_data_coverage.py
+      - PYTHONPATH=src python -m pytest tests/test_okx_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_remaining_canonical_orderbooks.py
     evidence:
-      - src/funding_arbitrage/exchanges
+      - ops/BINANCE_CANONICAL_BOOK_EVIDENCE.md
+      - ops/BYBIT_CANONICAL_BOOK_EVIDENCE.md
+      - ops/GATE_CANONICAL_BOOK_EVIDENCE.md
+      - ops/HYPERLIQUID_CANONICAL_BOOK_EVIDENCE.md
+      - ops/OKX_CANONICAL_BOOK_EVIDENCE.md
+      - ops/REMAINING_CEX_CANONICAL_BOOK_EVIDENCE.md
+      - scripts/binance_canonical_book_probe.py
+      - scripts/bybit_canonical_book_probe.py
+      - scripts/gate_canonical_book_probe.py
+      - scripts/hyperliquid_canonical_book_probe.py
+      - scripts/okx_canonical_book_probe.py
+      - scripts/remaining_cex_canonical_book_probe.py
+      - src/funding_arbitrage/exchanges/__init__.py
+      - src/funding_arbitrage/exchanges/base/__init__.py
+      - src/funding_arbitrage/exchanges/base/exceptions.py
+      - src/funding_arbitrage/exchanges/base/exchange.py
+      - src/funding_arbitrage/exchanges/base/models.py
+      - src/funding_arbitrage/exchanges/binance/__init__.py
+      - src/funding_arbitrage/exchanges/binance/client.py
+      - src/funding_arbitrage/exchanges/binance/orderbook.py
+      - src/funding_arbitrage/exchanges/bybit/README.md
+      - src/funding_arbitrage/exchanges/bybit/__init__.py
+      - src/funding_arbitrage/exchanges/bybit/client.py
       - src/funding_arbitrage/exchanges/bybit/orderbook.py
+      - src/funding_arbitrage/exchanges/factory.py
+      - src/funding_arbitrage/exchanges/gate/__init__.py
+      - src/funding_arbitrage/exchanges/gate/client.py
+      - src/funding_arbitrage/exchanges/gate/orderbook.py
+      - src/funding_arbitrage/exchanges/htx/__init__.py
+      - src/funding_arbitrage/exchanges/htx/client.py
+      - src/funding_arbitrage/exchanges/htx/trading.py
+      - src/funding_arbitrage/exchanges/hyperliquid/__init__.py
+      - src/funding_arbitrage/exchanges/hyperliquid/client.py
+      - src/funding_arbitrage/exchanges/hyperliquid/orderbook.py
+      - src/funding_arbitrage/exchanges/kucoin/__init__.py
+      - src/funding_arbitrage/exchanges/kucoin/client.py
+      - src/funding_arbitrage/exchanges/kucoin/trading.py
+      - src/funding_arbitrage/exchanges/mexc/__init__.py
+      - src/funding_arbitrage/exchanges/mexc/client.py
+      - src/funding_arbitrage/exchanges/mexc/orderbook.py
+      - src/funding_arbitrage/exchanges/mexc/trading.py
+      - src/funding_arbitrage/exchanges/mock.py
+      - src/funding_arbitrage/exchanges/okx/__init__.py
+      - src/funding_arbitrage/exchanges/okx/client.py
+      - src/funding_arbitrage/exchanges/okx/orderbook.py
+      - src/funding_arbitrage/exchanges/private_streams.py
+      - src/funding_arbitrage/exchanges/public_events.py
+      - src/funding_arbitrage/exchanges/trading.py
+      - src/funding_arbitrage/market_data/canonical_snapshot.py
+      - tests/test_binance_canonical_orderbook.py
       - tests/test_bybit_canonical_orderbook.py
       - tests/test_bybit_event_pipeline.py
-      - scripts/bybit_canonical_book_probe.py
-      - ops/BYBIT_CANONICAL_BOOK_EVIDENCE.md
-      - src/funding_arbitrage/exchanges/okx/orderbook.py
-      - tests/test_okx_canonical_orderbook.py
-      - scripts/okx_canonical_book_probe.py
-      - ops/OKX_CANONICAL_BOOK_EVIDENCE.md
-      - src/funding_arbitrage/exchanges/binance/orderbook.py
-      - tests/test_binance_canonical_orderbook.py
-      - scripts/binance_canonical_book_probe.py
-      - ops/BINANCE_CANONICAL_BOOK_EVIDENCE.md
-      - src/funding_arbitrage/exchanges/gate/orderbook.py
       - tests/test_gate_canonical_orderbook.py
-      - scripts/gate_canonical_book_probe.py
-      - ops/GATE_CANONICAL_BOOK_EVIDENCE.md
-      - src/funding_arbitrage/exchanges/hyperliquid/orderbook.py
       - tests/test_hyperliquid_canonical_orderbook.py
-      - scripts/hyperliquid_canonical_book_probe.py
-      - ops/HYPERLIQUID_CANONICAL_BOOK_EVIDENCE.md
-      - src/funding_arbitrage/market_data/canonical_snapshot.py
-      - src/funding_arbitrage/exchanges/mexc/orderbook.py
       - tests/test_mexc_canonical_orderbook.py
-      - tests/test_remaining_canonical_orderbooks.py
-      - scripts/remaining_cex_canonical_book_probe.py
-      - ops/REMAINING_CEX_CANONICAL_BOOK_EVIDENCE.md
-      - src/funding_arbitrage/exchanges/factory.py
       - tests/test_native_market_data_coverage.py
+      - tests/test_okx_canonical_orderbook.py
+      - tests/test_remaining_canonical_orderbooks.py
+    evidence_sha256:
+      ops/BINANCE_CANONICAL_BOOK_EVIDENCE.md: dbbf692e3a2850ed6179636f35f6c82eb052e2e1bfc5e562aa2b042272edb748
+      ops/BYBIT_CANONICAL_BOOK_EVIDENCE.md: 2be61b3b0c4fa7d425208fbe8d9e05610d7791babf469f48ab8d43f3dc5b9e3f
+      ops/GATE_CANONICAL_BOOK_EVIDENCE.md: e8ed159257ab30b282d43fc73ccc8d952de08493f93a826cf8ae0509f04efbf1
+      ops/HYPERLIQUID_CANONICAL_BOOK_EVIDENCE.md: 688b366bb49fc1d5f7b5107532473aac71352ce690a5b2101c91d899a7a07e15
+      ops/OKX_CANONICAL_BOOK_EVIDENCE.md: bf9dbadb12d7e6a9c00e31a245b05941700d3640080722c8c1af8636d0be5cf0
+      ops/REMAINING_CEX_CANONICAL_BOOK_EVIDENCE.md: c2ecfa913b922f307c25422118a7615f41f64a61325652e7f1dc2b6a4856b3c9
+      scripts/binance_canonical_book_probe.py: 12d1c5625a632ecfba6c16cf3b9d8276579ac90c2ba1c2d29e47a833f0af458e
+      scripts/bybit_canonical_book_probe.py: 01c658c7630ac6bc14527c3ff4ca524ad595cdcf2ea824973e15cc1af67f87f2
+      scripts/gate_canonical_book_probe.py: 25f5b59a98c40734e525f0ce4d3399463a38ceff28d4167146d4fe39095924c4
+      scripts/hyperliquid_canonical_book_probe.py: b29d2fc455e9c41c9016d932b809be02a752df9da79fe1e53ed32a7469b51e54
+      scripts/okx_canonical_book_probe.py: c9643b8e1fbed732889d11983952cbd63640b53e257d8ca3963adee5985e10cf
+      scripts/remaining_cex_canonical_book_probe.py: 897ea5d940ac9a64a3e5c632217cbe2c26ac17bb4d261168ea1390a6be6aa81d
+      src/funding_arbitrage/exchanges/__init__.py: 0907fe2461cbc276978113cdc90cd7ac2e76617c0f630cf2c2e519eef96a50dc
+      src/funding_arbitrage/exchanges/base/__init__.py: cbb670846762f0ded8694a13a96272b58231ff18181cba4aa0aed013d3c35a35
+      src/funding_arbitrage/exchanges/base/exceptions.py: 95c6b3d0ddf540bfd9d84a06bf019e3923ac43a5450be2bbe5c9be4ae9458757
+      src/funding_arbitrage/exchanges/base/exchange.py: 42ddee849133f19c5f64599500d5e02cca2c8725631d7471df891702d0cecb3a
+      src/funding_arbitrage/exchanges/base/models.py: 5cbcc6824e3b707b6517fd5210ecb16ffd4ea03b019f847461e5986a0af36532
+      src/funding_arbitrage/exchanges/binance/__init__.py: e32195af481899b81773141b008e788d7325c498aefbec36d757f7c2f53c3313
+      src/funding_arbitrage/exchanges/binance/client.py: ed61e737808296a8439f4478460b923f75a45cc0c8c821a95f9212ae72b3a035
+      src/funding_arbitrage/exchanges/binance/orderbook.py: b41055c2b64b8e2cd17044692412fe9ed6c8e1a9cf81e1fffa5682ab172a81c4
+      src/funding_arbitrage/exchanges/bybit/README.md: eea71511e1136a0e6bd8d2d9efe6e211caa27abd44925cad1d1d5d3e88937793
+      src/funding_arbitrage/exchanges/bybit/__init__.py: b9f0386c59b182fe79fc6625adf8fe2e57bb237dbbc33dc02cca6760587fd99c
+      src/funding_arbitrage/exchanges/bybit/client.py: 71f00615da9c4b494cb1e25e8de0957dc47f6bcc5ef6dac4c918f666c4fadf67
+      src/funding_arbitrage/exchanges/bybit/orderbook.py: e0197f850a664dd821f87fa3f9b9975da9d357793f1dee450fac473ac5e2401c
+      src/funding_arbitrage/exchanges/factory.py: 261a7f15951d02d8ccee4b300af1094440eae4f635dd93aad4c911012ad7815b
+      src/funding_arbitrage/exchanges/gate/__init__.py: ca6c0972b43ed9c08ea2ae1666111701fcf82f7a7d897e3a1813c4be6772ebe3
+      src/funding_arbitrage/exchanges/gate/client.py: dc64cfd6a3cd99945eacb16b3353ec3e6390c693354a984c7284719478c3add7
+      src/funding_arbitrage/exchanges/gate/orderbook.py: 9ec36155f3f087358ae7d4196657875f81bb77e858567a7084a6f64ff2852f2e
+      src/funding_arbitrage/exchanges/htx/__init__.py: 833d42af9e81b1e9d622e59180ddaa18ab6ec8b1aead1dfba231a78c899d010e
+      src/funding_arbitrage/exchanges/htx/client.py: 6f7f15640aba561d0c8109c1939a5bc3a276216d0546764e80a0d33b4d63e62c
+      src/funding_arbitrage/exchanges/htx/trading.py: 54cc30686ddfe69ec650627f8f9173a2e74ab2093247d2509520e418646d0437
+      src/funding_arbitrage/exchanges/hyperliquid/__init__.py: c828845529564d0976a6aa799e1bdf15861057157522862013c8a9715fe42284
+      src/funding_arbitrage/exchanges/hyperliquid/client.py: 55bf94b597acfc6ba99331eb9fb31f5f9b4a40f1f570cc627c32188f4e682d67
+      src/funding_arbitrage/exchanges/hyperliquid/orderbook.py: 229b66d7510849a4b70b2019bfe1788929a88feee3ce3bd5de6afc8c4b9f51b5
+      src/funding_arbitrage/exchanges/kucoin/__init__.py: 42b9952909d8284b6f6f7fb44de6afbf7f94a637ff1152aece974570b7dd9fcf
+      src/funding_arbitrage/exchanges/kucoin/client.py: 766d900113b033d36b6d4662b9dcf1ca89fc54fcab9e0a030bc480efea2ca006
+      src/funding_arbitrage/exchanges/kucoin/trading.py: a9fd38ab7047e9321f0cf683079a4150b1c20ac9700eb9959dfd8ad8d5ae2ff5
+      src/funding_arbitrage/exchanges/mexc/__init__.py: 8002d2400e02ac930aea3fb65c5730f2b49c13f53eb9c85179aea7557a21c3dc
+      src/funding_arbitrage/exchanges/mexc/client.py: 7342e6c99ea18f7d0713c189271d072d83c1c13e2fc96c39991821d1de4391a5
+      src/funding_arbitrage/exchanges/mexc/orderbook.py: 4ab40bb627167f7aa4a68205101afa5fe0fa448922cf3f13ea947274d590a3f5
+      src/funding_arbitrage/exchanges/mexc/trading.py: 80651aeff93d35380d1b288388ddb2eb457f14a2d84448e5112dba5cf5a45369
+      src/funding_arbitrage/exchanges/mock.py: 676ba1ac765210e5dc0e1e473d338ee2439ddd777cbc1868218967d7fd565c60
+      src/funding_arbitrage/exchanges/okx/__init__.py: ec0d5e24b264a1902503642b9639e5299647c1704f827bdbf71943b73a14d535
+      src/funding_arbitrage/exchanges/okx/client.py: b1db641d2505b3f8a4e5a417a09f8e411546fdce550d7678d431109afc9c258f
+      src/funding_arbitrage/exchanges/okx/orderbook.py: 71ec6ba6b6dfc5c9a8b387b25798d1b0ee7b3f00092eb8c262e38da70afa7cf4
+      src/funding_arbitrage/exchanges/private_streams.py: 9a5c7d2ddb9c86e44554401b9bd6b42138d417383149ee1c9d30715cbfa16460
+      src/funding_arbitrage/exchanges/public_events.py: 7173544cd4d9a60938d507c7b9c2257e2f544a818b873e922ac6beba78beed6a
+      src/funding_arbitrage/exchanges/trading.py: 307cb536616d83ae435bd5aa461852a67515f33aadc85ea0da416d70922e29a2
+      src/funding_arbitrage/market_data/canonical_snapshot.py: d2c5ffb9093a000faef81d66f2d4074f2b28592f737e08b4c2407e93983fe8e1
+      tests/test_binance_canonical_orderbook.py: 660ed2c4c59f0bc73ac770b30ce17f88746c2b82fc069d010fc324423de0f079
+      tests/test_bybit_canonical_orderbook.py: 171bc5c0fbb413867d6c198b520450318995251867866a741c549025cb26273e
+      tests/test_bybit_event_pipeline.py: ffc36c0b7d73486b88c714df4591c5d168115fca3000df0b5247de9ad07e3014
+      tests/test_gate_canonical_orderbook.py: 368c68a126dbb0e48ad91d9bab36fab0bd8aad335d399db8b9bb1e0a899d1703
+      tests/test_hyperliquid_canonical_orderbook.py: 9fad2f273bc58123ea6439607dcca713fef8ca69ede5d3e73442f5db80ab1f0f
+      tests/test_mexc_canonical_orderbook.py: fca5babe7380c0b0231bd09ce5e4eec3ad925c4708c63c54f2258d830cb303ef
+      tests/test_native_market_data_coverage.py: 7070f5f152ee7cd4b4b421d753ee0367ae9c6606dd9db8eada95b2b0089ebdef
+      tests/test_okx_canonical_orderbook.py: 4b32415dee7d79a4208a2e857a7427dd9f86ae0b6de3e7c0f91cc66d79513a4b
+      tests/test_remaining_canonical_orderbooks.py: 3576d4b0388467e7bf65314719f83f338af88e6347842611470d46d056febdac
   - id: MD-002
     category: market_data
     title: Private order, fill, position, balance, and account streams are normalized and reconciled
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_private_streams.py
     evidence:
+      - docs/V1_PRIVATE_STREAMS.md
       - src/funding_arbitrage/exchanges/private_streams.py
       - src/funding_arbitrage/execution/reconciliation.py
       - src/funding_arbitrage/services/live_runner.py
       - tests/test_private_streams.py
-      - docs/V1_PRIVATE_STREAMS.md
   - id: MD-003
     category: market_data
     title: L1 and L2 books reconstruct snapshot plus deltas with sequence and checksum recovery
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_binance_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_bybit_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_gate_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_hyperliquid_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_l2_book.py
+      - PYTHONPATH=src python -m pytest tests/test_mexc_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_okx_canonical_orderbook.py
+      - PYTHONPATH=src python -m pytest tests/test_orderbook_protocols.py
+      - PYTHONPATH=src python -m pytest tests/test_remaining_canonical_orderbooks.py
     evidence:
+      - docs/V1_ORDERBOOK_RECOVERY.md
+      - src/funding_arbitrage/exchanges/__init__.py
+      - src/funding_arbitrage/exchanges/base/__init__.py
+      - src/funding_arbitrage/exchanges/base/exceptions.py
+      - src/funding_arbitrage/exchanges/base/exchange.py
+      - src/funding_arbitrage/exchanges/base/models.py
+      - src/funding_arbitrage/exchanges/binance/__init__.py
+      - src/funding_arbitrage/exchanges/binance/client.py
+      - src/funding_arbitrage/exchanges/binance/orderbook.py
+      - src/funding_arbitrage/exchanges/bybit/README.md
+      - src/funding_arbitrage/exchanges/bybit/__init__.py
+      - src/funding_arbitrage/exchanges/bybit/client.py
+      - src/funding_arbitrage/exchanges/bybit/orderbook.py
+      - src/funding_arbitrage/exchanges/factory.py
+      - src/funding_arbitrage/exchanges/gate/__init__.py
+      - src/funding_arbitrage/exchanges/gate/client.py
+      - src/funding_arbitrage/exchanges/gate/orderbook.py
+      - src/funding_arbitrage/exchanges/htx/__init__.py
+      - src/funding_arbitrage/exchanges/htx/client.py
+      - src/funding_arbitrage/exchanges/htx/trading.py
+      - src/funding_arbitrage/exchanges/hyperliquid/__init__.py
+      - src/funding_arbitrage/exchanges/hyperliquid/client.py
+      - src/funding_arbitrage/exchanges/hyperliquid/orderbook.py
+      - src/funding_arbitrage/exchanges/kucoin/__init__.py
+      - src/funding_arbitrage/exchanges/kucoin/client.py
+      - src/funding_arbitrage/exchanges/kucoin/trading.py
+      - src/funding_arbitrage/exchanges/mexc/__init__.py
+      - src/funding_arbitrage/exchanges/mexc/client.py
+      - src/funding_arbitrage/exchanges/mexc/orderbook.py
+      - src/funding_arbitrage/exchanges/mexc/trading.py
+      - src/funding_arbitrage/exchanges/mock.py
+      - src/funding_arbitrage/exchanges/okx/__init__.py
+      - src/funding_arbitrage/exchanges/okx/client.py
+      - src/funding_arbitrage/exchanges/okx/orderbook.py
+      - src/funding_arbitrage/exchanges/private_streams.py
+      - src/funding_arbitrage/exchanges/public_events.py
+      - src/funding_arbitrage/exchanges/trading.py
       - src/funding_arbitrage/market_data/l2_book.py
       - src/funding_arbitrage/market_data/orderbook_protocols.py
-      - src/funding_arbitrage/exchanges
-      - tests/test_l2_book.py
-      - tests/test_orderbook_protocols.py
       - tests/test_binance_canonical_orderbook.py
       - tests/test_bybit_canonical_orderbook.py
       - tests/test_gate_canonical_orderbook.py
-      - tests/test_okx_canonical_orderbook.py
       - tests/test_hyperliquid_canonical_orderbook.py
+      - tests/test_l2_book.py
       - tests/test_mexc_canonical_orderbook.py
-      - tests/test_remaining_canonical_orderbooks.py
       - tests/test_multi_regime_runtime.py
-      - docs/V1_ORDERBOOK_RECOVERY.md
+      - tests/test_okx_canonical_orderbook.py
+      - tests/test_orderbook_protocols.py
+      - tests/test_remaining_canonical_orderbooks.py
+    evidence_sha256:
+      docs/V1_ORDERBOOK_RECOVERY.md: 947a65dd238de9e82b02cac28e3c7d07eb0a1e4d44cec354fd9f47f0d6c0866e
+      src/funding_arbitrage/exchanges/__init__.py: 0907fe2461cbc276978113cdc90cd7ac2e76617c0f630cf2c2e519eef96a50dc
+      src/funding_arbitrage/exchanges/base/__init__.py: cbb670846762f0ded8694a13a96272b58231ff18181cba4aa0aed013d3c35a35
+      src/funding_arbitrage/exchanges/base/exceptions.py: 95c6b3d0ddf540bfd9d84a06bf019e3923ac43a5450be2bbe5c9be4ae9458757
+      src/funding_arbitrage/exchanges/base/exchange.py: 42ddee849133f19c5f64599500d5e02cca2c8725631d7471df891702d0cecb3a
+      src/funding_arbitrage/exchanges/base/models.py: 5cbcc6824e3b707b6517fd5210ecb16ffd4ea03b019f847461e5986a0af36532
+      src/funding_arbitrage/exchanges/binance/__init__.py: e32195af481899b81773141b008e788d7325c498aefbec36d757f7c2f53c3313
+      src/funding_arbitrage/exchanges/binance/client.py: ed61e737808296a8439f4478460b923f75a45cc0c8c821a95f9212ae72b3a035
+      src/funding_arbitrage/exchanges/binance/orderbook.py: b41055c2b64b8e2cd17044692412fe9ed6c8e1a9cf81e1fffa5682ab172a81c4
+      src/funding_arbitrage/exchanges/bybit/README.md: eea71511e1136a0e6bd8d2d9efe6e211caa27abd44925cad1d1d5d3e88937793
+      src/funding_arbitrage/exchanges/bybit/__init__.py: b9f0386c59b182fe79fc6625adf8fe2e57bb237dbbc33dc02cca6760587fd99c
+      src/funding_arbitrage/exchanges/bybit/client.py: 71f00615da9c4b494cb1e25e8de0957dc47f6bcc5ef6dac4c918f666c4fadf67
+      src/funding_arbitrage/exchanges/bybit/orderbook.py: e0197f850a664dd821f87fa3f9b9975da9d357793f1dee450fac473ac5e2401c
+      src/funding_arbitrage/exchanges/factory.py: 261a7f15951d02d8ccee4b300af1094440eae4f635dd93aad4c911012ad7815b
+      src/funding_arbitrage/exchanges/gate/__init__.py: ca6c0972b43ed9c08ea2ae1666111701fcf82f7a7d897e3a1813c4be6772ebe3
+      src/funding_arbitrage/exchanges/gate/client.py: dc64cfd6a3cd99945eacb16b3353ec3e6390c693354a984c7284719478c3add7
+      src/funding_arbitrage/exchanges/gate/orderbook.py: 9ec36155f3f087358ae7d4196657875f81bb77e858567a7084a6f64ff2852f2e
+      src/funding_arbitrage/exchanges/htx/__init__.py: 833d42af9e81b1e9d622e59180ddaa18ab6ec8b1aead1dfba231a78c899d010e
+      src/funding_arbitrage/exchanges/htx/client.py: 6f7f15640aba561d0c8109c1939a5bc3a276216d0546764e80a0d33b4d63e62c
+      src/funding_arbitrage/exchanges/htx/trading.py: 54cc30686ddfe69ec650627f8f9173a2e74ab2093247d2509520e418646d0437
+      src/funding_arbitrage/exchanges/hyperliquid/__init__.py: c828845529564d0976a6aa799e1bdf15861057157522862013c8a9715fe42284
+      src/funding_arbitrage/exchanges/hyperliquid/client.py: 55bf94b597acfc6ba99331eb9fb31f5f9b4a40f1f570cc627c32188f4e682d67
+      src/funding_arbitrage/exchanges/hyperliquid/orderbook.py: 229b66d7510849a4b70b2019bfe1788929a88feee3ce3bd5de6afc8c4b9f51b5
+      src/funding_arbitrage/exchanges/kucoin/__init__.py: 42b9952909d8284b6f6f7fb44de6afbf7f94a637ff1152aece974570b7dd9fcf
+      src/funding_arbitrage/exchanges/kucoin/client.py: 766d900113b033d36b6d4662b9dcf1ca89fc54fcab9e0a030bc480efea2ca006
+      src/funding_arbitrage/exchanges/kucoin/trading.py: a9fd38ab7047e9321f0cf683079a4150b1c20ac9700eb9959dfd8ad8d5ae2ff5
+      src/funding_arbitrage/exchanges/mexc/__init__.py: 8002d2400e02ac930aea3fb65c5730f2b49c13f53eb9c85179aea7557a21c3dc
+      src/funding_arbitrage/exchanges/mexc/client.py: 7342e6c99ea18f7d0713c189271d072d83c1c13e2fc96c39991821d1de4391a5
+      src/funding_arbitrage/exchanges/mexc/orderbook.py: 4ab40bb627167f7aa4a68205101afa5fe0fa448922cf3f13ea947274d590a3f5
+      src/funding_arbitrage/exchanges/mexc/trading.py: 80651aeff93d35380d1b288388ddb2eb457f14a2d84448e5112dba5cf5a45369
+      src/funding_arbitrage/exchanges/mock.py: 676ba1ac765210e5dc0e1e473d338ee2439ddd777cbc1868218967d7fd565c60
+      src/funding_arbitrage/exchanges/okx/__init__.py: ec0d5e24b264a1902503642b9639e5299647c1704f827bdbf71943b73a14d535
+      src/funding_arbitrage/exchanges/okx/client.py: b1db641d2505b3f8a4e5a417a09f8e411546fdce550d7678d431109afc9c258f
+      src/funding_arbitrage/exchanges/okx/orderbook.py: 71ec6ba6b6dfc5c9a8b387b25798d1b0ee7b3f00092eb8c262e38da70afa7cf4
+      src/funding_arbitrage/exchanges/private_streams.py: 9a5c7d2ddb9c86e44554401b9bd6b42138d417383149ee1c9d30715cbfa16460
+      src/funding_arbitrage/exchanges/public_events.py: 7173544cd4d9a60938d507c7b9c2257e2f544a818b873e922ac6beba78beed6a
+      src/funding_arbitrage/exchanges/trading.py: 307cb536616d83ae435bd5aa461852a67515f33aadc85ea0da416d70922e29a2
+      src/funding_arbitrage/market_data/l2_book.py: 2731308348dcd7574aa5d7a162cf90b96dc18c0a4dbff1ef0ab756204f8e66b0
+      src/funding_arbitrage/market_data/orderbook_protocols.py: 8013436386ab6354a376655875e54b3a266e0908ed98cec757a9ec9a0ff7dd3c
+      tests/test_binance_canonical_orderbook.py: 660ed2c4c59f0bc73ac770b30ce17f88746c2b82fc069d010fc324423de0f079
+      tests/test_bybit_canonical_orderbook.py: 171bc5c0fbb413867d6c198b520450318995251867866a741c549025cb26273e
+      tests/test_gate_canonical_orderbook.py: 368c68a126dbb0e48ad91d9bab36fab0bd8aad335d399db8b9bb1e0a899d1703
+      tests/test_hyperliquid_canonical_orderbook.py: 9fad2f273bc58123ea6439607dcca713fef8ca69ede5d3e73442f5db80ab1f0f
+      tests/test_l2_book.py: 1b609f99ca212ceed395001e98a0830b63a3a23de717517f8e69990d49527134
+      tests/test_mexc_canonical_orderbook.py: fca5babe7380c0b0231bd09ce5e4eec3ad925c4708c63c54f2258d830cb303ef
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_okx_canonical_orderbook.py: 4b32415dee7d79a4208a2e857a7427dd9f86ae0b6de3e7c0f91cc66d79513a4b
+      tests/test_orderbook_protocols.py: 36c1c8863d256a3c92df2cdd1e40edf07f8ce77307ef401ce719b2fd0d62d4da
+      tests/test_remaining_canonical_orderbooks.py: 3576d4b0388467e7bf65314719f83f338af88e6347842611470d46d056febdac
   - id: MD-004
     category: market_data
     title: Tick trades, OHLCV, mark, index, funding, OI, and public liquidations are collected
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_event_journal.py
+      - PYTHONPATH=src python -m pytest tests/test_public_events.py
     evidence:
-      - src/funding_arbitrage/exchanges/public_events.py
-      - src/funding_arbitrage/domain/events.py
-      - src/funding_arbitrage/services/event_writer.py
-      - tests/test_public_events.py
-      - tests/test_event_journal.py
       - docs/V1_PUBLIC_EVENTS.md
+      - src/funding_arbitrage/domain/events.py
+      - src/funding_arbitrage/exchanges/public_events.py
+      - src/funding_arbitrage/services/event_writer.py
+      - tests/test_event_journal.py
+      - tests/test_public_events.py
+    evidence_sha256:
+      docs/V1_PUBLIC_EVENTS.md: 14eccdada2995c7a44e5ac6144c03b170dbd22f885db958db7b4b6bf21d66c7f
+      src/funding_arbitrage/domain/events.py: 731b6cc059dd7a91f02bf77f475e5b684b339b677327e3851f0618e62e3a1b60
+      src/funding_arbitrage/exchanges/public_events.py: 7173544cd4d9a60938d507c7b9c2257e2f544a818b873e922ac6beba78beed6a
+      src/funding_arbitrage/services/event_writer.py: 906853858de0b5ef696bcbebab30df37bc741bd19a87485d4d885925569b7a50
+      tests/test_event_journal.py: 588c80c6e7afb947f56138f633b260d9bd7c1387de5fd7b88ca47257a9355e66
+      tests/test_public_events.py: afb893a17ebd02a83a52fe38e4c13e1f0081a187642e64c2832186fd2d96db20
   - id: MD-005
     category: market_data
     title: Data quality states detect stale, gap, crossed, invalid, recovering, and unavailable streams
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_data_quality_monitor.py
+      - PYTHONPATH=src python -m pytest tests/test_public_events.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_entry_health.py
     evidence:
-      - src/funding_arbitrage/market_data/quality.py
-      - src/funding_arbitrage/services/event_router.py
       - src/funding_arbitrage/exchanges/public_events.py
       - src/funding_arbitrage/main.py
+      - src/funding_arbitrage/market_data/quality.py
+      - src/funding_arbitrage/services/event_router.py
       - tests/test_data_quality_monitor.py
-      - tests/test_runtime_entry_health.py
       - tests/test_public_events.py
+      - tests/test_runtime_entry_health.py
   - id: MD-006
     category: market_data
     title: Instrument metadata, capabilities, precision, fees, rate limits, and clock skew are dynamic per venue
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_live_executor.py
+      - PYTHONPATH=src python -m pytest tests/test_trading_fee_cache.py
+      - PYTHONPATH=src python -m pytest tests/test_venue_metadata.py
     evidence:
-      - src/funding_arbitrage/market_data/venue_metadata.py
       - src/funding_arbitrage/exchanges/public_events.py
       - src/funding_arbitrage/exchanges/trading.py
       - src/funding_arbitrage/execution/live.py
-      - tests/test_venue_metadata.py
-      - tests/test_trading_fee_cache.py
+      - src/funding_arbitrage/market_data/venue_metadata.py
       - tests/test_live_executor.py
+      - tests/test_trading_fee_cache.py
+      - tests/test_venue_metadata.py
   - id: FEAT-001
     category: features
     title: Incremental EMA, ATR, ADX, efficiency ratio, VWAP, and volume profile features exist
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_candle_aggregation.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_technical_features.py
     evidence:
-      - src/funding_arbitrage/features/technical.py
       - src/funding_arbitrage/features/candles.py
+      - src/funding_arbitrage/features/technical.py
       - src/funding_arbitrage/services/multi_regime.py
       - tests/test_candle_aggregation.py
       - tests/test_multi_regime_runtime.py
       - tests/test_technical_features.py
+    evidence_sha256:
+      src/funding_arbitrage/features/candles.py: 5b1b7a294ea7a8109a6a889ca484d88eb88bcc98757948abfb29c9aa22c84259
+      src/funding_arbitrage/features/technical.py: 21ff4516a9e4fd35251a04b6af2ce28b0c9ae500be890aae9d0cbabc9b11868a
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      tests/test_candle_aggregation.py: e4451f207d0cfdbe5689f5f1ec6386b69293fd2c6d945c10bb178dbc95ddf4cf
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_technical_features.py: 6f6dd2d48e72a239a2851f7951ecc95502cd52377805f0c122315ba4c06b7912
   - id: FEAT-002
     category: features
     title: Incremental swing, BOS, CHoCH, liquidity-zone, and fair-value-gap features exist
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_structure_features.py
     evidence:
       - src/funding_arbitrage/features/structure.py
       - tests/test_structure_features.py
@@ -228,6 +482,8 @@ requirements:
     category: features
     title: Incremental OFI, microprice, book imbalance, trade flow, and CVD features exist
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_orderflow_features.py
     evidence:
       - src/funding_arbitrage/features/orderflow.py
       - tests/test_orderflow_features.py
@@ -235,57 +491,102 @@ requirements:
     category: features
     title: Incremental OI, funding, mark-index basis, and derivatives features exist
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_derivatives_features.py
     evidence:
       - src/funding_arbitrage/features/derivatives.py
       - tests/test_derivatives_features.py
   - id: REG-001
     category: regime
     title: Deterministic classifier covers trend, range, transition, volatility expansion, stress, and unknown
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_regime_classifier.py
     evidence:
       - src/funding_arbitrage/regime/classifier.py
       - src/funding_arbitrage/services/multi_regime.py
       - tests/test_multi_regime_runtime.py
       - tests/test_regime_classifier.py
+    evidence_sha256:
+      src/funding_arbitrage/regime/classifier.py: 287ef033146ea183d63e9792a991b3bfe059b779eeeca7b5ff68fc68db810779
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_regime_classifier.py: d77e1afae9ac80c92f2d97092e570e3ee7f7da9a160dc107d9f7454be4ff1045
   - id: REG-002
     category: regime
     title: Regime transitions use hysteresis, minimum dwell, confidence, and deterministic replay
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_regime_classifier.py
     evidence:
       - src/funding_arbitrage/regime/classifier.py
       - src/funding_arbitrage/services/multi_regime.py
       - tests/test_multi_regime_runtime.py
       - tests/test_regime_classifier.py
+    evidence_sha256:
+      src/funding_arbitrage/regime/classifier.py: 287ef033146ea183d63e9792a991b3bfe059b779eeeca7b5ff68fc68db810779
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_regime_classifier.py: d77e1afae9ac80c92f2d97092e570e3ee7f7da9a160dc107d9f7454be4ff1045
   - id: STRAT-001
     category: strategies
     title: Regime-filtered orderflow breakout implements score, entry, stop, target, and time stop
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_directional_strategies.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/directional.py
       - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/services/strategy_suite.py
-      - tests/test_multi_regime_runtime.py
+      - src/funding_arbitrage/strategies/directional.py
       - tests/test_directional_strategies.py
+      - tests/test_multi_regime_runtime.py
       - tests/test_strategy_suite.py
+    evidence_sha256:
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/strategy_suite.py: 57131530576fc6d92f9896d65519f0acf88cdccf11f4458f436393e3bae2c4b0
+      src/funding_arbitrage/strategies/directional.py: 2cb2bea85a47e96de16b31882088ec00d0618f812ea935ad78a6919b8d65a85e
+      tests/test_directional_strategies.py: 6bf5a70cf3b3b40f3f7cf564efc6d6afdde172a5285643e472e33ad506abb5c5
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_strategy_suite.py: f75c7a3ee38bb586342dc42fb253a0f44f4de72912b37cbfb25418fdb1f990cc
   - id: STRAT-002
     category: strategies
     title: Liquidity-sweep and failed-breakout reversion implements score, entry, stop, target, and time stop
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_directional_strategies.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/directional.py
       - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/services/strategy_suite.py
-      - tests/test_multi_regime_runtime.py
+      - src/funding_arbitrage/strategies/directional.py
       - tests/test_directional_strategies.py
+      - tests/test_multi_regime_runtime.py
       - tests/test_strategy_suite.py
+    evidence_sha256:
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/strategy_suite.py: 57131530576fc6d92f9896d65519f0acf88cdccf11f4458f436393e3bae2c4b0
+      src/funding_arbitrage/strategies/directional.py: 2cb2bea85a47e96de16b31882088ec00d0618f812ea935ad78a6919b8d65a85e
+      tests/test_directional_strategies.py: 6bf5a70cf3b3b40f3f7cf564efc6d6afdde172a5285643e472e33ad506abb5c5
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_strategy_suite.py: f75c7a3ee38bb586342dc42fb253a0f44f4de72912b37cbfb25418fdb1f990cc
   - id: STRAT-003
     category: strategies
     title: Funding and basis harvest uses exact settlements, forecast, borrow, fees, basis, and leg state machine
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_funding_basis_strategy.py
+      - PYTHONPATH=src python -m pytest tests/test_funding_harvest_state_machine.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_strategy_contexts.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/funding_basis.py
-      - src/funding_arbitrage/services/strategy_suite.py
       - src/funding_arbitrage/services/runtime_strategy_contexts.py
+      - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/strategies/funding_basis.py
       - tests/test_funding_basis_strategy.py
       - tests/test_funding_harvest_state_machine.py
       - tests/test_runtime_strategy_contexts.py
@@ -294,10 +595,14 @@ requirements:
     category: strategies
     title: Cross-exchange lead-lag fair value is a meta-filter and executable statistical-arbitrage strategy
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_lead_lag_strategy.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_strategy_contexts.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/lead_lag.py
-      - src/funding_arbitrage/services/strategy_suite.py
       - src/funding_arbitrage/services/runtime_strategy_contexts.py
+      - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/strategies/lead_lag.py
       - tests/test_lead_lag_strategy.py
       - tests/test_runtime_strategy_contexts.py
       - tests/test_strategy_suite.py
@@ -305,136 +610,278 @@ requirements:
     category: strategies
     title: Perpetual versus dated-futures basis strategy is implemented
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_dated_basis_strategy.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_strategy_contexts.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/dated_basis.py
-      - src/funding_arbitrage/services/strategy_suite.py
       - src/funding_arbitrage/services/runtime_strategy_contexts.py
+      - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/strategies/dated_basis.py
       - tests/test_dated_basis_strategy.py
       - tests/test_runtime_strategy_contexts.py
       - tests/test_strategy_suite.py
   - id: STRAT-006
     category: strategies
     title: Options volatility has canonical public data, risk, and PAPER execution
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_advanced_paper.py
+      - PYTHONPATH=src python -m pytest tests/test_option_market_data.py
+      - PYTHONPATH=src python -m pytest tests/test_options_volatility.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_strategy_contexts.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/options_volatility.py
-      - src/funding_arbitrage/services/strategy_suite.py
+      - scripts/option_chain_probe.py
       - src/funding_arbitrage/domain/events.py
       - src/funding_arbitrage/exchanges/bybit/client.py
       - src/funding_arbitrage/exchanges/okx/client.py
-      - src/funding_arbitrage/market_data/option_quotes.py
-      - src/funding_arbitrage/services/runtime_strategy_contexts.py
       - src/funding_arbitrage/execution/advanced_paper.py
       - src/funding_arbitrage/execution/option_fees.py
-      - scripts/option_chain_probe.py
-      - tests/test_options_volatility.py
-      - tests/test_strategy_suite.py
-      - tests/test_option_market_data.py
-      - tests/test_runtime_strategy_contexts.py
+      - src/funding_arbitrage/market_data/option_quotes.py
+      - src/funding_arbitrage/services/runtime_strategy_contexts.py
+      - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/strategies/options_volatility.py
       - tests/test_advanced_paper.py
+      - tests/test_option_market_data.py
+      - tests/test_options_volatility.py
+      - tests/test_runtime_strategy_contexts.py
+      - tests/test_strategy_suite.py
+    evidence_sha256:
+      scripts/option_chain_probe.py: 66d7a0f34b0a26167269818c659f17fee17afc288b901c458c4aaae1f1b19aff
+      src/funding_arbitrage/domain/events.py: 731b6cc059dd7a91f02bf77f475e5b684b339b677327e3851f0618e62e3a1b60
+      src/funding_arbitrage/exchanges/bybit/client.py: 71f00615da9c4b494cb1e25e8de0957dc47f6bcc5ef6dac4c918f666c4fadf67
+      src/funding_arbitrage/exchanges/okx/client.py: b1db641d2505b3f8a4e5a417a09f8e411546fdce550d7678d431109afc9c258f
+      src/funding_arbitrage/execution/advanced_paper.py: ccae82fd61dd7e002872b85d6f044eda096a3a02035c478e9990eea9b6f22f63
+      src/funding_arbitrage/execution/option_fees.py: 318abea0f2ea51cbeb20fabd43c6c60df084e1340835453e2ebc9636dcb26c5d
+      src/funding_arbitrage/market_data/option_quotes.py: 7601805e197f642269748cb6cccd0b16a518782f67ad50d601455ba7f8691a9c
+      src/funding_arbitrage/services/runtime_strategy_contexts.py: 6f7869e0592c1ed8101740864b5853f810b2515f362fb08b2c9b74445c4c3211
+      src/funding_arbitrage/services/strategy_suite.py: 57131530576fc6d92f9896d65519f0acf88cdccf11f4458f436393e3bae2c4b0
+      src/funding_arbitrage/strategies/options_volatility.py: 3e6e1d7771a9ceb8acd28e82c017ba60435b46ce74e927331e93f8b7b9d25db5
+      tests/test_advanced_paper.py: efeb694c7a319c4a67ca7c1da239d0f8ecda0d202c606b47ae7146b349e06a7e
+      tests/test_option_market_data.py: 1f91cf62e312d11d6cb056b37447ddaa3d9de590cefc91edca05a140730f1d2f
+      tests/test_options_volatility.py: 031251f1623c8e615064e6423cf07b380d3341b414485a83a6de195bfed4267b
+      tests/test_runtime_strategy_contexts.py: 77bba21619cf26d46d131555881c24e689ff17911e4ed1ea26e55a7b204b0fa7
+      tests/test_strategy_suite.py: f75c7a3ee38bb586342dc42fb253a0f44f4de72912b37cbfb25418fdb1f990cc
   - id: STRAT-007
     category: strategies
     title: Passive market making is inventory-, adverse-selection-, and fee-aware
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_market_making_strategy.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/market_making.py
       - src/funding_arbitrage/services/multi_regime_runtime.py
       - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/strategies/market_making.py
       - tests/test_market_making_strategy.py
       - tests/test_multi_regime_runtime.py
       - tests/test_strategy_suite.py
+    evidence_sha256:
+      src/funding_arbitrage/services/multi_regime_runtime.py: 1e0406126e7f91042b3aaf0b82d2be82db713febc9ce021b44e0d37a6f2009e7
+      src/funding_arbitrage/services/strategy_suite.py: 57131530576fc6d92f9896d65519f0acf88cdccf11f4458f436393e3bae2c4b0
+      src/funding_arbitrage/strategies/market_making.py: 766fda9f36cec797954be479ca8060a36c54e4bc240b192726c3b75003d9dc62
+      tests/test_market_making_strategy.py: f5b8875f4efaa5a569fa725d0ca53a61c270ae3f14bfd5dfebaff897ea2736cc
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_strategy_suite.py: f75c7a3ee38bb586342dc42fb253a0f44f4de72912b37cbfb25418fdb1f990cc
   - id: STRAT-008
     category: strategies
     title: Liquid-altcoin universe selection is dynamic, quality-gated, and survivorship-safe
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_runtime_universe.py
+      - PYTHONPATH=src python -m pytest tests/test_universe_selector.py
     evidence:
-      - src/funding_arbitrage/strategies/universe.py
-      - src/funding_arbitrage/services/runtime_universe.py
       - src/funding_arbitrage/domain/events.py
-      - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/main.py
-      - tests/test_universe_selector.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/runtime_universe.py
+      - src/funding_arbitrage/strategies/universe.py
       - tests/test_runtime_universe.py
+      - tests/test_universe_selector.py
+    evidence_sha256:
+      src/funding_arbitrage/domain/events.py: 731b6cc059dd7a91f02bf77f475e5b684b339b677327e3851f0618e62e3a1b60
+      src/funding_arbitrage/main.py: f4ad3cef03c4c8ac42837eeee19878e7eb67f462393f0629015d4b4b966573b1
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/runtime_universe.py: 324e15ae9b60a8a7dfc3d3ec28411e89714a08fa45cba3c09e03d13be10e3fd3
+      src/funding_arbitrage/strategies/universe.py: 8d9aaec132584547907770a2b2cef4c7c278ccc5de3041ccf40375656f0fbbf3
+      tests/test_runtime_universe.py: a642ec152f4c34a807ac4ad3d1be24a7f56723c63c2768ca0b912f825e14838b
+      tests/test_universe_selector.py: d4b98582a5e434482b3637480052d7117d53df1eb97ba756ce2015735e187567
   - id: STRAT-009
     category: strategies
     title: Martingale, grid, and loss-averaging research modules are configurable and fail-closed for live use
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_dangerous_research_strategies.py
+      - PYTHONPATH=src python -m pytest tests/test_guarded_capabilities.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_dangerous_research.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/strategies/dangerous_research.py
+      - docs/V1_STRATEGY_SUITE.md
+      - src/funding_arbitrage/config.py
+      - src/funding_arbitrage/services/runtime_dangerous_research.py
       - src/funding_arbitrage/services/strategy_suite.py
+      - src/funding_arbitrage/strategies/dangerous_research.py
       - tests/test_dangerous_research_strategies.py
+      - tests/test_guarded_capabilities.py
+      - tests/test_runtime_dangerous_research.py
       - tests/test_strategy_suite.py
   - id: AI-001
     category: strategies
     title: ML meta-labeling has versioned datasets, leakage controls, calibration, drift, and fallback
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_decision_support.py
+      - PYTHONPATH=src python -m pytest tests/test_meta_labeling.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_decision_support.py
     evidence:
-      - src/funding_arbitrage/ai/meta_labeling.py
-      - src/funding_arbitrage/ai/artifacts.py
-      - src/funding_arbitrage/services/decision_support.py
-      - src/funding_arbitrage/services/runtime_decision_support.py
-      - src/funding_arbitrage/services/multi_regime.py
-      - src/funding_arbitrage/main.py
       - docs/V1_DECISION_SUPPORT_RUNTIME.md
-      - tests/test_meta_labeling.py
+      - src/funding_arbitrage/ai/artifacts.py
+      - src/funding_arbitrage/ai/meta_labeling.py
+      - src/funding_arbitrage/main.py
+      - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/runtime_decision_support.py
       - tests/test_decision_support.py
-      - tests/test_runtime_decision_support.py
+      - tests/test_meta_labeling.py
       - tests/test_multi_regime_runtime.py
+      - tests/test_runtime_decision_support.py
+    evidence_sha256:
+      docs/V1_DECISION_SUPPORT_RUNTIME.md: aa9628f47b23a820586958bbf54372aa14a71cb2fad35f8d3958b070c2cb416b
+      src/funding_arbitrage/ai/artifacts.py: cc854f505c5de9a7d8edd5b037fcb75b2777850aafa362809db4ee0e4c5653d9
+      src/funding_arbitrage/ai/meta_labeling.py: b2f3a0e3eb138d810d355b1269589d1b789323348e8f33bf059471848319a411
+      src/funding_arbitrage/main.py: f4ad3cef03c4c8ac42837eeee19878e7eb67f462393f0629015d4b4b966573b1
+      src/funding_arbitrage/services/decision_support.py: ae9bbf3e904aa239d7233094942f15538ae002533d1765fb8b6d9d39713fef18
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/runtime_decision_support.py: 5d2959eeaf85ccc93b7fc69d7cab3624d9ea7a8826f9e83952b3954f27382a88
+      tests/test_decision_support.py: c6c2a331ceb8f7bba9a77961c3a205a3682b26ac021b0cd11b43fb378dba4319
+      tests/test_meta_labeling.py: e866fdf28a8151c7e188283b5f9d56f758c03c30d97364e2c45d28ebac0bafe4
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_runtime_decision_support.py: f0269c4a7998a869d789d29710a6938432138a42bdf903d77c9a674a9cfa33a5
   - id: AI-002
     category: strategies
     title: RL decisions have constrained action space, offline evaluation, guardrails, and deterministic fallback
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_decision_support.py
+      - PYTHONPATH=src python -m pytest tests/test_market_data_repository.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_rl_policy.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_decision_support.py
     evidence:
-      - src/funding_arbitrage/ai/rl_policy.py
+      - docs/V1_DECISION_SUPPORT_RUNTIME.md
       - src/funding_arbitrage/ai/artifacts.py
-      - src/funding_arbitrage/services/decision_support.py
-      - src/funding_arbitrage/services/runtime_decision_support.py
-      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/ai/rl_policy.py
       - src/funding_arbitrage/database/repositories/market_data.py
       - src/funding_arbitrage/main.py
-      - docs/V1_DECISION_SUPPORT_RUNTIME.md
-      - tests/test_rl_policy.py
+      - src/funding_arbitrage/services/decision_support.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/runtime_decision_support.py
       - tests/test_decision_support.py
-      - tests/test_runtime_decision_support.py
-      - tests/test_multi_regime_runtime.py
       - tests/test_market_data_repository.py
+      - tests/test_multi_regime_runtime.py
+      - tests/test_rl_policy.py
+      - tests/test_runtime_decision_support.py
+    evidence_sha256:
+      docs/V1_DECISION_SUPPORT_RUNTIME.md: aa9628f47b23a820586958bbf54372aa14a71cb2fad35f8d3958b070c2cb416b
+      src/funding_arbitrage/ai/artifacts.py: cc854f505c5de9a7d8edd5b037fcb75b2777850aafa362809db4ee0e4c5653d9
+      src/funding_arbitrage/ai/rl_policy.py: a4362295a8ff140b84ba7145ab88b4027fd65d67322287686b8867f6f51c741b
+      src/funding_arbitrage/database/repositories/market_data.py: 81424bee54fde0b35a7ef9ab4784143aa45d2155723e78440cdc2c348cc97ae7
+      src/funding_arbitrage/main.py: f4ad3cef03c4c8ac42837eeee19878e7eb67f462393f0629015d4b4b966573b1
+      src/funding_arbitrage/services/decision_support.py: ae9bbf3e904aa239d7233094942f15538ae002533d1765fb8b6d9d39713fef18
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/runtime_decision_support.py: 5d2959eeaf85ccc93b7fc69d7cab3624d9ea7a8826f9e83952b3954f27382a88
+      tests/test_decision_support.py: c6c2a331ceb8f7bba9a77961c3a205a3682b26ac021b0cd11b43fb378dba4319
+      tests/test_market_data_repository.py: d4830cf3a6c3d4176cc2fc0549140dc586e1b9a7fd49c84542651c4c7741414d
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_rl_policy.py: 7ae70702bfafad0203c495c0a8a32f4050dfaa2fb38924a5f274ec9cf1ec343c
+      tests/test_runtime_decision_support.py: f0269c4a7998a869d789d29710a6938432138a42bdf903d77c9a674a9cfa33a5
   - id: AI-003
     category: strategies
     title: LLM decisions use versioned schemas, bounded latency and spend, audit, and deterministic fallback
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_decision_support.py
+      - PYTHONPATH=src python -m pytest tests/test_guarded_capabilities.py
+      - PYTHONPATH=src python -m pytest tests/test_llm_gateway.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_llm.py
     evidence:
+      - docs/V1_DECISION_SUPPORT_RUNTIME.md
       - src/funding_arbitrage/ai/llm_gateway.py
+      - src/funding_arbitrage/ai/llm_providers.py
       - src/funding_arbitrage/services/decision_support.py
       - src/funding_arbitrage/services/multi_regime.py
-      - tests/test_llm_gateway.py
+      - src/funding_arbitrage/services/runtime_llm.py
       - tests/test_decision_support.py
+      - tests/test_guarded_capabilities.py
+      - tests/test_llm_gateway.py
       - tests/test_multi_regime_runtime.py
+      - tests/test_runtime_llm.py
+    evidence_sha256:
+      docs/V1_DECISION_SUPPORT_RUNTIME.md: aa9628f47b23a820586958bbf54372aa14a71cb2fad35f8d3958b070c2cb416b
+      src/funding_arbitrage/ai/llm_gateway.py: 3e3a03dbdd1da5da816eefe1af59323b95ce832f6cd3a173a2595c6f822afc06
+      src/funding_arbitrage/ai/llm_providers.py: b26dde6165518eef7d6d63b9de9d7e348ee3ae31e7abe6bae6cc4f60464c7b01
+      src/funding_arbitrage/services/decision_support.py: ae9bbf3e904aa239d7233094942f15538ae002533d1765fb8b6d9d39713fef18
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/runtime_llm.py: 42ec990875b9ea2382ef7794ef345660854d58511f1c32cd0f9bf99bf5e3228d
+      tests/test_decision_support.py: c6c2a331ceb8f7bba9a77961c3a205a3682b26ac021b0cd11b43fb378dba4319
+      tests/test_guarded_capabilities.py: 2f5bb344877bcff03623c925a5b8ef731382a0df58b11f9880df7639c1bca4cc
+      tests/test_llm_gateway.py: 40d127ecaa841fd1aa111a2aac659d501f355ebe433ad41210257e9ea837cc43
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_runtime_llm.py: a8e7d2e790a1db689fda5fc4a23affa2033e974797a22f8fe4b2bd9e1a045abb
   - id: SIG-001
     category: strategies
     title: Signal orchestrator enforces schema, TTL, deduplication, conflicts, correlation, and allocation policy
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_signal_orchestrator.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_suite.py
     evidence:
-      - src/funding_arbitrage/signals/orchestrator.py
       - src/funding_arbitrage/services/multi_regime.py
       - src/funding_arbitrage/services/strategy_suite.py
-      - tests/test_signal_orchestrator.py
+      - src/funding_arbitrage/signals/orchestrator.py
       - tests/test_multi_regime_runtime.py
+      - tests/test_signal_orchestrator.py
       - tests/test_strategy_suite.py
+    evidence_sha256:
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/strategy_suite.py: 57131530576fc6d92f9896d65519f0acf88cdccf11f4458f436393e3bae2c4b0
+      src/funding_arbitrage/signals/orchestrator.py: aafba787d2c76057cadaafabb2b708053ba1c1453fc0d78b6d78f0c015cfe6ab
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_signal_orchestrator.py: 04df2b1eeabbabc0f8315a70765aab76d1633d5ab542ffbd3efbdf7d19806410
+      tests/test_strategy_suite.py: f75c7a3ee38bb586342dc42fb253a0f44f4de72912b37cbfb25418fdb1f990cc
   - id: RISK-001
     category: risk
     title: Portfolio risk is the sole authority that approves, resizes, or rejects intents
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_decision_support.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_portfolio_risk_authority.py
     evidence:
       - src/funding_arbitrage/risk/portfolio.py
       - src/funding_arbitrage/services/decision_support.py
       - src/funding_arbitrage/services/multi_regime.py
-      - tests/test_portfolio_risk_authority.py
       - tests/test_decision_support.py
       - tests/test_multi_regime_runtime.py
+      - tests/test_portfolio_risk_authority.py
+    evidence_sha256:
+      src/funding_arbitrage/risk/portfolio.py: b8682bbb353749ac4289d15d9f929ffc48bd96e36314a1a078a0a74d371c6963
+      src/funding_arbitrage/services/decision_support.py: ae9bbf3e904aa239d7233094942f15538ae002533d1765fb8b6d9d39713fef18
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      tests/test_decision_support.py: c6c2a331ceb8f7bba9a77961c3a205a3682b26ac021b0cd11b43fb378dba4319
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_portfolio_risk_authority.py: fbb3203a4f5855a65d5f4a5acef2f9c165ed37c964b1c337a76bd9e58bd0f214
   - id: RISK-002
     category: risk
     title: Risk hierarchy covers order, position, asset, strategy, venue, correlation group, and portfolio
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_portfolio_risk_authority.py
     evidence:
       - src/funding_arbitrage/risk/portfolio.py
       - tests/test_portfolio_risk_authority.py
@@ -442,13 +889,23 @@ requirements:
     category: risk
     title: Kill switches cover strategy, venue, portfolio, stale data, loss, reconciliation, and operator control
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_guarded_capabilities.py
+      - PYTHONPATH=src python -m pytest tests/test_portfolio_risk_authority.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_protective_stops.py
     evidence:
+      - src/funding_arbitrage/config.py
       - src/funding_arbitrage/risk/portfolio.py
+      - src/funding_arbitrage/services/runtime_protective.py
+      - tests/test_guarded_capabilities.py
       - tests/test_portfolio_risk_authority.py
+      - tests/test_runtime_protective_stops.py
   - id: RISK-004
     category: risk
     title: Sizing includes stop distance, liquidity, volatility, correlation, margin, and delta exposure
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_portfolio_risk_authority.py
     evidence:
       - src/funding_arbitrage/risk/portfolio.py
       - tests/test_portfolio_risk_authority.py
@@ -456,13 +913,20 @@ requirements:
     category: risk
     title: Portfolio-margin simulation and venue-specific margin/liquidation risk are implemented
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_portfolio_margin.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_margin.py
     evidence:
       - src/funding_arbitrage/risk/margin.py
+      - src/funding_arbitrage/services/runtime_margin.py
       - tests/test_portfolio_margin.py
+      - tests/test_runtime_margin.py
   - id: EXE-001
     category: execution
     title: Durable OMS state machine covers new, acknowledged, partial, filled, cancel, rejected, expired, unknown, and reconciling
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_durable_oms.py
     evidence:
       - src/funding_arbitrage/execution/oms.py
       - tests/test_durable_oms.py
@@ -470,6 +934,8 @@ requirements:
     category: execution
     title: Client order IDs, persist-before-submit, unknown-outcome recovery, and cancel-race handling are enforced
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_durable_oms.py
     evidence:
       - src/funding_arbitrage/execution/oms.py
       - tests/test_durable_oms.py
@@ -477,6 +943,9 @@ requirements:
     category: execution
     title: Marketable capped limits, all-in cost, slippage guard, partial fills, and emergency flatten are implemented
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_durable_oms.py
+      - PYTHONPATH=src python -m pytest tests/test_smart_order_router.py
     evidence:
       - src/funding_arbitrage/execution/oms.py
       - src/funding_arbitrage/execution/router.py
@@ -486,54 +955,95 @@ requirements:
     category: execution
     title: Exchange-side reduce-only protective stops survive process failure and reconcile after restart
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_protective_stops.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_protective_stops.py
     evidence:
+      - docs/MULTI_REGIME_RUNTIME.md
       - src/funding_arbitrage/execution/protective.py
+      - src/funding_arbitrage/services/runtime.py
+      - src/funding_arbitrage/services/runtime_protective.py
       - tests/test_protective_stops.py
+      - tests/test_runtime_protective_stops.py
   - id: EXE-005
     category: execution
     title: Smart order router optimizes all-in execution across venues and handles partial routing
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_runtime_router.py
+      - PYTHONPATH=src python -m pytest tests/test_smart_order_router.py
     evidence:
+      - docs/V1_SMART_ORDER_ROUTING.md
       - src/funding_arbitrage/execution/router.py
+      - src/funding_arbitrage/services/runtime_router.py
+      - src/funding_arbitrage/services/strategy_execution.py
+      - tests/test_runtime_router.py
       - tests/test_smart_order_router.py
   - id: EXE-006
     category: execution
     title: DEX execution handles approvals, nonce, gas, slippage, reorg, replacement, and finality
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_dex_execution.py
+      - PYTHONPATH=src python -m pytest tests/test_guarded_capabilities.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_onchain.py
     evidence:
+      - src/funding_arbitrage/config.py
       - src/funding_arbitrage/execution/dex.py
+      - src/funding_arbitrage/services/runtime_onchain.py
       - tests/test_dex_execution.py
+      - tests/test_guarded_capabilities.py
+      - tests/test_runtime_onchain.py
   - id: EXE-007
     category: execution
     title: On-chain MEV execution handles simulation, bundle policy, reorgs, private relay, and loss bounds
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_guarded_capabilities.py
+      - PYTHONPATH=src python -m pytest tests/test_mev_execution.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_onchain.py
     evidence:
+      - src/funding_arbitrage/config.py
       - src/funding_arbitrage/execution/mev.py
+      - src/funding_arbitrage/services/runtime_onchain.py
+      - tests/test_guarded_capabilities.py
       - tests/test_mev_execution.py
+      - tests/test_runtime_onchain.py
   - id: EXE-008
     category: execution
     title: Native low-latency path supports colocation-capable sub-10ms budgets with measured telemetry
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_native_low_latency.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_low_latency.py
     evidence:
-      - native/low_latency/native_low_latency.c
-      - src/funding_arbitrage/execution/low_latency.py
-      - tests/test_native_low_latency.py
       - .github/workflows/release-gate.yml
       - Dockerfile
+      - native/low_latency/native_low_latency.c
+      - src/funding_arbitrage/execution/low_latency.py
+      - src/funding_arbitrage/monitoring/metrics.py
+      - src/funding_arbitrage/services/runtime_low_latency.py
+      - tests/test_native_low_latency.py
+      - tests/test_runtime_low_latency.py
   - id: PORT-001
     category: portfolio
     title: Double-entry ledger reconciles cash, collateral, positions, realized, unrealized, fees, funding, borrow, gas, and transfers
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_double_entry_ledger.py
+      - PYTHONPATH=src python -m pytest tests/test_funding_ledger_repository.py
     evidence:
-      - src/funding_arbitrage/portfolio/ledger.py
       - src/funding_arbitrage/database/repositories/ledger.py
       - src/funding_arbitrage/database/repositories/market_data.py
+      - src/funding_arbitrage/portfolio/ledger.py
       - tests/test_double_entry_ledger.py
       - tests/test_funding_ledger_repository.py
   - id: PORT-002
     category: portfolio
     title: Continuous local versus venue order, fill, balance, position, and funding reconciliation is classified and audited
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_continuous_reconciliation.py
     evidence:
       - src/funding_arbitrage/portfolio/reconciliation.py
       - tests/test_continuous_reconciliation.py
@@ -541,335 +1051,703 @@ requirements:
     category: portfolio
     title: Automated withdrawal state machine is idempotent, allowlisted, multi-approved, capped, and disabled by default
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_guarded_capabilities.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_withdrawal.py
+      - PYTHONPATH=src python -m pytest tests/test_withdrawal_manager.py
     evidence:
+      - src/funding_arbitrage/config.py
       - src/funding_arbitrage/portfolio/withdrawal.py
+      - src/funding_arbitrage/services/runtime_withdrawal.py
+      - tests/test_guarded_capabilities.py
+      - tests/test_runtime_withdrawal.py
       - tests/test_withdrawal_manager.py
   - id: BT-001
     category: backtest
     title: Deterministic event-driven backtest and replay use the same strategy, risk, and OMS contracts as runtime
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_decision_pipeline.py
+      - PYTHONPATH=src python -m pytest tests/test_durable_oms.py
+      - PYTHONPATH=src python -m pytest tests/test_historical_replay.py
     evidence:
-      - src/funding_arbitrage/domain/decisions.py
-      - src/funding_arbitrage/services/decision_pipeline.py
-      - src/funding_arbitrage/execution/oms.py
+      - docs/V1_REPLAY_RUNTIME_PARITY.md
       - src/funding_arbitrage/backtest/historical_replay.py
+      - src/funding_arbitrage/domain/decisions.py
+      - src/funding_arbitrage/execution/oms.py
+      - src/funding_arbitrage/services/decision_pipeline.py
       - tests/test_decision_pipeline.py
       - tests/test_durable_oms.py
       - tests/test_historical_replay.py
-      - docs/V1_REPLAY_RUNTIME_PARITY.md
   - id: BT-002
     category: backtest
     title: Fill models cover aggressive, passive queue, latency, partials, impact, rejections, cancel races, and funding
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_backtest_fill_model.py
+      - PYTHONPATH=src python -m pytest tests/test_historical_replay.py
+      - PYTHONPATH=src python -m pytest tests/test_pnl_v2.py
     evidence:
+      - docs/V1_BACKTEST_FILL_MODEL.md
       - src/funding_arbitrage/backtest/fills.py
       - src/funding_arbitrage/backtest/historical_replay.py
       - tests/test_backtest_fill_model.py
       - tests/test_historical_replay.py
       - tests/test_pnl_v2.py
-      - docs/V1_BACKTEST_FILL_MODEL.md
   - id: BT-003
     category: backtest
     title: Research prevents look-ahead and survivorship bias and supports walk-forward, Monte Carlo, and stress
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_research_validation.py
+      - PYTHONPATH=src python -m pytest tests/test_universe_selector.py
     evidence:
+      - docs/V1_RESEARCH_VALIDATION.md
       - src/funding_arbitrage/backtest/research.py
       - src/funding_arbitrage/strategies/universe.py
       - tests/test_research_validation.py
       - tests/test_universe_selector.py
-      - docs/V1_RESEARCH_VALIDATION.md
   - id: BT-004
     category: backtest
     title: Research gates enforce profitability, expectancy, Sharpe, drawdown, diversification, and doubled-slippage robustness
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_comparison.py
+      - PYTHONPATH=src python -m pytest tests/test_research_gates.py
     evidence:
-      - src/funding_arbitrage/backtest/gates.py
-      - src/funding_arbitrage/backtest/comparison.py
-      - tests/test_research_gates.py
-      - tests/test_comparison.py
       - docs/V1_RESEARCH_VALIDATION.md
+      - src/funding_arbitrage/backtest/comparison.py
+      - src/funding_arbitrage/backtest/gates.py
+      - tests/test_comparison.py
+      - tests/test_research_gates.py
   - id: DATA-001
     category: storage
     title: PostgreSQL operational schema covers instruments, intents, orders, fills, positions, balances, risk, reconciliation, and audit
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_directional_paper_persistence.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_persistence.py
+      - PYTHONPATH=src python -m pytest tests/test_v1_operational_schema.py
     evidence:
-      - src/funding_arbitrage/database/models.py
       - migrations/versions/0010_live_execution.py
       - migrations/versions/0012_v1_operational_schema.py
       - migrations/versions/0017_multi_regime_runtime.py
-      - src/funding_arbitrage/database/repositories/multi_regime.py
+      - src/funding_arbitrage/database/models.py
       - src/funding_arbitrage/database/repositories/directional_paper.py
       - src/funding_arbitrage/database/repositories/ledger.py
-      - tests/test_multi_regime_persistence.py
+      - src/funding_arbitrage/database/repositories/multi_regime.py
       - tests/test_directional_paper_persistence.py
+      - tests/test_multi_regime_persistence.py
       - tests/test_v1_operational_schema.py
+    evidence_sha256:
+      migrations/versions/0010_live_execution.py: 2fcf591bf8a5ad3ad1440ef0afdf62b95b3cfc7253125d6786545bad59b2004b
+      migrations/versions/0012_v1_operational_schema.py: 45b70b7b647b3c4f1f5db683ca5f5aac8ef94f44a86e3025d0c32438462b58d5
+      migrations/versions/0017_multi_regime_runtime.py: 3c1f37391234e031d89ff5a99cd32f52afa495fede3b587d72cf5b39303eab41
+      src/funding_arbitrage/database/models.py: 5c0e437b62311aa94c5578f888d83ad398ac9e107403eab5d153cc84c024dc8d
+      src/funding_arbitrage/database/repositories/directional_paper.py: 2f4f48a68278daf930c8f7913d0b1c7b1ae6b7d8ea8153a3687bddb31175d912
+      src/funding_arbitrage/database/repositories/ledger.py: 4f499fd35eddb8fc3b72f64a606ae60e5cc0e99df325ac88d5f4fee6104e0f6e
+      src/funding_arbitrage/database/repositories/multi_regime.py: 1f289d40b143afb1aa0367efb8dfd60fa53130e1f40753dad676a3509963ea6a
+      tests/test_directional_paper_persistence.py: aec3d27e9dcb7cf5dfc8f5535d2d9f80eff0cadb5f55fa3e29d8db9f841c18f1
+      tests/test_multi_regime_persistence.py: e5345cda14be49d2e7d7814261dd11426e164dbe9f333cced67f73b28ca7bcec
+      tests/test_v1_operational_schema.py: 3656bb406f890cdc94302923cfcaa57e6008204b699dc59a12bd54030cb15940
   - id: DATA-002
     category: storage
     title: ClickHouse stores raw market events, features, signals, and telemetry with retention
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_analytics_storage.py
     evidence:
+      - docker-compose.yml
       - docker/clickhouse/init/001_v1_analytics.sql
       - docker/clickhouse/init/002_v1_typed_analytics_upgrade.sql
+      - docs/V1_ANALYTICS_STORAGE.md
+      - migrations/versions/0016_analytics_replication.py
+      - src/funding_arbitrage/main.py
       - src/funding_arbitrage/storage/clickhouse.py
       - src/funding_arbitrage/storage/replication.py
-      - src/funding_arbitrage/main.py
-      - migrations/versions/0016_analytics_replication.py
       - tests/test_analytics_storage.py
-      - docs/V1_ANALYTICS_STORAGE.md
-      - docker-compose.yml
+    evidence_sha256:
+      docker-compose.yml: ddfbaa8dc1f7db4bfac4217852afdf6186a9ec9f378e45c92767096d76396a38
+      docker/clickhouse/init/001_v1_analytics.sql: 19c5754964d8baef273287e211bd0e15d3d5cb55a9a86ff7aeb91bcf3ab63e69
+      docker/clickhouse/init/002_v1_typed_analytics_upgrade.sql: a820732ffe7345ecfe543a7a817717df7fe680efefdcf12a3084704b5d8f4574
+      docs/V1_ANALYTICS_STORAGE.md: 9e27944eef86f15f7e17f4b6a6beb0868e7ce32965e79696071f47015b739875
+      migrations/versions/0016_analytics_replication.py: b86d53d8fa0c6d08b240af7b83ba827a9224c0d48436d65811aad818b9c6c094
+      src/funding_arbitrage/main.py: f4ad3cef03c4c8ac42837eeee19878e7eb67f462393f0629015d4b4b966573b1
+      src/funding_arbitrage/storage/clickhouse.py: 9296c3d7103cbad0bccccff09a15efa419e0e566ba4d6952977417640c2a1c38
+      src/funding_arbitrage/storage/replication.py: ed40ed80920c8638afb45d14ec7557285e6ac2ef817d4c321f5489e8042c089e
+      tests/test_analytics_storage.py: 8fa13efeaf7a9553bbc553dfb1c46a7c540f6185ec007a614bbd8c3d47eae7b5
   - id: DATA-003
     category: storage
     title: Redis supports bounded ephemeral state without becoming accounting authority
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_analytics_storage.py
     evidence:
+      - docker-compose.yml
       - src/funding_arbitrage/storage/ephemeral.py
       - tests/test_analytics_storage.py
-      - docker-compose.yml
+    evidence_sha256:
+      docker-compose.yml: ddfbaa8dc1f7db4bfac4217852afdf6186a9ec9f378e45c92767096d76396a38
+      src/funding_arbitrage/storage/ephemeral.py: 849d60f11d034c2dcf6e6c44d3b588be2fbd121c6360c7de0d327aec0d29c1ab
+      tests/test_analytics_storage.py: 8fa13efeaf7a9553bbc553dfb1c46a7c540f6185ec007a614bbd8c3d47eae7b5
   - id: DATA-004
     category: storage
     title: Parquet datasets are versioned, checksummed, reproducible, and replayable
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_parquet_storage.py
     evidence:
+      - pyproject.toml
+      - requirements-linux.lock
+      - requirements.lock
       - src/funding_arbitrage/storage/parquet.py
       - tests/test_parquet_storage.py
-      - pyproject.toml
-      - requirements.lock
-      - requirements-linux.lock
   - id: DATA-005
     category: storage
     title: Immutable raw event and audit retention supports exact incident reconstruction
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_event_journal.py
+      - PYTHONPATH=src python -m pytest tests/test_immutable_retention.py
     evidence:
-      - src/funding_arbitrage/database/repositories/events.py
-      - migrations/versions/0011_canonical_events.py
-      - tests/test_event_journal.py
-      - migrations/versions/0013_append_only_retention.py
-      - src/funding_arbitrage/storage/incident.py
-      - tests/test_immutable_retention.py
       - docs/V1_DATA_RETENTION.md
+      - migrations/versions/0011_canonical_events.py
+      - migrations/versions/0013_append_only_retention.py
+      - src/funding_arbitrage/database/repositories/events.py
+      - src/funding_arbitrage/storage/incident.py
+      - tests/test_event_journal.py
+      - tests/test_immutable_retention.py
+    evidence_sha256:
+      docs/V1_DATA_RETENTION.md: 6d0c569990dc97b174b4a9522ae6e5b01eb6850f569b7e7a80142e0cb4702542
+      migrations/versions/0011_canonical_events.py: 10a94bf3216dc9b31892c1808b6874d72f0e88ebf0f382c3a7b9e4428f7d80f3
+      migrations/versions/0013_append_only_retention.py: 181a76736e5e62114f888d203c5173da3ff36ede0662405ecb5d8c57584a85df
+      src/funding_arbitrage/database/repositories/events.py: cbad5ec99ba39ac31671f5b47efd15ece7bd0446a03be0165d38c780b20694ff
+      src/funding_arbitrage/storage/incident.py: 69b213bb4348971372ad59ea815dbf7aad7653409f37370a047c96980e40d3b3
+      tests/test_event_journal.py: 588c80c6e7afb947f56138f633b260d9bd7c1387de5fd7b88ca47257a9355e66
+      tests/test_immutable_retention.py: 18205853f7bac34dd684f3e6935633fd6f100616ebf00337d23588c4cb6f514c
   - id: SEC-001
     category: security
     title: Control plane enforces JWT revocation, mTLS, RBAC, idempotency, rate limits, and immutable audit
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_control_plane_security.py
     evidence:
+      - docker-compose.yml
+      - docker/nginx/control-plane.conf
+      - docs/V1_CONTROL_PLANE_SECURITY.md
+      - migrations/versions/0014_control_plane_security.py
+      - src/funding_arbitrage/database/repositories/audit.py
+      - src/funding_arbitrage/database/repositories/control_plane.py
       - src/funding_arbitrage/security/control_plane.py
       - src/funding_arbitrage/security/rate_limit.py
       - src/funding_arbitrage/security/revocation.py
-      - src/funding_arbitrage/database/repositories/control_plane.py
-      - src/funding_arbitrage/database/repositories/audit.py
-      - migrations/versions/0014_control_plane_security.py
-      - docker/nginx/control-plane.conf
-      - docker-compose.yml
       - tests/test_control_plane_security.py
-      - docs/V1_CONTROL_PLANE_SECURITY.md
+    evidence_sha256:
+      docker-compose.yml: ddfbaa8dc1f7db4bfac4217852afdf6186a9ec9f378e45c92767096d76396a38
+      docker/nginx/control-plane.conf: fc60357ae54b84ffc151f6ec96a946f1c1e69bc67fe25e3f76099cc74003c06f
+      docs/V1_CONTROL_PLANE_SECURITY.md: 4f47c79b90825936801b57be920084d9763eef2d642bac80f397d2db23a2cdea
+      migrations/versions/0014_control_plane_security.py: 30f177906417a5a7ab327ea0671b2c0ac132deecad31bba350e6ca8d7e8a8b15
+      src/funding_arbitrage/database/repositories/audit.py: 05cf53024910da7e60f55a4f7c1407c045ab8aa42a54f781f603b17648addac3
+      src/funding_arbitrage/database/repositories/control_plane.py: 8d4af9286043a340a0a104c0b01e3ae8a00fe741ae6c983338274edea6575f3a
+      src/funding_arbitrage/security/control_plane.py: 9eadf057ce22e14e84c2d66f159f781d5be75a5acca099c70be73ab0df350f28
+      src/funding_arbitrage/security/rate_limit.py: a9ecdee3e76be4b5862039c1b7c8ff8c29ac5863122144f2eecd16a5c4cf790b
+      src/funding_arbitrage/security/revocation.py: c687f7d1df82db94910ecadd675f0f1424a9736875cab64e96c6a701a841d1e0
+      tests/test_control_plane_security.py: d5a5fd61b4d4787a806715e3767b59ad6360168aaae602df3b0cf8dfae587418
   - id: SEC-002
     category: security
     title: Secrets use least privilege, no-withdraw keys by default, IP allowlists, subaccounts, rotation, and redaction
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_credential_policy.py
+      - PYTHONPATH=src python -m pytest tests/test_live_config.py
     evidence:
-      - src/funding_arbitrage/credential_policy.py
-      - src/funding_arbitrage/config.py
       - .env.live.example
       - docker-compose.yml
+      - ops/LIVE_TRADING_RUNBOOK.md
+      - src/funding_arbitrage/config.py
+      - src/funding_arbitrage/credential_policy.py
       - tests/test_credential_policy.py
       - tests/test_live_config.py
-      - ops/LIVE_TRADING_RUNBOOK.md
   - id: SEC-003
     category: security
     title: Databases are non-public and service traffic supports TLS and authenticated access
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_analytics_storage.py
+      - PYTHONPATH=src python -m pytest tests/test_deployment_safety.py
+      - PYTHONPATH=src python -m pytest tests/test_internal_tls.py
     evidence:
-      - src/funding_arbitrage/internal_tls.py
-      - src/funding_arbitrage/database/session.py
+      - docker-compose.yml
+      - docker/clickhouse/config.d/tls.xml
+      - docker/postgres/pg_hba.conf
+      - docker/redis/secure-entrypoint.sh
+      - docs/V1_INTERNAL_SERVICE_SECURITY.md
       - migrations/env.py
+      - src/funding_arbitrage/database/session.py
+      - src/funding_arbitrage/internal_tls.py
       - src/funding_arbitrage/security/rate_limit.py
       - src/funding_arbitrage/security/revocation.py
       - src/funding_arbitrage/storage/clickhouse.py
-      - docker-compose.yml
-      - docker/postgres/pg_hba.conf
-      - docker/redis/secure-entrypoint.sh
-      - docker/clickhouse/config.d/tls.xml
-      - tests/test_internal_tls.py
-      - tests/test_deployment_safety.py
       - tests/test_analytics_storage.py
-      - docs/V1_INTERNAL_SERVICE_SECURITY.md
+      - tests/test_deployment_safety.py
+      - tests/test_internal_tls.py
+    evidence_sha256:
+      docker-compose.yml: ddfbaa8dc1f7db4bfac4217852afdf6186a9ec9f378e45c92767096d76396a38
+      docker/clickhouse/config.d/tls.xml: b86054cf6187859370cf1c8176d7585695150bc6b187ca20357ad338166fff21
+      docker/postgres/pg_hba.conf: ae462fa985f7f55843dbc5f0ac4d716ae341b38fa2d986e3fae553b14c7e9bd5
+      docker/redis/secure-entrypoint.sh: 177c06a4625abe23adfc0d863113ea615e1cb9b004eb03089091e69ff0122de7
+      docs/V1_INTERNAL_SERVICE_SECURITY.md: 6a062d8a9ab06972f6653fc7808c28b65d63de14d5cc28ebc500cfc6599b64ff
+      migrations/env.py: 76d933c4662ae325f4001d4ccd24a3ab180de65eaeba1c2dc04a7014c2acd926
+      src/funding_arbitrage/database/session.py: d7a1ccfe187db6b82f624121453df9d0571fbdbe084fbe5f3a88bebab0c6495c
+      src/funding_arbitrage/internal_tls.py: 21f9244848c6c59d50cd9d107acc534eeecef80fc057bc262dab2c8087648889
+      src/funding_arbitrage/security/rate_limit.py: a9ecdee3e76be4b5862039c1b7c8ff8c29ac5863122144f2eecd16a5c4cf790b
+      src/funding_arbitrage/security/revocation.py: c687f7d1df82db94910ecadd675f0f1424a9736875cab64e96c6a701a841d1e0
+      src/funding_arbitrage/storage/clickhouse.py: 9296c3d7103cbad0bccccff09a15efa419e0e566ba4d6952977417640c2a1c38
+      tests/test_analytics_storage.py: 8fa13efeaf7a9553bbc553dfb1c46a7c540f6185ec007a614bbd8c3d47eae7b5
+      tests/test_deployment_safety.py: e5a71de3b8f35fcdc858438591657f9fd8cbea2f74871c11d3cb0cd7423ba5fc
+      tests/test_internal_tls.py: f3af074390c40c80a6f0c42ba84e9a6119dec8c7f8502d4cc07d115b1c7fb243
   - id: OBS-001
     category: monitoring
     title: Prometheus and Grafana expose market, strategy, risk, OMS, portfolio, reconciliation, and latency telemetry
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_observability_alerts.py
     evidence:
-      - src/funding_arbitrage/monitoring/metrics.py
-      - docker/prometheus.yml
-      - docker/grafana/provisioning/datasources/prometheus.yml
-      - docker/grafana/provisioning/dashboards/dashboards.yml
       - docker/grafana/dashboards/funding-v1-operations.json
-      - tests/test_observability_alerts.py
+      - docker/grafana/provisioning/dashboards/dashboards.yml
+      - docker/grafana/provisioning/datasources/prometheus.yml
+      - docker/prometheus.yml
       - docs/V1_OBSERVABILITY.md
+      - src/funding_arbitrage/monitoring/metrics.py
+      - tests/test_observability_alerts.py
   - id: OBS-002
     category: monitoring
     title: Actionable alerts cover stale data, gaps, latency, rejects, unknown orders, exposure, drawdown, and reconciliation drift
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_observability_alerts.py
     evidence:
+      - docker/alertmanager/alertmanager.yml
       - docker/prometheus-alerts.yml
       - docker/prometheus.yml
-      - docker/alertmanager/alertmanager.yml
-      - src/funding_arbitrage/monitoring/metrics.py
+      - docs/V1_ALERTING.md
+      - ops/ALERT_RUNBOOK.md
       - src/funding_arbitrage/execution/live.py
+      - src/funding_arbitrage/monitoring/metrics.py
       - src/funding_arbitrage/services/live_runner.py
       - tests/test_observability_alerts.py
-      - ops/ALERT_RUNBOOK.md
-      - docs/V1_ALERTING.md
   - id: API-001
     category: security
     title: Read and controlled-write API endpoints are authenticated, authorized, idempotent, validated, and audited
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_backtest_job_persistence.py
+      - PYTHONPATH=src python -m pytest tests/test_control_plane_security.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_api.py
     evidence:
-      - src/funding_arbitrage/security/control_plane.py
       - src/funding_arbitrage/api/routes/control.py
+      - src/funding_arbitrage/api/routes/multi_regime.py
       - src/funding_arbitrage/api/routes/websocket.py
       - src/funding_arbitrage/database/repositories/backtest_jobs.py
-      - src/funding_arbitrage/api/routes/multi_regime.py
       - src/funding_arbitrage/main.py
-      - tests/test_multi_regime_api.py
-      - tests/test_control_plane_security.py
+      - src/funding_arbitrage/security/control_plane.py
       - tests/test_backtest_job_persistence.py
+      - tests/test_control_plane_security.py
+      - tests/test_multi_regime_api.py
+    evidence_sha256:
+      src/funding_arbitrage/api/routes/control.py: 37b05ff0abde27eaa0352e9fe2906d557d7daef4b24aa45f7f0821a75aab96bf
+      src/funding_arbitrage/api/routes/multi_regime.py: 6a25ee27593b848eeb8c2d0080836637f5f821ecca2be6c7c5f1d2cbcdc5eeca
+      src/funding_arbitrage/api/routes/websocket.py: a163442588f632870d094ff3da0b8714f324b2ed7797f8e2c547c5d0509b3bee
+      src/funding_arbitrage/database/repositories/backtest_jobs.py: 4d3ab8976449ab32f870b9e5209588d7a7c2349256ec6da2cba0fb24599e5eb9
+      src/funding_arbitrage/main.py: f4ad3cef03c4c8ac42837eeee19878e7eb67f462393f0629015d4b4b966573b1
+      src/funding_arbitrage/security/control_plane.py: 9eadf057ce22e14e84c2d66f159f781d5be75a5acca099c70be73ab0df350f28
+      tests/test_backtest_job_persistence.py: b0fb31b2fd8568efe4bbc1d93cbc3b068b1094c9e080298604dded63fccf8aec
+      tests/test_control_plane_security.py: d5a5fd61b4d4787a806715e3767b59ad6360168aaae602df3b0cf8dfae587418
+      tests/test_multi_regime_api.py: efb6cc661078fa3060a7b822f268afad9e1da7f105b04f91ced0e7a146f93724
   - id: QA-001
     category: delivery
     title: Unit, integration, contract, replay, and failure-injection suites meet 85 percent overall and 95 percent critical coverage
     status: implemented
+    verification:
+      - PYTHONPATH=src python -m coverage run -m pytest -q
+      - python -m coverage json -o coverage_report.json
+      - python scripts/coverage_gate.py --report coverage_report.json
     evidence:
-      - tests
-      - scripts/coverage_gate.py
-      - pyproject.toml
       - .github/workflows/release-gate.yml
+      - docs/V1_EVIDENCE_SEALING.md
+      - evidence/verification/local-verification.json
+      - pyproject.toml
+      - scripts/acceptance_verification.py
+      - scripts/coverage_gate.py
+      - src/funding_arbitrage/acceptance_verification.py
+      - tests/__init__.py
+      - tests/conftest.py
+      - tests/live_security.py
+      - tests/test_acceptance_artifacts.py
+      - tests/test_acceptance_audit.py
+      - tests/test_acceptance_seal.py
+      - tests/test_acceptance_verification.py
+      - tests/test_acceptance_window.py
+      - tests/test_advanced_paper.py
+      - tests/test_analytics_storage.py
+      - tests/test_backtest_fill_model.py
+      - tests/test_backtest_job_persistence.py
+      - tests/test_backtest_routes_contract.py
+      - tests/test_binance_canonical_orderbook.py
+      - tests/test_bybit_adapter.py
+      - tests/test_bybit_canonical_orderbook.py
+      - tests/test_bybit_event_pipeline.py
+      - tests/test_candidate_image_loader.py
+      - tests/test_candidate_load_slo.py
+      - tests/test_candle_aggregation.py
+      - tests/test_ccxt_trading_adapter.py
+      - tests/test_ci_delivery_gate.py
+      - tests/test_cli.py
+      - tests/test_comparison.py
+      - tests/test_continuous_reconciliation.py
+      - tests/test_control_plane_security.py
+      - tests/test_coverage_gate.py
+      - tests/test_credential_policy.py
+      - tests/test_daily_report_postgres.py
+      - tests/test_dangerous_research_strategies.py
+      - tests/test_data_quality_monitor.py
+      - tests/test_database_replay.py
+      - tests/test_dated_basis_strategy.py
+      - tests/test_decision_pipeline.py
+      - tests/test_decision_support.py
+      - tests/test_deployment_safety.py
+      - tests/test_derivatives_features.py
+      - tests/test_dex_execution.py
+      - tests/test_directional_paper_broker.py
+      - tests/test_directional_paper_persistence.py
+      - tests/test_directional_paper_restore.py
+      - tests/test_directional_strategies.py
+      - tests/test_disaster_recovery_evidence.py
+      - tests/test_domain_decisions.py
+      - tests/test_domain_events.py
+      - tests/test_double_entry_ledger.py
+      - tests/test_durable_oms.py
+      - tests/test_event_journal.py
+      - tests/test_event_router_consumers.py
+      - tests/test_event_sampling.py
+      - tests/test_event_writer.py
+      - tests/test_event_writer_config.py
+      - tests/test_exchange_factory.py
+      - tests/test_funding_basis_strategy.py
+      - tests/test_funding_harvest_state_machine.py
+      - tests/test_funding_ledger_repository.py
+      - tests/test_funding_payment_audit.py
+      - tests/test_funding_schedule_probe.py
+      - tests/test_gate_adapter.py
+      - tests/test_gate_canonical_orderbook.py
+      - tests/test_guarded_capabilities.py
+      - tests/test_historical_replay.py
+      - tests/test_hyperliquid_canonical_orderbook.py
+      - tests/test_immutable_retention.py
+      - tests/test_infrastructure_delivery.py
+      - tests/test_internal_tls.py
+      - tests/test_journal_profiles.py
+      - tests/test_kucoin_htx_adapters.py
+      - tests/test_kucoin_htx_trading.py
+      - tests/test_l2_book.py
+      - tests/test_lead_lag_strategy.py
+      - tests/test_live_config.py
+      - tests/test_live_daily_report.py
+      - tests/test_live_executor.py
+      - tests/test_live_runner_lifecycle.py
+      - tests/test_llm_gateway.py
+      - tests/test_load_slo.py
+      - tests/test_logging.py
+      - tests/test_manual_live_gate.py
+      - tests/test_market_data_repository.py
+      - tests/test_market_data_repository_postgres.py
+      - tests/test_market_making_strategy.py
+      - tests/test_market_risk_opportunity.py
+      - tests/test_meta_labeling.py
+      - tests/test_mev_execution.py
+      - tests/test_mexc_adapter.py
+      - tests/test_mexc_canonical_orderbook.py
+      - tests/test_mexc_trading.py
+      - tests/test_migrations.py
+      - tests/test_models.py
+      - tests/test_multi_regime_api.py
+      - tests/test_multi_regime_paper_probe.py
+      - tests/test_multi_regime_persistence.py
+      - tests/test_multi_regime_restore.py
+      - tests/test_multi_regime_restore_filter.py
+      - tests/test_multi_regime_runtime.py
+      - tests/test_native_low_latency.py
+      - tests/test_native_market_data_coverage.py
+      - tests/test_new_exchange_adapters.py
+      - tests/test_observability_alerts.py
+      - tests/test_okx_canonical_orderbook.py
+      - tests/test_option_market_data.py
+      - tests/test_options_volatility.py
+      - tests/test_orderbook_protocols.py
+      - tests/test_orderbook_streams.py
+      - tests/test_orderflow_features.py
+      - tests/test_paper_backtest.py
+      - tests/test_paper_end_to_end.py
+      - tests/test_paper_runner.py
+      - tests/test_parquet_storage.py
+      - tests/test_pnl_v2.py
+      - tests/test_portfolio_margin.py
+      - tests/test_portfolio_risk_authority.py
+      - tests/test_private_streams.py
+      - tests/test_protective_stops.py
+      - tests/test_public_events.py
+      - tests/test_rate_limit.py
+      - tests/test_regime_classifier.py
+      - tests/test_remaining_canonical_orderbooks.py
+      - tests/test_research_gates.py
+      - tests/test_research_validation.py
+      - tests/test_rl_policy.py
+      - tests/test_runtime_acceptance.py
+      - tests/test_runtime_dangerous_research.py
+      - tests/test_runtime_decision_support.py
+      - tests/test_runtime_entry_health.py
+      - tests/test_runtime_llm.py
+      - tests/test_runtime_lock.py
+      - tests/test_runtime_low_latency.py
+      - tests/test_runtime_margin.py
+      - tests/test_runtime_modes.py
+      - tests/test_runtime_onchain.py
+      - tests/test_runtime_protective_stops.py
+      - tests/test_runtime_router.py
+      - tests/test_runtime_strategy_contexts.py
+      - tests/test_runtime_universe.py
+      - tests/test_runtime_withdrawal.py
+      - tests/test_settings_yaml.py
+      - tests/test_signal_orchestrator.py
+      - tests/test_smart_order_router.py
+      - tests/test_strategy_execution.py
+      - tests/test_strategy_suite.py
+      - tests/test_structure_features.py
+      - tests/test_technical_features.py
+      - tests/test_telegram.py
+      - tests/test_telegram_config_probe.py
+      - tests/test_trading_fee_cache.py
+      - tests/test_universe_selector.py
+      - tests/test_v1_acceptance.py
+      - tests/test_v1_operational_schema.py
+      - tests/test_venue_daily_report.py
+      - tests/test_venue_metadata.py
+      - tests/test_withdrawal_manager.py
   - id: QA-002
     category: delivery
     title: CI runs lint, type, unit, integration, replay, security, container scan, signing, shadow deploy, and manual live gate
     status: partial
+    verification:
+      - gh run list --workflow 'Release gate' --branch main --limit 1
+      - gh run view --log-failed
     evidence:
       - .github/workflows/release-gate.yml
   - id: QA-003
     category: delivery
     title: Docker Compose, Terraform, Vault integration, Chrony, backups, restore, and runbooks are verified
     status: partial
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_disaster_recovery_evidence.py
+      - PYTHONPATH=src python -m pytest tests/test_infrastructure_delivery.py
     evidence:
-      - docker-compose.yml
-      - docker-compose.acceptance.yml
-      - infra/terraform
-      - infra/vault
-      - scripts/host_preflight.sh
-      - scripts/backup_state.sh
-      - scripts/restore_state.sh
-      - scripts/disaster_recovery_evidence.py
-      - src/funding_arbitrage/qa/disaster_recovery.py
-      - ops/INFRASTRUCTURE_RUNBOOK.md
-      - ops/BACKUP_RESTORE_RUNBOOK.md
-      - docs/V1_CONTROL_PLANE_SECURITY.md
-      - tests/test_infrastructure_delivery.py
-      - tests/test_disaster_recovery_evidence.py
       - .github/workflows/release-gate.yml
+      - docker-compose.acceptance.yml
+      - docker-compose.yml
+      - docs/V1_CONTROL_PLANE_SECURITY.md
+      - infra/terraform/README.md
+      - infra/terraform/cloud-init.yaml.tftpl
+      - infra/terraform/main.tf
+      - infra/terraform/outputs.tf
+      - infra/terraform/variables.tf
+      - infra/terraform/versions.tf
+      - infra/vault/README.md
+      - infra/vault/agent.hcl
+      - infra/vault/credential-policy.json.ctmpl
+      - infra/vault/funding-v1-policy.hcl
+      - infra/vault/runtime.env.ctmpl
+      - infra/vault/telegram-bot-token.ctmpl
+      - infra/vault/telegram-chat-id.ctmpl
+      - infra/vault/telegram.ctmpl
+      - ops/BACKUP_RESTORE_RUNBOOK.md
+      - ops/INFRASTRUCTURE_RUNBOOK.md
+      - ops/V1_VPS_ACCEPTANCE_RUNBOOK.md
+      - scripts/backup_state.sh
+      - scripts/disaster_recovery_evidence.py
+      - scripts/host_preflight.sh
+      - scripts/restore_state.sh
+      - src/funding_arbitrage/qa/disaster_recovery.py
+      - tests/test_disaster_recovery_evidence.py
+      - tests/test_infrastructure_delivery.py
   - id: QA-004
     category: delivery
     title: P99 latency budgets and reliability SLOs are measured under representative load
     status: partial
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_load_slo.py
     evidence:
+      - .github/workflows/release-gate.yml
+      - docs/V1_PERFORMANCE_SLO.md
+      - scripts/load_slo.py
       - src/funding_arbitrage/qa/load_slo.py
       - src/funding_arbitrage/qa/load_slo_evidence.py
-      - scripts/load_slo.py
       - tests/test_load_slo.py
-      - docs/V1_PERFORMANCE_SLO.md
-      - .github/workflows/release-gate.yml
   - id: RUNTIME-001
     category: execution
     title: Canonical multi-regime runtime reaches durable risk-approved PAPER fills, positions, protective exits, and PnL while live remains gated
-    status: implemented
+    status: validated
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_advanced_paper.py
+      - PYTHONPATH=src python -m pytest tests/test_backtest_fill_model.py
+      - PYTHONPATH=src python -m pytest tests/test_directional_paper_broker.py
+      - PYTHONPATH=src python -m pytest tests/test_directional_paper_persistence.py
+      - PYTHONPATH=src python -m pytest tests/test_directional_paper_restore.py
+      - PYTHONPATH=src python -m pytest tests/test_funding_ledger_repository.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_paper_probe.py
+      - PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_strategy_contexts.py
+      - PYTHONPATH=src python -m pytest tests/test_strategy_execution.py
+      - PYTHONPATH=src python -m pytest tests/test_telegram.py
     evidence:
-      - src/funding_arbitrage/services/multi_regime.py
-      - src/funding_arbitrage/services/multi_regime_runtime.py
-      - src/funding_arbitrage/services/runtime_strategy_contexts.py
-      - src/funding_arbitrage/execution/directional_paper.py
-      - src/funding_arbitrage/execution/advanced_paper.py
-      - src/funding_arbitrage/services/strategy_execution.py
+      - docs/MULTI_REGIME_RUNTIME.md
+      - evidence/runtime/README.md
+      - evidence/runtime/multi-regime-paper-962a450.json
+      - migrations/versions/0017_multi_regime_runtime.py
+      - scripts/multi_regime_paper_probe.py
       - src/funding_arbitrage/backtest/fills.py
-      - src/funding_arbitrage/database/repositories/multi_regime.py
       - src/funding_arbitrage/database/repositories/directional_paper.py
       - src/funding_arbitrage/database/repositories/ledger.py
-      - src/funding_arbitrage/services/daily_report.py
-      - src/funding_arbitrage/services/paper_runner.py
       - src/funding_arbitrage/database/repositories/market_data.py
-      - migrations/versions/0017_multi_regime_runtime.py
-      - tests/test_multi_regime_runtime.py
-      - tests/test_directional_paper_broker.py
+      - src/funding_arbitrage/database/repositories/multi_regime.py
+      - src/funding_arbitrage/execution/advanced_paper.py
+      - src/funding_arbitrage/execution/directional_paper.py
+      - src/funding_arbitrage/qa/multi_regime_paper.py
+      - src/funding_arbitrage/services/daily_report.py
+      - src/funding_arbitrage/services/multi_regime.py
+      - src/funding_arbitrage/services/multi_regime_runtime.py
+      - src/funding_arbitrage/services/paper_runner.py
+      - src/funding_arbitrage/services/runtime_strategy_contexts.py
+      - src/funding_arbitrage/services/strategy_execution.py
+      - tests/test_advanced_paper.py
       - tests/test_backtest_fill_model.py
+      - tests/test_directional_paper_broker.py
       - tests/test_directional_paper_persistence.py
       - tests/test_directional_paper_restore.py
       - tests/test_funding_ledger_repository.py
-      - tests/test_advanced_paper.py
-      - tests/test_strategy_execution.py
-      - tests/test_runtime_strategy_contexts.py
-      - src/funding_arbitrage/qa/multi_regime_paper.py
-      - scripts/multi_regime_paper_probe.py
       - tests/test_multi_regime_paper_probe.py
+      - tests/test_multi_regime_runtime.py
+      - tests/test_runtime_strategy_contexts.py
+      - tests/test_strategy_execution.py
       - tests/test_telegram.py
-      - docs/MULTI_REGIME_RUNTIME.md
-      - evidence/runtime/multi-regime-paper-962a450.json
-      - evidence/runtime/README.md
+    evidence_sha256:
+      docs/MULTI_REGIME_RUNTIME.md: 4ccfe69d476caed2071d65312fe4ac093cde2eee080d97a70bbfc3dace13d9be
+      evidence/runtime/README.md: b341e8050b4c9b7a702e2356bc37ea9fe85471db80be7734080623263dfac0ec
+      evidence/runtime/multi-regime-paper-962a450.json: 5f8c7f8391e5892e865790be0b8dc93047c40e68b4d68d3aeccf89149f716e89
+      migrations/versions/0017_multi_regime_runtime.py: 3c1f37391234e031d89ff5a99cd32f52afa495fede3b587d72cf5b39303eab41
+      scripts/multi_regime_paper_probe.py: 89e9714ec9f8c338afe752ff3275820500aa325afcc74628bc7acef62963d195
+      src/funding_arbitrage/backtest/fills.py: 01de507776efd9e99079dedf1394cdf3eaaec4fd0420ef074f78f70b155c652d
+      src/funding_arbitrage/database/repositories/directional_paper.py: 2f4f48a68278daf930c8f7913d0b1c7b1ae6b7d8ea8153a3687bddb31175d912
+      src/funding_arbitrage/database/repositories/ledger.py: 4f499fd35eddb8fc3b72f64a606ae60e5cc0e99df325ac88d5f4fee6104e0f6e
+      src/funding_arbitrage/database/repositories/market_data.py: 81424bee54fde0b35a7ef9ab4784143aa45d2155723e78440cdc2c348cc97ae7
+      src/funding_arbitrage/database/repositories/multi_regime.py: 1f289d40b143afb1aa0367efb8dfd60fa53130e1f40753dad676a3509963ea6a
+      src/funding_arbitrage/execution/advanced_paper.py: ccae82fd61dd7e002872b85d6f044eda096a3a02035c478e9990eea9b6f22f63
+      src/funding_arbitrage/execution/directional_paper.py: 08d7a9dfc00d9a201abae2f4dca4da65d51ce6a0bdb3768c3f483dd7a19f6b63
+      src/funding_arbitrage/qa/multi_regime_paper.py: 4d50e4c921369967ed3cb06dd416e06c6d890885e5ffe3a639ae4d03882c6dd2
+      src/funding_arbitrage/services/daily_report.py: a74e37d917aa4f76ef793bf58ecf3bff4ada0cb1142df8b165b489a8306460f1
+      src/funding_arbitrage/services/multi_regime.py: 59e69596b50e64557aabadafbeb9c073f988bc4356cb60c24a4cb8fea224ce12
+      src/funding_arbitrage/services/multi_regime_runtime.py: 1e0406126e7f91042b3aaf0b82d2be82db713febc9ce021b44e0d37a6f2009e7
+      src/funding_arbitrage/services/paper_runner.py: 766762b70bc9c18f5e96c1b996a77dadb607a45130da855e0cb3a9c33b579ba6
+      src/funding_arbitrage/services/runtime_strategy_contexts.py: 6f7869e0592c1ed8101740864b5853f810b2515f362fb08b2c9b74445c4c3211
+      src/funding_arbitrage/services/strategy_execution.py: 06983ed31288c9532962ed8e7f756ffc3d94b1fb9e586a5aa91165fa34d17bbd
+      tests/test_advanced_paper.py: efeb694c7a319c4a67ca7c1da239d0f8ecda0d202c606b47ae7146b349e06a7e
+      tests/test_backtest_fill_model.py: 4f10e91411bdeeca77c865be3bf5e40cd4bd6f8eae7512f10f61e9e5d893634c
+      tests/test_directional_paper_broker.py: d27c1ace81240a4285b3b915da6046cf69d6ac1d777e6b6a8dd06b566aa9dbe9
+      tests/test_directional_paper_persistence.py: aec3d27e9dcb7cf5dfc8f5535d2d9f80eff0cadb5f55fa3e29d8db9f841c18f1
+      tests/test_directional_paper_restore.py: 8933201997dcbd66a40085c8c52fb201195e7f0017d6279e999e280f8e4aed8f
+      tests/test_funding_ledger_repository.py: 50813c903a0b2e796e5c966f40f15e7de6777e62da0bc42bcc709e42c1f0d5bc
+      tests/test_multi_regime_paper_probe.py: 536b4464db54446aad53fa260719e725aef471f2890953bb0a5cf89ddfe2c227
+      tests/test_multi_regime_runtime.py: 41db9b5e44af58de1d483fa8944cac02c81e3aeed6bb60944dd9b56d9c871a15
+      tests/test_runtime_strategy_contexts.py: 77bba21619cf26d46d131555881c24e689ff17911e4ed1ea26e55a7b204b0fa7
+      tests/test_strategy_execution.py: 316f48d4c2f76b64096bacc40cfcf5a403a8ae79017f90a4e216e2c782578293
+      tests/test_telegram.py: 46e900b615d8a99ad5299b3966cf8bc46eb3210abe77b5486fd87d7eb97b9369
   - id: GATE-001
     category: delivery
     title: Shadow acceptance window completes without accounting, risk, or reconciliation violations
     status: partial
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_acceptance_artifacts.py
+      - PYTHONPATH=src python -m pytest tests/test_acceptance_window.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_acceptance.py
     evidence:
-      - src/funding_arbitrage/qa/acceptance_window.py
-      - src/funding_arbitrage/qa/acceptance_artifacts.py
-      - src/funding_arbitrage/qa/acceptance_provenance.py
-      - src/funding_arbitrage/qa/runtime_acceptance.py
-      - src/funding_arbitrage/services/paper_runner.py
-      - scripts/acceptance_window.py
-      - scripts/runtime_acceptance.py
-      - scripts/export_acceptance_schema.py
       - config/schemas/acceptance-window-seal-input-v1.json
-      - tests/test_acceptance_window.py
-      - tests/test_acceptance_artifacts.py
-      - tests/test_runtime_acceptance.py
+      - docker-compose.acceptance.yml
       - docs/V1_ACCEPTANCE_WINDOWS.md
       - ops/ACCEPTANCE_RUNTIME_RUNBOOK.md
-      - docker-compose.acceptance.yml
+      - ops/V1_VPS_ACCEPTANCE_RUNBOOK.md
+      - scripts/acceptance_window.py
+      - scripts/export_acceptance_schema.py
+      - scripts/runtime_acceptance.py
+      - src/funding_arbitrage/qa/acceptance_artifacts.py
+      - src/funding_arbitrage/qa/acceptance_provenance.py
+      - src/funding_arbitrage/qa/acceptance_window.py
+      - src/funding_arbitrage/qa/runtime_acceptance.py
+      - src/funding_arbitrage/services/paper_runner.py
+      - tests/test_acceptance_artifacts.py
+      - tests/test_acceptance_window.py
+      - tests/test_runtime_acceptance.py
   - id: GATE-002
     category: delivery
     title: Paper acceptance window proves realistic fills, costs, failure behavior, and deterministic reports
     status: partial
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_acceptance_artifacts.py
+      - PYTHONPATH=src python -m pytest tests/test_acceptance_window.py
+      - PYTHONPATH=src python -m pytest tests/test_runtime_acceptance.py
     evidence:
-      - src/funding_arbitrage/qa/acceptance_window.py
-      - src/funding_arbitrage/qa/acceptance_artifacts.py
-      - src/funding_arbitrage/qa/acceptance_provenance.py
-      - src/funding_arbitrage/qa/runtime_acceptance.py
-      - src/funding_arbitrage/services/paper_runner.py
-      - scripts/acceptance_window.py
-      - scripts/runtime_acceptance.py
-      - scripts/export_acceptance_schema.py
       - config/schemas/acceptance-window-seal-input-v1.json
-      - tests/test_acceptance_window.py
-      - tests/test_acceptance_artifacts.py
-      - tests/test_runtime_acceptance.py
+      - docker-compose.acceptance.yml
       - docs/V1_ACCEPTANCE_WINDOWS.md
       - ops/ACCEPTANCE_RUNTIME_RUNBOOK.md
-      - docker-compose.acceptance.yml
+      - ops/V1_VPS_ACCEPTANCE_RUNBOOK.md
+      - scripts/acceptance_window.py
+      - scripts/export_acceptance_schema.py
+      - scripts/runtime_acceptance.py
+      - src/funding_arbitrage/qa/acceptance_artifacts.py
+      - src/funding_arbitrage/qa/acceptance_provenance.py
+      - src/funding_arbitrage/qa/acceptance_window.py
+      - src/funding_arbitrage/qa/runtime_acceptance.py
+      - src/funding_arbitrage/services/paper_runner.py
+      - tests/test_acceptance_artifacts.py
+      - tests/test_acceptance_window.py
+      - tests/test_runtime_acceptance.py
   - id: GATE-003
     category: delivery
     title: Limited Live is formally approved only after technical, research, shadow, paper, failure, and security gates
     status: missing
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_manual_live_gate.py
     evidence:
-      - scripts/manual_live_gate.py
-      - tests/test_manual_live_gate.py
       - .github/workflows/release-gate.yml
       - docs/V1_RELEASE_APPROVAL.md
+      - scripts/manual_live_gate.py
+      - tests/test_manual_live_gate.py
   - id: GATE-004
     category: delivery
     title: Full V1 completion audit proves every manifest requirement accepted with authoritative evidence
     status: missing
+    verification:
+      - PYTHONPATH=src python -m pytest tests/test_acceptance_seal.py
+      - PYTHONPATH=src python -m pytest tests/test_acceptance_verification.py
+      - PYTHONPATH=src python -m pytest tests/test_v1_acceptance.py
     evidence:
-      - src/funding_arbitrage/acceptance.py
-      - scripts/v1_acceptance_audit.py
-      - tests/test_v1_acceptance.py
       - .github/workflows/release-gate.yml
       - docs/V1_COMPLETION_AUDIT.md
+      - docs/V1_EVIDENCE_SEALING.md
+      - scripts/acceptance_verification.py
+      - scripts/seal_acceptance_evidence.py
+      - scripts/v1_acceptance_audit.py
+      - src/funding_arbitrage/acceptance.py
+      - src/funding_arbitrage/acceptance_seal.py
+      - src/funding_arbitrage/acceptance_verification.py
+      - tests/test_acceptance_seal.py
+      - tests/test_acceptance_verification.py
+      - tests/test_v1_acceptance.py

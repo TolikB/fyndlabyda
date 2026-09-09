@@ -61,8 +61,23 @@ so a restart cannot silently reset the peak used by the drawdown guardrail.
 LLM inference remains asynchronous and outside the synchronous canonical event
 engine. `GuardedLLMGateway` enforces schema, model allowlist, latency, token, spend,
 confidence, and live-authorization limits; only its already audited result may cross
-`BoundDecisionSupport`. The application performs no implicit network LLM call and
-has no LLM credential setting.
+`BoundDecisionSupport`.
+
+The gateway now has a concrete provider. `AnthropicMessagesProvider` speaks the
+Anthropic Messages API over the existing `httpx` dependency, sends only the
+fields the already-validated `LLMDecisionRequest` carries, demands a strict JSON
+object back, and reports real token usage so the budget ledger charges measured
+cost rather than an estimate. A provider error never leaks the response body.
+
+The application still performs no implicit network LLM call.
+`DECISION_SUPPORT_LLM_ENABLED` is false by default, and with it false no gateway
+and no provider are constructed at all. Live LLM authority is a second, separate
+decision: it additionally requires `live_llm_decisions` in
+`DANGEROUS_CAPABILITY_AUTHORIZATION`. Without it, a call in `LIMITED_LIVE` or
+`LIVE` takes the deterministic `REJECT` fallback without reaching the provider.
+The gateway's own contract forbids execution authority in every mode, so an LLM
+can only ever narrow a signal the strategies and risk authority already
+produced.
 
 ## Operations and telemetry
 

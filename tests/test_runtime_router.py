@@ -37,7 +37,7 @@ def _router(
     return RuntimeSmartOrderRouter(
         maximum_book_age_seconds=maximum_book_age_seconds,
         maximum_child_orders=maximum_child_orders,
-        maximum_participation_rate=Decimal("0.10"),
+        maximum_book_participation=Decimal("0.25"),
     )
 
 
@@ -65,17 +65,17 @@ def test_router_configuration_is_validated() -> None:
         _router(maximum_book_age_seconds=Decimal("0"))
     with pytest.raises(ValueError, match="at least one child order"):
         _router(maximum_child_orders=0)
-    with pytest.raises(ValueError, match="participation rate must be in"):
+    with pytest.raises(ValueError, match="book participation must be in"):
         RuntimeSmartOrderRouter(
             maximum_book_age_seconds=Decimal("5"),
             maximum_child_orders=5,
-            maximum_participation_rate=Decimal("0"),
+            maximum_book_participation=Decimal("0"),
         )
 
 
 def test_a_route_walks_multiple_levels_and_conserves_quantity() -> None:
     router = _router()
-    book = _layered_book((("100", "1"), ("100.1", "1"), ("100.2", "5")))
+    book = _layered_book((("100", "1"), ("100.1", "1"), ("100.2", "20")))
     plan = router.plan_leg(
         side=Side.BUY,
         quantity=Decimal("3"),
@@ -129,9 +129,11 @@ def test_a_route_that_cannot_fill_the_quantity_is_refused() -> None:
 
 def test_a_route_spanning_too_many_venues_is_refused() -> None:
     router = _router(maximum_child_orders=1)
+    # Each venue shows 8 units, so the 25% impact guard allows 2 from each and
+    # a 3-unit route must span both.
     quotes = tuple(
         route_quote(
-            book=_layered_book((("100", "1"),), venue=venue),
+            book=_layered_book((("100", "8"),), venue=venue),
             receive_timestamp=NOW,
             data_quality=DataQuality.VALID,
             taker_fee_bps=Decimal("5"),
@@ -141,7 +143,7 @@ def test_a_route_spanning_too_many_venues_is_refused() -> None:
     with pytest.raises(RouteUnavailableError, match="child-order limit"):
         router.plan_leg(
             side=Side.BUY,
-            quantity=Decimal("2"),
+            quantity=Decimal("3"),
             reference_price=Decimal("100"),
             quotes=quotes,
             as_of=NOW,
@@ -305,3 +307,51 @@ def test_a_stale_book_is_excluded_from_routing() -> None:
             maximum_slippage_bps=Decimal("50"),
             maximum_all_in_cost_bps=Decimal("100"),
         )
+
+
+def test_the_impact_guard_caps_a_route_at_its_share_of_visible_depth() -> None:
+    router = _router()
+    book = _layered_book((("100", "8"),))
+    quote = route_quote(
+        book=book,
+        receive_timestamp=NOW,
+        data_quality=DataQuality.VALID,
+        taker_fee_bps=Decimal("5"),
+    )
+    # 25% of eight visible units.
+    assert router.participation_cap(book, Side.BUY) == Decimal("2.00")
+
+    plan = router.plan_leg(
+        side=Side.BUY,
+        quantity=Decimal("2"),
+        reference_price=Decimal("100"),
+        quotes=(quote,),
+        as_of=NOW,
+        maximum_slippage_bps=Decimal("50"),
+        maximum_all_in_cost_bps=Decimal("100"),
+    )
+    assert plan.routed_quantity == Decimal("2")
+
+    # One unit more would sweep past the guard even though the book shows depth.
+    with pytest.raises(RouteUnavailableError):
+        router.plan_leg(
+            side=Side.BUY,
+            quantity=Decimal("3"),
+            reference_price=Decimal("100"),
+            quotes=(quote,),
+            as_of=NOW,
+            maximum_slippage_bps=Decimal("50"),
+            maximum_all_in_cost_bps=Decimal("100"),
+        )
+
+
+def test_an_empty_side_has_no_participation_cap_to_apply() -> None:
+    router = _router()
+    empty = BookSnapshot(
+        instrument=_instrument("BYBIT"),
+        bids=(),
+        asks=(),
+        sequence=1,
+        exchange_timestamp=NOW,
+    )
+    assert router.participation_cap(empty, Side.BUY) is None

@@ -514,8 +514,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         maximum_child_orders=(
                             active_settings.smart_order_router_maximum_child_orders
                         ),
-                        maximum_participation_rate=(
-                            active_settings.smart_order_router_maximum_participation_rate
+                        maximum_book_participation=(
+                            active_settings.smart_order_router_maximum_book_participation
                         ),
                     )
                     if active_settings.smart_order_router_enabled

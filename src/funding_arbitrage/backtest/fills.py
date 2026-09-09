@@ -41,7 +41,9 @@ class FillRejectionReason(StrEnum):
 
 
 class FillModelPolicy(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    # An unknown field here would silently fall back to a default and quietly
+    # change simulated execution economics, so reject it instead.
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     maker_fee_bps: Decimal = Field(default=Decimal("2"), ge=0)
     taker_fee_bps: Decimal = Field(default=Decimal("5.5"), ge=0)

@@ -735,8 +735,11 @@ class Settings(BaseSettings):
     smart_order_router_maximum_child_orders: int = Field(
         default=5, ge=1, le=50, alias="SMART_ORDER_ROUTER_MAXIMUM_CHILD_ORDERS"
     )
-    smart_order_router_maximum_participation_rate: Decimal = Field(
-        default=Decimal("0.10"), alias="SMART_ORDER_ROUTER_MAXIMUM_PARTICIPATION_RATE"
+    # The share of a venue's *visible depth* one route may consume. This is an
+    # impact guard, not volume participation: taking a large fraction of the
+    # displayed book is what moves the price the plan was priced against.
+    smart_order_router_maximum_book_participation: Decimal = Field(
+        default=Decimal("0.25"), alias="SMART_ORDER_ROUTER_MAXIMUM_BOOK_PARTICIPATION"
     )
     portfolio_margin_simulation_enabled: bool = Field(
         default=True, alias="PORTFOLIO_MARGIN_SIMULATION_ENABLED"
@@ -2129,10 +2132,10 @@ def _validate_guarded_capabilities(settings: Settings, mode: TradingMode) -> Non
                 raise ValueError(
                     f"VENUE_MARGIN_RULES leverage exceeds the initial-margin rule: {venue}"
                 )
-    if settings.smart_order_router_maximum_participation_rate <= 0:
-        raise ValueError("SMART_ORDER_ROUTER_MAXIMUM_PARTICIPATION_RATE must be positive")
-    if settings.smart_order_router_maximum_participation_rate > 1:
-        raise ValueError("SMART_ORDER_ROUTER_MAXIMUM_PARTICIPATION_RATE cannot exceed 1")
+    if settings.smart_order_router_maximum_book_participation <= 0:
+        raise ValueError("SMART_ORDER_ROUTER_MAXIMUM_BOOK_PARTICIPATION must be positive")
+    if settings.smart_order_router_maximum_book_participation > 1:
+        raise ValueError("SMART_ORDER_ROUTER_MAXIMUM_BOOK_PARTICIPATION cannot exceed 1")
     if settings.protective_stop_reconcile_interval_seconds <= 0:
         raise ValueError("PROTECTIVE_STOP_RECONCILE_INTERVAL_SECONDS must be positive")
     if settings.protective_stop_maximum_unknown_seconds <= 0:

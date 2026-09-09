@@ -71,6 +71,7 @@ jobs:
           python -m ruff check src tests scripts migrations
           python -m mypy src
           python scripts/v1_acceptance_audit.py
+          python scripts/seal_acceptance_evidence.py --check
           python -m coverage erase
           python -m coverage run -m pytest -q
           python -m coverage json -o coverage_report.json
@@ -449,6 +450,9 @@ jobs:
 
       - name: Audit production dependencies
         run: python -m pip_audit --requirement requirements-linux.lock --disable-pip
+
+      - name: Audit development dependencies
+        run: python -m pip_audit --requirement requirements-dev-linux.lock --disable-pip
 
 
       - name: Scan candidate image for high and critical vulnerabilities

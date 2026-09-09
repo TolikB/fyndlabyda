@@ -130,3 +130,26 @@ hedges fail closed.
 New option entries must also retain a configurable pre-expiry exit buffer (15 minutes
 by default), so PAPER accounting cannot silently treat exercise or delivery as free.
 Live option operator authorization remains always false.
+
+## Configurable research strategies
+
+Martingale, grid, and loss-averaging exist as real strategies with the same
+contract as every other family, and they were previously unreachable: no
+production code populated `SupplementalStrategyContexts.dangerous_research`, and
+the suite always built them with disabled controls, so they could never fire even
+if an operator wanted them.
+
+`funding_arbitrage.services.runtime_dangerous_research` supplies both halves.
+Contexts are projected from real broker state — the latest closed net PnL in
+basis points and the current loss streak for the instrument, the open position's
+average entry price and prior additions, the reference side from an open position
+or the observed book imbalance, free collateral, and high-water drawdown. Strategy
+controls come from the operator's switches: `enabled` from the capability flag,
+and `live_enabled` only when the capability name also appears in
+`DANGEROUS_CAPABILITY_AUTHORIZATION`.
+
+With every research flag off the runtime does not even construct the context, so
+the default posture is unchanged. With one on, that strategy's own gates still
+apply in full: data quality, staleness, unsafe regime, margin availability,
+drawdown limit, edge-to-cost ratio, and — in `LIMITED_LIVE` or `LIVE` — both
+`live_enabled` and a recorded operator authorization.

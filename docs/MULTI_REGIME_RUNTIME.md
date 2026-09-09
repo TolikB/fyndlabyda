@@ -240,8 +240,18 @@ Run it only in the isolated validation Compose project:
 
 The probe never constructs exchange adapters and fails closed when host paper
 autotrade, live arming/autotrade, or any private exchange credential is present. It
-does not claim exchange-hosted directional protective orders, directional
-limited-live/live execution, or completed shadow/paper acceptance windows.
+does not claim directional limited-live/live execution or completed shadow/paper
+acceptance windows.
+
+Every position the runtime opens now carries durable protective cover.
+`RuntimeProtectiveStopCoordinator` registers a reduce-only stop at the
+structural stop price, drives it to ACTIVE, reconciles it against the executing
+venue on each projection, and applies the correct terminal state when the
+position closes. In PAPER and SHADOW the simulated broker is the executing
+venue, so the lifecycle, the hash-ordered journal, and the interlock are the
+same ones a live venue would drive. Missing, mismatched, or unexpectedly
+cancelled protection engages a runtime interlock that blocks new entries until
+an operator resolves it, and protection survives restart from the journal.
 
 The exact PostgreSQL acceptance result and its source/image hashes are retained in
 `evidence/runtime/`. That evidence closes the runtime lifecycle requirement only;

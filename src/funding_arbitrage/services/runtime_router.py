@@ -34,6 +34,13 @@ class RouteUnavailableError(ValueError):
     """No executable route exists inside the configured guards."""
 
 
+def visible_depth(book: BookSnapshot, side: Side) -> Decimal:
+    """Total visible quantity on the side a route would consume."""
+
+    levels = book.asks if side is Side.BUY else book.bids
+    return sum((level.quantity for level in levels), ZERO)
+
+
 def route_quote(
     *,
     book: BookSnapshot,
@@ -65,19 +72,27 @@ class RuntimeSmartOrderRouter:
         *,
         maximum_book_age_seconds: Decimal,
         maximum_child_orders: int,
-        maximum_participation_rate: Decimal,
+        maximum_book_participation: Decimal,
     ) -> None:
         if maximum_book_age_seconds <= ZERO:
             raise ValueError("router book age must be positive")
         if maximum_child_orders < 1:
             raise ValueError("router requires at least one child order")
-        if not ZERO < maximum_participation_rate <= Decimal("1"):
-            raise ValueError("router participation rate must be in (0, 1]")
+        if not ZERO < maximum_book_participation <= Decimal("1"):
+            raise ValueError("router book participation must be in (0, 1]")
         self.router = SmartOrderRouter(
             maximum_book_age=timedelta(seconds=float(maximum_book_age_seconds))
         )
         self.maximum_child_orders = maximum_child_orders
-        self.maximum_participation_rate = maximum_participation_rate
+        self.maximum_book_participation = maximum_book_participation
+
+    def participation_cap(self, book: BookSnapshot, side: Side) -> Decimal | None:
+        """The most this router may take from one venue's visible depth."""
+
+        depth = visible_depth(book, side)
+        if depth <= ZERO:
+            return None
+        return depth * self.maximum_book_participation
 
     def plan_leg(
         self,
@@ -90,8 +105,24 @@ class RuntimeSmartOrderRouter:
         maximum_slippage_bps: Decimal,
         maximum_all_in_cost_bps: Decimal,
     ) -> SmartOrderPlan:
-        """Route one leg, refusing anything that cannot be filled inside guards."""
+        """Route one leg, refusing anything that cannot be filled inside guards.
 
+        Each venue is additionally capped at its participation share of visible
+        depth, so a route can never sweep a book it would move.
+        """
+
+        capped = tuple(
+            quote.model_copy(
+                update={
+                    "maximum_quantity": _tighter(
+                        quote.maximum_quantity,
+                        self.participation_cap(quote.book, side),
+                    )
+                }
+            )
+            for quote in quotes
+        )
+        quotes = capped
         try:
             plan = self.router.plan(
                 side=side,
@@ -137,3 +168,10 @@ class RuntimeSmartOrderRouter:
             maximum_slippage_bps=maximum_slippage_bps,
             maximum_all_in_cost_bps=maximum_all_in_cost_bps,
         )
+
+
+def _tighter(configured: Decimal | None, participation: Decimal | None) -> Decimal | None:
+    """Combine a venue's own quantity bound with the participation cap."""
+
+    bounds = [value for value in (configured, participation) if value is not None]
+    return min(bounds) if bounds else None
