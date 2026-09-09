@@ -71,6 +71,7 @@ class OrderFlowBreakoutConfig(BaseModel):
     minimum_book_imbalance: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
     minimum_trade_imbalance: Decimal = Field(default=Decimal("0.05"), ge=0, le=1)
     minimum_score: Decimal = Field(default=Decimal("0.60"), ge=0, le=1)
+    minimum_edge_to_cost_ratio: Decimal = Field(default=Decimal("2.5"), gt=0)
     atr_stop_multiplier: Decimal = Field(default=Decimal("1.5"), gt=0)
     reward_to_risk: Decimal = Field(default=Decimal("2.5"), gt=0)
     ttl_seconds: int = Field(default=15, gt=0)
@@ -84,6 +85,7 @@ class LiquiditySweepReversionConfig(BaseModel):
     minimum_ofi_zscore: Decimal = Field(default=Decimal("1"), gt=0)
     minimum_book_imbalance: Decimal = Field(default=Decimal("0.05"), ge=0, le=1)
     minimum_score: Decimal = Field(default=Decimal("0.55"), ge=0, le=1)
+    minimum_edge_to_cost_ratio: Decimal = Field(default=Decimal("2.5"), gt=0)
     atr_stop_multiplier: Decimal = Field(default=Decimal("0.75"), gt=0)
     reward_to_risk: Decimal = Field(default=Decimal("2"), gt=0)
     ttl_seconds: int = Field(default=15, gt=0)
@@ -176,6 +178,10 @@ class OrderFlowBreakoutStrategy:
             )
         except ValueError:
             return self._reject("invalid_stop_or_target")
+        if expected_move_bps < (
+            context.estimated_cost_bps * self.config.minimum_edge_to_cost_ratio
+        ):
+            return self._reject("edge_below_cost", score)
         intent = _intent(
             strategy_id=self.config.strategy_id,
             signal_type=SignalType.ORDERFLOW_BREAKOUT,
@@ -277,6 +283,10 @@ class LiquiditySweepReversionStrategy:
             )
         except ValueError:
             return self._reject("invalid_stop_or_target")
+        if expected_move_bps < (
+            context.estimated_cost_bps * self.config.minimum_edge_to_cost_ratio
+        ):
+            return self._reject("edge_below_cost", score)
         intent = _intent(
             strategy_id=self.config.strategy_id,
             signal_type=SignalType.LIQUIDITY_SWEEP_REVERSION,

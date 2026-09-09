@@ -1,657 +1,657 @@
 {
-  "code_revision": "17faf702963634911e0485bc7cff8efb7e35be71",
+  "code_revision": "ee346eb0be68abf0145e52a6335587499cf5f247",
   "commands": [
     {
       "command": "PYTHONPATH=src python -m coverage run -m pytest -q",
-      "duration_ms": 275223,
+      "duration_ms": 244562,
       "exit_code": 1,
       "status": "failed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_acceptance_artifacts.py",
-      "duration_ms": 50097,
+      "duration_ms": 48608,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_acceptance_seal.py",
-      "duration_ms": 2067,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_acceptance_verification.py",
-      "duration_ms": 2929,
+      "duration_ms": 4831,
       "exit_code": 1,
       "status": "failed"
     },
     {
+      "command": "PYTHONPATH=src python -m pytest tests/test_acceptance_verification.py",
+      "duration_ms": 2433,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
       "command": "PYTHONPATH=src python -m pytest tests/test_acceptance_window.py",
-      "duration_ms": 23284,
+      "duration_ms": 22590,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_advanced_paper.py",
-      "duration_ms": 2178,
+      "duration_ms": 2175,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_analytics_storage.py",
-      "duration_ms": 3004,
+      "duration_ms": 2825,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_backtest_fill_model.py",
-      "duration_ms": 1513,
+      "duration_ms": 1410,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_backtest_job_persistence.py",
-      "duration_ms": 6878,
+      "duration_ms": 6474,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_binance_canonical_orderbook.py",
-      "duration_ms": 1935,
+      "duration_ms": 1738,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_bybit_canonical_orderbook.py",
-      "duration_ms": 1641,
+      "duration_ms": 1697,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_bybit_event_pipeline.py",
-      "duration_ms": 2033,
+      "duration_ms": 2052,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_candle_aggregation.py",
-      "duration_ms": 1425,
+      "duration_ms": 1423,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_comparison.py",
-      "duration_ms": 1562,
+      "duration_ms": 1614,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_continuous_reconciliation.py",
-      "duration_ms": 1552,
+      "duration_ms": 1491,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_control_plane_security.py",
-      "duration_ms": 8800,
+      "duration_ms": 8390,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_credential_policy.py",
-      "duration_ms": 1427,
+      "duration_ms": 1364,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_dangerous_research_strategies.py",
-      "duration_ms": 1629,
+      "duration_ms": 1611,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_data_quality_monitor.py",
-      "duration_ms": 1653,
+      "duration_ms": 1657,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_dated_basis_strategy.py",
-      "duration_ms": 1698,
+      "duration_ms": 1525,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_decision_pipeline.py",
-      "duration_ms": 1882,
+      "duration_ms": 1916,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_decision_support.py",
-      "duration_ms": 1482,
+      "duration_ms": 1502,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_deployment_safety.py",
-      "duration_ms": 1856,
+      "duration_ms": 1765,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_derivatives_features.py",
-      "duration_ms": 1421,
+      "duration_ms": 1559,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_dex_execution.py",
-      "duration_ms": 1500,
+      "duration_ms": 1549,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_directional_paper_broker.py",
-      "duration_ms": 1770,
+      "duration_ms": 1760,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_directional_paper_persistence.py",
-      "duration_ms": 3454,
+      "duration_ms": 3214,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_directional_paper_restore.py",
-      "duration_ms": 4078,
+      "duration_ms": 4003,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_directional_strategies.py",
-      "duration_ms": 1557,
+      "duration_ms": 1505,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_disaster_recovery_evidence.py",
-      "duration_ms": 2294,
+      "duration_ms": 2357,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_domain_decisions.py",
-      "duration_ms": 1427,
+      "duration_ms": 1388,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_domain_events.py",
-      "duration_ms": 1397,
+      "duration_ms": 1484,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_double_entry_ledger.py",
-      "duration_ms": 1633,
+      "duration_ms": 1567,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_durable_oms.py",
-      "duration_ms": 2400,
+      "duration_ms": 2288,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_event_journal.py",
-      "duration_ms": 4067,
+      "duration_ms": 3689,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_event_writer.py",
-      "duration_ms": 2310,
+      "duration_ms": 2546,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_funding_basis_strategy.py",
-      "duration_ms": 1652,
+      "duration_ms": 1607,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_funding_harvest_state_machine.py",
-      "duration_ms": 1580,
+      "duration_ms": 1618,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_funding_ledger_repository.py",
-      "duration_ms": 2668,
+      "duration_ms": 2239,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_gate_canonical_orderbook.py",
-      "duration_ms": 1656,
+      "duration_ms": 1620,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_guarded_capabilities.py",
-      "duration_ms": 1931,
+      "duration_ms": 1942,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_historical_replay.py",
-      "duration_ms": 3096,
+      "duration_ms": 2706,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_hyperliquid_canonical_orderbook.py",
-      "duration_ms": 1992,
+      "duration_ms": 1707,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_immutable_retention.py",
-      "duration_ms": 1927,
+      "duration_ms": 1641,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_infrastructure_delivery.py",
-      "duration_ms": 1533,
+      "duration_ms": 1451,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_internal_tls.py",
-      "duration_ms": 1720,
+      "duration_ms": 1624,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_l2_book.py",
-      "duration_ms": 1643,
+      "duration_ms": 1384,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_lead_lag_strategy.py",
-      "duration_ms": 1732,
+      "duration_ms": 1539,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_live_config.py",
-      "duration_ms": 2224,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_live_executor.py",
-      "duration_ms": 5412,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_llm_gateway.py",
-      "duration_ms": 1686,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_load_slo.py",
-      "duration_ms": 3233,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_manual_live_gate.py",
-      "duration_ms": 1599,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_market_data_repository.py",
-      "duration_ms": 4055,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_market_making_strategy.py",
-      "duration_ms": 1768,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_meta_labeling.py",
-      "duration_ms": 1661,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_mev_execution.py",
-      "duration_ms": 1825,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_mexc_canonical_orderbook.py",
-      "duration_ms": 2055,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_api.py",
-      "duration_ms": 4758,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_paper_probe.py",
-      "duration_ms": 3881,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_persistence.py",
-      "duration_ms": 2096,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py",
-      "duration_ms": 7469,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_native_low_latency.py",
-      "duration_ms": 1883,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_native_market_data_coverage.py",
-      "duration_ms": 2830,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_observability_alerts.py",
-      "duration_ms": 1689,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_okx_canonical_orderbook.py",
-      "duration_ms": 2203,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_option_market_data.py",
-      "duration_ms": 1870,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_options_volatility.py",
-      "duration_ms": 1554,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_orderbook_protocols.py",
-      "duration_ms": 1481,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_orderflow_features.py",
-      "duration_ms": 1520,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_parquet_storage.py",
       "duration_ms": 2021,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_pnl_v2.py",
-      "duration_ms": 2421,
+      "command": "PYTHONPATH=src python -m pytest tests/test_live_executor.py",
+      "duration_ms": 4726,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_portfolio_margin.py",
-      "duration_ms": 1629,
+      "command": "PYTHONPATH=src python -m pytest tests/test_llm_gateway.py",
+      "duration_ms": 1588,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_portfolio_risk_authority.py",
-      "duration_ms": 1639,
+      "command": "PYTHONPATH=src python -m pytest tests/test_load_slo.py",
+      "duration_ms": 2949,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_private_streams.py",
-      "duration_ms": 3898,
+      "command": "PYTHONPATH=src python -m pytest tests/test_manual_live_gate.py",
+      "duration_ms": 1444,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_protective_stops.py",
-      "duration_ms": 1807,
+      "command": "PYTHONPATH=src python -m pytest tests/test_market_data_repository.py",
+      "duration_ms": 3536,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_public_events.py",
-      "duration_ms": 3513,
+      "command": "PYTHONPATH=src python -m pytest tests/test_market_making_strategy.py",
+      "duration_ms": 1561,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_regime_classifier.py",
-      "duration_ms": 1749,
+      "command": "PYTHONPATH=src python -m pytest tests/test_meta_labeling.py",
+      "duration_ms": 1482,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_remaining_canonical_orderbooks.py",
-      "duration_ms": 2233,
+      "command": "PYTHONPATH=src python -m pytest tests/test_mev_execution.py",
+      "duration_ms": 1578,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_research_gates.py",
-      "duration_ms": 1586,
+      "command": "PYTHONPATH=src python -m pytest tests/test_mexc_canonical_orderbook.py",
+      "duration_ms": 1766,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_research_validation.py",
-      "duration_ms": 1673,
+      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_api.py",
+      "duration_ms": 4208,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_rl_policy.py",
-      "duration_ms": 1639,
+      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_paper_probe.py",
+      "duration_ms": 3395,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_acceptance.py",
-      "duration_ms": 5432,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_dangerous_research.py",
-      "duration_ms": 2474,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_decision_support.py",
-      "duration_ms": 4059,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_entry_health.py",
-      "duration_ms": 2226,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_llm.py",
-      "duration_ms": 2186,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_low_latency.py",
-      "duration_ms": 2053,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_margin.py",
-      "duration_ms": 2711,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_modes.py",
+      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_persistence.py",
       "duration_ms": 2013,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_onchain.py",
-      "duration_ms": 1794,
+      "command": "PYTHONPATH=src python -m pytest tests/test_multi_regime_runtime.py",
+      "duration_ms": 6529,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_protective_stops.py",
-      "duration_ms": 3009,
+      "command": "PYTHONPATH=src python -m pytest tests/test_native_low_latency.py",
+      "duration_ms": 1534,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_router.py",
-      "duration_ms": 2351,
+      "command": "PYTHONPATH=src python -m pytest tests/test_native_market_data_coverage.py",
+      "duration_ms": 2025,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_strategy_contexts.py",
-      "duration_ms": 2642,
+      "command": "PYTHONPATH=src python -m pytest tests/test_observability_alerts.py",
+      "duration_ms": 1446,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_universe.py",
-      "duration_ms": 2640,
+      "command": "PYTHONPATH=src python -m pytest tests/test_okx_canonical_orderbook.py",
+      "duration_ms": 1674,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_withdrawal.py",
-      "duration_ms": 1983,
+      "command": "PYTHONPATH=src python -m pytest tests/test_option_market_data.py",
+      "duration_ms": 1714,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_signal_orchestrator.py",
-      "duration_ms": 1700,
+      "command": "PYTHONPATH=src python -m pytest tests/test_options_volatility.py",
+      "duration_ms": 1612,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_smart_order_router.py",
-      "duration_ms": 1704,
+      "command": "PYTHONPATH=src python -m pytest tests/test_orderbook_protocols.py",
+      "duration_ms": 1405,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_strategy_execution.py",
-      "duration_ms": 1771,
+      "command": "PYTHONPATH=src python -m pytest tests/test_orderflow_features.py",
+      "duration_ms": 1419,
       "exit_code": 0,
       "status": "passed"
     },
     {
-      "command": "PYTHONPATH=src python -m pytest tests/test_strategy_suite.py",
-      "duration_ms": 1988,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_structure_features.py",
-      "duration_ms": 1595,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_technical_features.py",
-      "duration_ms": 1668,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_telegram.py",
-      "duration_ms": 2417,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_trading_fee_cache.py",
-      "duration_ms": 2027,
-      "exit_code": 0,
-      "status": "passed"
-    },
-    {
-      "command": "PYTHONPATH=src python -m pytest tests/test_universe_selector.py",
+      "command": "PYTHONPATH=src python -m pytest tests/test_parquet_storage.py",
       "duration_ms": 1924,
       "exit_code": 0,
       "status": "passed"
     },
     {
+      "command": "PYTHONPATH=src python -m pytest tests/test_pnl_v2.py",
+      "duration_ms": 2242,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_portfolio_margin.py",
+      "duration_ms": 1419,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_portfolio_risk_authority.py",
+      "duration_ms": 1542,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_private_streams.py",
+      "duration_ms": 3400,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_protective_stops.py",
+      "duration_ms": 1607,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_public_events.py",
+      "duration_ms": 3228,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_regime_classifier.py",
+      "duration_ms": 1518,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_remaining_canonical_orderbooks.py",
+      "duration_ms": 2099,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_research_gates.py",
+      "duration_ms": 1357,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_research_validation.py",
+      "duration_ms": 1403,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_rl_policy.py",
+      "duration_ms": 1499,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_acceptance.py",
+      "duration_ms": 4678,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_dangerous_research.py",
+      "duration_ms": 2068,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_decision_support.py",
+      "duration_ms": 3322,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_entry_health.py",
+      "duration_ms": 1800,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_llm.py",
+      "duration_ms": 1781,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_low_latency.py",
+      "duration_ms": 1673,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_margin.py",
+      "duration_ms": 2297,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_modes.py",
+      "duration_ms": 1931,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_onchain.py",
+      "duration_ms": 1749,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_protective_stops.py",
+      "duration_ms": 2198,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_router.py",
+      "duration_ms": 1631,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_strategy_contexts.py",
+      "duration_ms": 2225,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_universe.py",
+      "duration_ms": 2309,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_runtime_withdrawal.py",
+      "duration_ms": 1748,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_signal_orchestrator.py",
+      "duration_ms": 1375,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_smart_order_router.py",
+      "duration_ms": 1536,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_strategy_execution.py",
+      "duration_ms": 1540,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_strategy_suite.py",
+      "duration_ms": 1708,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_structure_features.py",
+      "duration_ms": 1445,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_technical_features.py",
+      "duration_ms": 1469,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_telegram.py",
+      "duration_ms": 2075,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_trading_fee_cache.py",
+      "duration_ms": 1618,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src python -m pytest tests/test_universe_selector.py",
+      "duration_ms": 1566,
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
       "command": "PYTHONPATH=src python -m pytest tests/test_v1_acceptance.py",
-      "duration_ms": 5975,
+      "duration_ms": 5449,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_v1_operational_schema.py",
-      "duration_ms": 1884,
+      "duration_ms": 1466,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_venue_metadata.py",
-      "duration_ms": 1705,
+      "duration_ms": 1411,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "PYTHONPATH=src python -m pytest tests/test_withdrawal_manager.py",
-      "duration_ms": 2150,
+      "duration_ms": 2077,
       "exit_code": 0,
       "status": "passed"
     },
@@ -667,46 +667,20 @@
     },
     {
       "command": "python -m coverage json -o coverage_report.json",
-      "duration_ms": 7137,
+      "duration_ms": 5722,
       "exit_code": 0,
       "status": "passed"
     },
     {
       "command": "python scripts/coverage_gate.py --report coverage_report.json",
-      "duration_ms": 298,
+      "duration_ms": 179,
       "exit_code": 0,
       "status": "passed"
     }
   ],
   "document_kind": "acceptance-verification-run",
-  "generated_at": "2026-09-09T07:38:37.094988+00:00",
-  "promotable": [
-    "ARCH-004",
-    "MD-001",
-    "MD-003",
-    "MD-004",
-    "FEAT-001",
-    "REG-001",
-    "REG-002",
-    "STRAT-001",
-    "STRAT-002",
-    "STRAT-006",
-    "STRAT-007",
-    "STRAT-008",
-    "AI-001",
-    "AI-002",
-    "AI-003",
-    "SIG-001",
-    "RISK-001",
-    "DATA-001",
-    "DATA-002",
-    "DATA-003",
-    "DATA-005",
-    "SEC-001",
-    "SEC-003",
-    "API-001",
-    "RUNTIME-001"
-  ],
+  "generated_at": "2026-09-09T11:37:22.277324+00:00",
+  "promotable": [],
   "python": "3.12",
   "requirements": [
     {
@@ -761,7 +735,7 @@
         "tests/test_event_writer.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -793,7 +767,7 @@
         "tests/test_bybit_event_pipeline.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -826,7 +800,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -840,7 +814,7 @@
         "tests/test_event_journal.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -881,7 +855,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -928,7 +902,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -942,7 +916,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -957,7 +931,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -972,7 +946,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1029,7 +1003,7 @@
         "tests/test_advanced_paper.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1044,7 +1018,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1058,7 +1032,7 @@
         "tests/test_runtime_universe.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1088,7 +1062,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1105,7 +1079,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1122,7 +1096,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1137,7 +1111,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1152,7 +1126,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1342,9 +1316,11 @@
       "external_commands": [],
       "failed_commands": [],
       "id": "BT-001",
-      "integration_evidence": [],
+      "integration_evidence": [
+        "tests/test_historical_replay.py"
+      ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1355,9 +1331,11 @@
       "external_commands": [],
       "failed_commands": [],
       "id": "BT-002",
-      "integration_evidence": [],
+      "integration_evidence": [
+        "tests/test_historical_replay.py"
+      ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1379,9 +1357,11 @@
       "external_commands": [],
       "failed_commands": [],
       "id": "BT-004",
-      "integration_evidence": [],
+      "integration_evidence": [
+        "tests/test_comparison.py"
+      ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1398,7 +1378,7 @@
         "tests/test_v1_operational_schema.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1411,7 +1391,7 @@
         "tests/test_analytics_storage.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1424,7 +1404,7 @@
         "tests/test_analytics_storage.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1449,7 +1429,7 @@
         "tests/test_event_journal.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1462,7 +1442,7 @@
         "tests/test_control_plane_security.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1491,7 +1471,7 @@
         "tests/test_internal_tls.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1529,7 +1509,7 @@
         "tests/test_control_plane_security.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1545,20 +1525,25 @@
       "integration_evidence": [
         "evidence/verification/local-verification.json",
         "tests/conftest.py",
+        "tests/test_acceptance_artifacts.py",
         "tests/test_acceptance_verification.py",
+        "tests/test_acceptance_window.py",
         "tests/test_advanced_paper.py",
         "tests/test_analytics_storage.py",
         "tests/test_backtest_job_persistence.py",
         "tests/test_bybit_event_pipeline.py",
         "tests/test_ci_delivery_gate.py",
+        "tests/test_comparison.py",
         "tests/test_control_plane_security.py",
         "tests/test_daily_report_postgres.py",
+        "tests/test_database_replay.py",
         "tests/test_deployment_safety.py",
         "tests/test_directional_paper_persistence.py",
         "tests/test_directional_paper_restore.py",
         "tests/test_disaster_recovery_evidence.py",
         "tests/test_event_journal.py",
         "tests/test_event_writer.py",
+        "tests/test_historical_replay.py",
         "tests/test_infrastructure_delivery.py",
         "tests/test_internal_tls.py",
         "tests/test_journal_profiles.py",
@@ -1570,11 +1555,12 @@
         "tests/test_multi_regime_restore_filter.py",
         "tests/test_multi_regime_runtime.py",
         "tests/test_paper_runner.py",
+        "tests/test_runtime_acceptance.py",
         "tests/test_runtime_universe.py",
         "tests/test_v1_operational_schema.py"
       ],
       "passed": false,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1644,7 +1630,7 @@
         "tests/test_multi_regime_runtime.py"
       ],
       "passed": true,
-      "status": "implemented"
+      "status": "validated"
     },
     {
       "commands": [
@@ -1655,7 +1641,11 @@
       "external_commands": [],
       "failed_commands": [],
       "id": "GATE-001",
-      "integration_evidence": [],
+      "integration_evidence": [
+        "tests/test_acceptance_artifacts.py",
+        "tests/test_acceptance_window.py",
+        "tests/test_runtime_acceptance.py"
+      ],
       "passed": true,
       "status": "partial"
     },
@@ -1668,7 +1658,11 @@
       "external_commands": [],
       "failed_commands": [],
       "id": "GATE-002",
-      "integration_evidence": [],
+      "integration_evidence": [
+        "tests/test_acceptance_artifacts.py",
+        "tests/test_acceptance_window.py",
+        "tests/test_runtime_acceptance.py"
+      ],
       "passed": true,
       "status": "partial"
     },
@@ -1691,7 +1685,7 @@
       ],
       "external_commands": [],
       "failed_commands": [
-        "PYTHONPATH=src python -m pytest tests/test_acceptance_verification.py"
+        "PYTHONPATH=src python -m pytest tests/test_acceptance_seal.py"
       ],
       "id": "GATE-004",
       "integration_evidence": [

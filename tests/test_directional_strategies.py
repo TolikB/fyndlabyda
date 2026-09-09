@@ -119,6 +119,7 @@ def _context(
     orderflow: OrderFlowFeatureSnapshot | None = None,
     structure: MarketStructureSnapshot | None = None,
     regime: RegimeSnapshot | None = None,
+    estimated_cost_bps: Decimal = Decimal("5"),
 ) -> DirectionalStrategyContext:
     return DirectionalStrategyContext(
         instrument=INSTRUMENT,
@@ -127,7 +128,7 @@ def _context(
         orderflow=orderflow or _orderflow(),
         structure=structure or _structure(),
         regime=regime or _regime(MarketRegime.TREND_UP),
-        estimated_cost_bps=Decimal("5"),
+        estimated_cost_bps=estimated_cost_bps,
     )
 
 
@@ -239,3 +240,60 @@ def test_liquidity_reversion_requires_range_sweep_rejection_and_reversal_flow() 
     assert no_sweep.rejection_reason == "liquidity_sweep_required"
     assert wrong_regime.rejection_reason == "regime_not_mean_reverting"
     assert wrong_flow.rejection_reason == "reversal_ofi_not_confirmed"
+
+
+def test_breakout_rejects_a_move_that_does_not_clear_its_all_in_cost() -> None:
+    strategy = OrderFlowBreakoutStrategy()
+    cheap = strategy.evaluate(_context())
+    assert cheap.intent is not None
+
+    # Same setup, but the all-in cost of taking it now eats the expected move.
+    ratio = strategy.config.minimum_edge_to_cost_ratio
+    expensive = strategy.evaluate(
+        _context(
+            estimated_cost_bps=(
+                cheap.intent.expected_move_bps / ratio + Decimal("1")
+            )
+        )
+    )
+    assert expensive.intent is None
+    assert expensive.rejection_reason == "edge_below_cost"
+
+
+def test_sweep_reversion_rejects_a_move_that_does_not_clear_its_all_in_cost() -> None:
+    strategy = LiquiditySweepReversionStrategy()
+    sweep = StructureEvent(
+        event_type=StructureEventType.LIQUIDITY_SWEPT,
+        direction=StructureDirection.BEARISH,
+        price=Decimal("105"),
+        source_time=NOW - timedelta(minutes=1),
+        confirmed_time=NOW,
+    )
+
+    def _sweep_context(cost: Decimal) -> DirectionalStrategyContext:
+        return _context(
+            orderflow=_orderflow(ofi="-2", book="-0.2", trade="-0.1"),
+            structure=_structure(events=(sweep,)),
+            regime=_regime(MarketRegime.RANGE),
+            estimated_cost_bps=cost,
+        )
+
+    cheap = strategy.evaluate(_sweep_context(Decimal("5")))
+    assert cheap.intent is not None
+
+    ratio = strategy.config.minimum_edge_to_cost_ratio
+    expensive = strategy.evaluate(
+        _sweep_context(cheap.intent.expected_move_bps / ratio + Decimal("1"))
+    )
+    assert expensive.intent is None
+    assert expensive.rejection_reason == "edge_below_cost"
+
+
+def test_the_directional_edge_floor_matches_the_normative_default() -> None:
+    # Every strategy family shares the specification's 2.5 edge-to-cost floor.
+    assert OrderFlowBreakoutStrategy().config.minimum_edge_to_cost_ratio == Decimal(
+        "2.5"
+    )
+    assert LiquiditySweepReversionStrategy().config.minimum_edge_to_cost_ratio == (
+        Decimal("2.5")
+    )
