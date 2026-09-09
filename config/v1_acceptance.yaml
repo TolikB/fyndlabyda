@@ -1558,7 +1558,7 @@ requirements:
     evidence_sha256:
       .github/workflows/release-gate.yml: ee55063455d8490318b1d311d5ce0d202adacd445fcd1e7481aaa88449845c62
       docs/V1_EVIDENCE_SEALING.md: f13819d10b33441a601ef5008a8efe0a419ce6847d3546eba56ba1c1ecd5b797
-      evidence/verification/local-verification.json: 9ec4f423c6ba24711a79f2971391f7571dd4bc2055e4479d689091c5f2798760
+      evidence/verification/local-verification.json: f2d5b868ef58b6a24f3a8b812cf7e85f9ac339e116d59acdf388ec863943dc95
       pyproject.toml: 8fe38788444b3abea920c0df2c9f76a4d07434e4d01f4f48c18daa64cb2ef4d8
       scripts/acceptance_verification.py: 638449ff597a088152e07e6a4ceb040f246c3f4388b76e1108d5cd292497ee3e
       scripts/coverage_gate.py: 25aa9bd16b04b2904a019aeaf326f2821c65c2b945d5c6c8158ca325ea379d0d
