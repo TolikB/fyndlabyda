@@ -73,15 +73,26 @@ docker run --detach \
   "$db_image" >/dev/null
 db_started=true
 
-for _ in $(seq 1 60); do
-  if docker exec "$db_container" pg_isready --username funding --dbname funding \
+# The entrypoint runs initdb against a temporary server bound to the Unix
+# socket only, so a socket-based probe can report "ready" mid-initialization and
+# then fail once that server is shut down. Probe over TCP, which only the real
+# server listens on, and require consecutive successes so the transition cannot
+# be mistaken for readiness.
+db_ready_streak=0
+for _ in $(seq 1 90); do
+  if docker exec "$db_container" pg_isready \
+    --host 127.0.0.1 --port 5432 --username funding --dbname funding \
     >/dev/null 2>&1; then
-    break
+    db_ready_streak=$((db_ready_streak + 1))
+    if [[ "$db_ready_streak" -ge 3 ]]; then
+      break
+    fi
+  else
+    db_ready_streak=0
   fi
   sleep 1
 done
-if ! docker exec "$db_container" pg_isready --username funding --dbname funding \
-  >/dev/null 2>&1; then
+if [[ "$db_ready_streak" -lt 3 ]]; then
   docker logs --tail 200 "$db_container" >&2 || true
   echo "shadow PostgreSQL did not become ready" >&2
   exit 1
