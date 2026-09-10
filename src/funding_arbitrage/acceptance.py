@@ -441,8 +441,16 @@ def _path_contains_symlink(repository_root: Path, target: Path) -> bool:
 
 
 def _evidence_sha256(path: Path, repository_root: Path) -> str:
+    """Digest evidence content independently of how it was checked out.
+
+    Git translates line endings per platform, so hashing raw bytes would make a
+    manifest sealed on one operating system fail on another for files nobody
+    touched. The digest therefore covers the normalized content Git itself
+    stores: text is compared with LF endings, and binary content byte for byte.
+    """
+
     digest = hashlib.sha256()
-    digest.update(b"v1-evidence-tree-v1\x00")
+    digest.update(b"v2-evidence-tree-lf\x00")
     files = (path,) if path.is_file() else tuple(
         item for item in sorted(path.rglob("*")) if item.is_file()
     )
@@ -454,10 +462,21 @@ def _evidence_sha256(path: Path, repository_root: Path) -> str:
         relative = item.relative_to(repository_root).as_posix().encode("utf-8")
         digest.update(len(relative).to_bytes(4, "big"))
         digest.update(relative)
-        with item.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        content = item.read_bytes()
+        digest.update(_normalized_content(content))
     return digest.hexdigest()
+
+
+def _normalized_content(content: bytes) -> bytes:
+    """Return text content with LF endings, and binary content unchanged.
+
+    A NUL byte is Git's own signal that a blob is binary; anything without one
+    is treated as text whose endings must not affect its identity.
+    """
+
+    if b"\x00" in content:
+        return content
+    return content.replace(b"\r\n", b"\n")
 
 
 def _git(repository_root: Path, *arguments: str) -> str:

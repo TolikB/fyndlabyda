@@ -356,3 +356,30 @@ def test_completion_snapshot_requires_exact_clean_git_revision(tmp_path: Path) -
     )
     assert "completion audit requires a clean repository" in errors
     assert "completion manifest does not match the immutable revision" in errors
+
+
+def test_evidence_digests_are_independent_of_line_endings(tmp_path: Path) -> None:
+    """Git translates endings per platform; a digest must not follow suit."""
+
+    unix = tmp_path / "unix.py"
+    windows = tmp_path / "windows.py"
+    unix.write_bytes(b"line one\nline two\n")
+    windows.write_bytes(b"line one\r\nline two\r\n")
+
+    assert _evidence_sha256(unix, tmp_path) != _evidence_sha256(
+        windows, tmp_path
+    ), "different names must still differ"
+
+    same_name_unix = tmp_path / "same.py"
+    same_name_unix.write_bytes(b"line one\nline two\n")
+    unix_digest = _evidence_sha256(same_name_unix, tmp_path)
+    same_name_unix.write_bytes(b"line one\r\nline two\r\n")
+    assert _evidence_sha256(same_name_unix, tmp_path) == unix_digest
+
+
+def test_binary_evidence_is_digested_byte_for_byte(tmp_path: Path) -> None:
+    target = tmp_path / "payload.bin"
+    target.write_bytes(b"\x00\r\n\x01")
+    first = _evidence_sha256(target, tmp_path)
+    target.write_bytes(b"\x00\n\x01")
+    assert _evidence_sha256(target, tmp_path) != first
