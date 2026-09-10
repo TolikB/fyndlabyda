@@ -461,7 +461,9 @@ def test_mtls_reverse_proxy_is_the_only_published_app_boundary() -> None:
     assert proxy.get("cap_drop") == ["ALL"]
     assert proxy.get("ports") == ["127.0.0.1:8443:8443"]
     proxy_network = proxy.get("networks", {}).get("control_plane", {})
-    assert proxy_network.get("ipv4_address") == "172.30.241.10"
+    # Overridable for isolated windows, but it must default to the pinned range
+    # that the live profile trusts.
+    assert proxy_network.get("ipv4_address") == "${CONTROL_PLANE_PROXY_IP:-172.30.241.10}"
 
     nginx = NGINX_CONTROL_PLANE_PATH.read_text(encoding="utf-8")
     assert "ssl_protocols TLSv1.2 TLSv1.3;" in nginx
@@ -563,3 +565,28 @@ def test_clickhouse_merge_concurrency_is_sized_for_the_budget() -> None:
     assert 0 < largest_merge
     # One merge may be large on disk, but never more than the whole pool budget.
     assert largest_merge <= ceiling * 2
+
+
+def test_control_plane_network_defaults_to_the_trusted_production_range() -> None:
+    """An override must not be able to silently move the trusted proxy."""
+
+    compose = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    subnet = compose["networks"]["control_plane"]["ipam"]["config"][0]["subnet"]
+    assert subnet == "${CONTROL_PLANE_SUBNET:-172.30.241.0/24}"
+
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    trusted = values["CONTROL_PLANE_MTLS_TRUSTED_PROXIES"]
+    proxy = compose["services"]["control-plane"]["networks"]["control_plane"]
+    default_proxy_ip = proxy["ipv4_address"].split(":-", 1)[1].rstrip("}")
+    default_subnet_prefix = subnet.split(":-", 1)[1].rstrip("}").rsplit(".", 1)[0]
+
+    assert trusted == default_proxy_ip
+    assert default_proxy_ip.startswith(default_subnet_prefix + ".")
+
+    # The live profile must not carry an override that would move either.
+    assert "CONTROL_PLANE_SUBNET" not in values
+    assert "CONTROL_PLANE_PROXY_IP" not in values

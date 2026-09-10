@@ -98,7 +98,7 @@ services:
       - "127.0.0.1:8443:8443"
     networks:
       control_plane:
-        ipv4_address: 172.30.241.10
+        ipv4_address: ${CONTROL_PLANE_PROXY_IP:-172.30.241.10}
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -337,6 +337,9 @@ networks:
   data_plane:
     internal: true
   control_plane:
+    # Overridable so an isolated acceptance window can run alongside an existing
+    # deployment on the same host. The default is the pinned production range
+    # that .env.live.example trusts as its control-plane proxy.
     ipam:
       config:
-        - subnet: 172.30.241.0/24
+        - subnet: ${CONTROL_PLANE_SUBNET:-172.30.241.0/24}

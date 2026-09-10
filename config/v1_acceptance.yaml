@@ -1189,7 +1189,7 @@ requirements:
       - src/funding_arbitrage/storage/replication.py
       - tests/test_analytics_storage.py
     evidence_sha256:
-      docker-compose.yml: e218c12c38e0a756d87d387f03c6c47e26c7c3ca9393463596f9e633f4e156e2
+      docker-compose.yml: 232446fa585323cfc153c7774d6af795e027dd3d70bff456beabbb9a8caaf70d
       docker/clickhouse/init/001_v1_analytics.sql: 4172e5c0af8b3790122c6f8b607694e78975f6d4c314cc041456d3a927058bde
       docker/clickhouse/init/002_v1_typed_analytics_upgrade.sql: c7f3deb9c527fd59ad6c3eba41b9a6a1e7e6e71e66b5c677e14f067e18df9eda
       docs/V1_ANALYTICS_STORAGE.md: 2b345d1f4e5a5fc8b655d34821c71e68a9a6e023c25278bc61fd14857980a406
@@ -1209,7 +1209,7 @@ requirements:
       - src/funding_arbitrage/storage/ephemeral.py
       - tests/test_analytics_storage.py
     evidence_sha256:
-      docker-compose.yml: e218c12c38e0a756d87d387f03c6c47e26c7c3ca9393463596f9e633f4e156e2
+      docker-compose.yml: 232446fa585323cfc153c7774d6af795e027dd3d70bff456beabbb9a8caaf70d
       src/funding_arbitrage/storage/ephemeral.py: dfdaa04dc472b553ff9417ea89c4ac2c20bd75735a581b4f8edaa2b90c182b89
       tests/test_analytics_storage.py: d6c85dc22827d114bafd0abf703974535ea76eb96b359df497480a360dce9405
   - id: DATA-004
@@ -1265,7 +1265,7 @@ requirements:
       - src/funding_arbitrage/security/revocation.py
       - tests/test_control_plane_security.py
     evidence_sha256:
-      docker-compose.yml: e218c12c38e0a756d87d387f03c6c47e26c7c3ca9393463596f9e633f4e156e2
+      docker-compose.yml: 232446fa585323cfc153c7774d6af795e027dd3d70bff456beabbb9a8caaf70d
       docker/nginx/control-plane.conf: 830ade97d17cf1080723953cec25c20ad0fe86973aa68dce4e19b5f01692eee4
       docs/V1_CONTROL_PLANE_SECURITY.md: d060151a9d75f2e1f5d6ded1f61118a46646300e6f715a28dd7156fb3187ef2e
       migrations/versions/0014_control_plane_security.py: 626c31588b095be707e6d64767c4ca84e018713da1ccb241553623f5c65b040f
@@ -1314,7 +1314,7 @@ requirements:
       - tests/test_deployment_safety.py
       - tests/test_internal_tls.py
     evidence_sha256:
-      docker-compose.yml: e218c12c38e0a756d87d387f03c6c47e26c7c3ca9393463596f9e633f4e156e2
+      docker-compose.yml: 232446fa585323cfc153c7774d6af795e027dd3d70bff456beabbb9a8caaf70d
       docker/clickhouse/config.d/tls.xml: 0a718599c633ffe51c99ef5b3cd1cdd81b3c2299e081e5e3c3f5c4b9dd116a30
       docker/postgres/pg_hba.conf: b828ca2b3d6791320c4672385fadedc428a323da00213f77e962eb36de6d299e
       docker/redis/secure-entrypoint.sh: ac71f525469dbfd595420504c948629fba50fbac85ee2536ea34e2bc424220f7
@@ -1326,7 +1326,7 @@ requirements:
       src/funding_arbitrage/security/revocation.py: 0f7ff1b4afcb11464423fb734d93c51c2b3d2be853ca31bae53ec65f983ab363
       src/funding_arbitrage/storage/clickhouse.py: 00edfc197bfd0956dda3851eecebf2533e82ad02886e9db3c9a7c1df575daab7
       tests/test_analytics_storage.py: d6c85dc22827d114bafd0abf703974535ea76eb96b359df497480a360dce9405
-      tests/test_deployment_safety.py: d21da097ec2746bc6e563b328a27de4c0d5612725addefc18f1406f9b64e7023
+      tests/test_deployment_safety.py: 0bc56f3ece0fea73a57f59283b72c977406b98645676e9cb9bf316c6ac05716c
       tests/test_internal_tls.py: b6991fcb4868eb7bd13c2f78ec4b20b7e7ab45bbb51f64ed9494541771639a34
   - id: OBS-001
     category: monitoring
@@ -1598,7 +1598,7 @@ requirements:
       tests/test_dated_basis_strategy.py: d5ee8c3bb98673fbbee4281a57098285819b56cbedecefebc53d583c36377c31
       tests/test_decision_pipeline.py: b46aa048264404dba01633e8e5e497aa83b43d29a5e4056d8bdde8223b0488e6
       tests/test_decision_support.py: ed562aba54c0f83938624e32dbb1c3a051e99cc76af8a76516606d644d5fd121
-      tests/test_deployment_safety.py: d21da097ec2746bc6e563b328a27de4c0d5612725addefc18f1406f9b64e7023
+      tests/test_deployment_safety.py: 0bc56f3ece0fea73a57f59283b72c977406b98645676e9cb9bf316c6ac05716c
       tests/test_derivatives_features.py: cf2205c1afe3bab24bae010d04f57b508c128fd2551c60aa31920a2d911fdd0a
       tests/test_dex_execution.py: 13b84a28ea4870f06c49613952d06ced06afc9142facebeb07384cf8ba7b1941
       tests/test_directional_paper_broker.py: cab38ab7e40752c262da6819d98e1c6d3b4e84380683e6cc9d1dc1cf64799301
