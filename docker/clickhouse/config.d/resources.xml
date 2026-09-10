@@ -1,14 +1,50 @@
 <clickhouse>
-    <max_thread_pool_size>128</max_thread_pool_size>
-    <background_buffer_flush_schedule_pool_size>4</background_buffer_flush_schedule_pool_size>
-    <background_pool_size>16</background_pool_size>
-    <background_move_pool_size>4</background_move_pool_size>
-    <background_fetches_pool_size>4</background_fetches_pool_size>
-    <background_common_pool_size>4</background_common_pool_size>
-    <background_schedule_pool_size>16</background_schedule_pool_size>
-    <background_message_broker_schedule_pool_size>4</background_message_broker_schedule_pool_size>
-    <background_distributed_schedule_pool_size>4</background_distributed_schedule_pool_size>
-    <tables_loader_background_pool_size>4</tables_loader_background_pool_size>
-    <tables_loader_foreground_pool_size>4</tables_loader_foreground_pool_size>
-    <max_server_memory_usage_to_ram_ratio>0.65</max_server_memory_usage_to_ram_ratio>
+    <!--
+      Every budget here is expressed as an absolute value sized against the
+      container's own `mem_limit`, never as a ratio of host RAM. ClickHouse
+      resolves `max_server_memory_usage_to_ram_ratio` against the machine, so on
+      a 7 GiB host inside a 1280 MiB cgroup it believed it had roughly 4.5 GiB,
+      never throttled itself, and was OOM-killed by the cgroup mid-merge on a
+      loop. An absolute ceiling below the cgroup limit makes ClickHouse fail one
+      merge gracefully instead of dying.
+
+      `tests/test_deployment_safety.py` asserts these stay consistent with the
+      Compose memory limit.
+    -->
+    <max_server_memory_usage>943718400</max_server_memory_usage>
+
+    <!-- Caches default to gigabytes and would exceed the budget on their own. -->
+    <mark_cache_size>134217728</mark_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+    <index_mark_cache_size>33554432</index_mark_cache_size>
+    <index_uncompressed_cache_size>0</index_uncompressed_cache_size>
+    <mmap_cache_size>256</mmap_cache_size>
+    <compiled_expression_cache_size>16777216</compiled_expression_cache_size>
+
+    <!--
+      Concurrency sized for the budget: sixteen simultaneous merges could each
+      hold a block, which is what pushed the server past the cgroup ceiling.
+    -->
+    <max_thread_pool_size>32</max_thread_pool_size>
+    <background_pool_size>4</background_pool_size>
+    <background_buffer_flush_schedule_pool_size>2</background_buffer_flush_schedule_pool_size>
+    <background_move_pool_size>2</background_move_pool_size>
+    <background_fetches_pool_size>2</background_fetches_pool_size>
+    <background_common_pool_size>2</background_common_pool_size>
+    <background_schedule_pool_size>8</background_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>2</background_message_broker_schedule_pool_size>
+    <tables_loader_background_pool_size>2</tables_loader_background_pool_size>
+    <tables_loader_foreground_pool_size>2</tables_loader_foreground_pool_size>
+
+    <merge_tree>
+        <!--
+          Bound one merge so a large accumulated partition cannot demand the
+          whole server budget, and keep enough free disk for it to complete.
+        -->
+        <max_bytes_to_merge_at_max_space_in_pool>1073741824</max_bytes_to_merge_at_max_space_in_pool>
+        <max_bytes_to_merge_at_min_space_in_pool>67108864</max_bytes_to_merge_at_min_space_in_pool>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>2</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <merge_max_block_size>4096</merge_max_block_size>
+        <max_part_loading_threads>2</max_part_loading_threads>
+    </merge_tree>
 </clickhouse>

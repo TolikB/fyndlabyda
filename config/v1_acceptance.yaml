@@ -1326,7 +1326,7 @@ requirements:
       src/funding_arbitrage/security/revocation.py: 0f7ff1b4afcb11464423fb734d93c51c2b3d2be853ca31bae53ec65f983ab363
       src/funding_arbitrage/storage/clickhouse.py: 00edfc197bfd0956dda3851eecebf2533e82ad02886e9db3c9a7c1df575daab7
       tests/test_analytics_storage.py: d6c85dc22827d114bafd0abf703974535ea76eb96b359df497480a360dce9405
-      tests/test_deployment_safety.py: 1d4156aac4bd6f107425da76283468343413db933d267192de4ef5f6e66062b6
+      tests/test_deployment_safety.py: d21da097ec2746bc6e563b328a27de4c0d5612725addefc18f1406f9b64e7023
       tests/test_internal_tls.py: b6991fcb4868eb7bd13c2f78ec4b20b7e7ab45bbb51f64ed9494541771639a34
   - id: OBS-001
     category: monitoring
@@ -1598,7 +1598,7 @@ requirements:
       tests/test_dated_basis_strategy.py: d5ee8c3bb98673fbbee4281a57098285819b56cbedecefebc53d583c36377c31
       tests/test_decision_pipeline.py: b46aa048264404dba01633e8e5e497aa83b43d29a5e4056d8bdde8223b0488e6
       tests/test_decision_support.py: ed562aba54c0f83938624e32dbb1c3a051e99cc76af8a76516606d644d5fd121
-      tests/test_deployment_safety.py: 1d4156aac4bd6f107425da76283468343413db933d267192de4ef5f6e66062b6
+      tests/test_deployment_safety.py: d21da097ec2746bc6e563b328a27de4c0d5612725addefc18f1406f9b64e7023
       tests/test_derivatives_features.py: cf2205c1afe3bab24bae010d04f57b508c128fd2551c60aa31920a2d911fdd0a
       tests/test_dex_execution.py: 13b84a28ea4870f06c49613952d06ced06afc9142facebeb07384cf8ba7b1941
       tests/test_directional_paper_broker.py: cab38ab7e40752c262da6819d98e1c6d3b4e84380683e6cc9d1dc1cf64799301

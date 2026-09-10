@@ -207,17 +207,14 @@ def test_data_plane_is_internal_authenticated_and_tls_only() -> None:
 
     resource_config = ET.parse(CLICKHOUSE_RESOURCES_PATH).getroot()
     assert resource_config.tag == "clickhouse"
-    assert resource_config.findtext("max_thread_pool_size") == "128"
-    assert resource_config.findtext("background_pool_size") == "16"
-    assert resource_config.findtext("background_schedule_pool_size") == "16"
-    assert resource_config.findtext("max_server_memory_usage_to_ram_ratio") == "0.65"
+    assert int(resource_config.findtext("max_thread_pool_size") or 0) <= 32
     pool_sizes = {
         element.tag: int(element.text or "0")
         for element in resource_config
         if element.tag.endswith("pool_size") and element.tag != "max_thread_pool_size"
     }
     assert pool_sizes
-    assert max(pool_sizes.values()) <= 16
+    assert max(pool_sizes.values()) <= 8
 
 
 def test_live_environment_requires_internal_tls_and_credential_policy() -> None:
@@ -500,3 +497,69 @@ def test_dashboard_uses_in_memory_bearer_auth_and_safe_dom_rendering() -> None:
     assert "localStorage" not in dashboard
     assert ".innerHTML" not in dashboard
     assert "cell.textContent" in dashboard
+
+
+def _clickhouse_resources() -> ET.Element:
+    return ET.parse(CLICKHOUSE_RESOURCES_PATH).getroot()
+
+
+def _compose_memory_bytes(value: str) -> int:
+    units = {"k": 1024, "m": 1024**2, "g": 1024**3}
+    suffix = value[-1].lower()
+    if suffix in units:
+        return int(value[:-1]) * units[suffix]
+    return int(value)
+
+
+def test_clickhouse_budget_stays_below_its_container_memory_limit() -> None:
+    """ClickHouse must throttle itself before the cgroup kills it.
+
+    `max_server_memory_usage_to_ram_ratio` resolves against host RAM, not the
+    cgroup, so on a small container it lets the server believe it has several
+    times its real budget and be OOM-killed mid-merge on a loop.
+    """
+
+    resources = _clickhouse_resources()
+    ceiling = resources.findtext("max_server_memory_usage")
+    assert ceiling is not None, "an absolute server memory ceiling is required"
+
+    services = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))["services"]
+    limit = _compose_memory_bytes(services["clickhouse"]["mem_limit"])
+    assert int(ceiling) < limit, "the ceiling must sit below the container limit"
+    # Leave real headroom for allocator overhead, threads, and page cache.
+    assert int(ceiling) <= limit * 3 // 4
+
+    ratio = resources.findtext("max_server_memory_usage_to_ram_ratio")
+    assert ratio is None, "a host-RAM ratio would contradict the absolute ceiling"
+
+
+def test_clickhouse_caches_fit_inside_the_server_budget() -> None:
+    resources = _clickhouse_resources()
+    ceiling = int(resources.findtext("max_server_memory_usage") or 0)
+    caches = sum(
+        int(resources.findtext(name) or 0)
+        for name in (
+            "mark_cache_size",
+            "uncompressed_cache_size",
+            "index_mark_cache_size",
+            "index_uncompressed_cache_size",
+            "compiled_expression_cache_size",
+        )
+    )
+    # ClickHouse defaults these to gigabytes, which alone exceed a small budget.
+    assert 0 < caches < ceiling // 2
+
+
+def test_clickhouse_merge_concurrency_is_sized_for_the_budget() -> None:
+    resources = _clickhouse_resources()
+    assert int(resources.findtext("background_pool_size") or 0) <= 4
+
+    merge_tree = resources.find("merge_tree")
+    assert merge_tree is not None
+    largest_merge = int(
+        merge_tree.findtext("max_bytes_to_merge_at_max_space_in_pool") or 0
+    )
+    ceiling = int(resources.findtext("max_server_memory_usage") or 0)
+    assert 0 < largest_merge
+    # One merge may be large on disk, but never more than the whole pool budget.
+    assert largest_merge <= ceiling * 2
