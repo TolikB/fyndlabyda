@@ -1494,3 +1494,31 @@ async def test_a_page_wide_stale_timestamp_does_not_cancel_the_ticker_stream() -
     # pass that produced no usable ticker.
     assert collector._stream_ticker_requests.get("bybit") == subscribed
     await collector.close()
+
+
+@pytest.mark.asyncio
+async def test_a_slow_fetch_does_not_make_parse_stamped_tickers_future_dated() -> None:
+    """Several venues stamp a ticker when it is parsed, not from venue data."""
+
+    class SlowParseStampedMock(MultiSymbolMock):
+        async def get_tickers(self) -> list[Ticker]:
+            rows = await super().get_tickers()
+            # The venue is slow, then stamps at parse time the way Hyperliquid does.
+            await asyncio.sleep(3.0)
+            stamped = datetime.now(UTC)
+            return [row.model_copy(update={"timestamp": stamped}) for row in rows]
+
+    adapter = SlowParseStampedMock()
+    collector = MarketDataCollector(
+        [adapter], orderbook_symbol_limit=2, enable_streams=False, stale_after_seconds=30
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    # A fetch slower than the clock-skew tolerance must not lose the whole page.
+    # The boundary would repair the tickers, but the order books are ranked off
+    # them inside the pass, so losing them costs the venue its books outright.
+    assert snapshot.tickers
+    assert [key for key in snapshot.orderbooks if key[0] == "bybit"]
+    assert snapshot.incomplete_venues == ()

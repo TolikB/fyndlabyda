@@ -781,6 +781,11 @@ class MarketDataCollector:
             market_data_phase_duration_seconds.labels(
                 adapter.name, "tickers_funding"
             ).observe(time.monotonic() - market_started)
+            # The fetch above took time, and several venues stamp a ticker when
+            # it is parsed rather than from venue data. Ageing those against a
+            # reference taken before the fetch makes them look future dated, and
+            # a fetch slower than the clock-skew tolerance loses the whole page.
+            now = datetime.now(UTC)
             venue_tickers = self._merge_stream_tickers(adapter.name, venue_tickers, now)
             valid_tickers = self._usable_tickers(adapter.name, venue_tickers, now)
             if not valid_tickers and not refresh_tickers:
