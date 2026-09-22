@@ -193,6 +193,7 @@ class PaperTestRunner:
                 settings.market_data_mode == "live_public"
                 and settings.market_data_streams_enabled
             ),
+            funding_stale_after_seconds=settings.funding_snapshot_stale_seconds,
             option_assets=(
                 settings.multi_regime_asset_values
                 if settings.options_market_data_enabled

@@ -185,6 +185,7 @@ class MarketDataCollector:
         enable_streams: bool = False,
         rest_validation_seconds: int = 60,
         *,
+        funding_stale_after_seconds: int | None = None,
         option_assets: Iterable[str] = (),
         option_refresh_seconds: float = 5.0,
         option_maximum_expiries: int = 2,
@@ -209,6 +210,14 @@ class MarketDataCollector:
         self.market_asset_limit = market_asset_limit
         self.history_symbol_limit = history_symbol_limit
         self.stale_after_seconds = stale_after_seconds
+        # A funding rate is published on a venue schedule measured in hours, so it
+        # carries its own, far longer budget. Holding it to the market-data budget
+        # re-fetches every venue's funding page several times a minute for nothing.
+        self.funding_stale_after_seconds = (
+            stale_after_seconds
+            if funding_stale_after_seconds is None
+            else funding_stale_after_seconds
+        )
         self.enable_streams = enable_streams
         # With streams on, this cadence only refreshes the discovery universe:
         # the snapshot boundary owns freshness and re-fetches exactly the venues
@@ -409,7 +418,8 @@ class MarketDataCollector:
             for index, result in enumerate(collections)
             if result.funding
             and any(
-                (now - item.timestamp).total_seconds() > self.stale_after_seconds
+                (now - item.timestamp).total_seconds()
+                > self.funding_stale_after_seconds
                 for item in result.funding
             )
         ]
@@ -718,7 +728,7 @@ class MarketDataCollector:
                 cached_funding is None
                 or last_funding_fetch is None
                 or (now - last_funding_fetch).total_seconds()
-                >= self.stale_after_seconds
+                >= self.funding_stale_after_seconds
             )
             market_started = time.monotonic()
             if refresh_tickers and refresh_funding:

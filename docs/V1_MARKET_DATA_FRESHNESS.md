@@ -71,6 +71,18 @@ venues, and because a single not-ready sample fails a window permanently, a
 window that opens cold simply fails on its next sample. Any venue dropping out
 during warm-up restarts the streak.
 
+## Each kind of market data carries its own budget
+
+`MARKET_DATA_STALE_SECONDS` is the budget for a price. A funding rate is
+published on a venue schedule measured in hours, and the runtime gives it
+`FUNDING_SNAPSHOT_STALE_SECONDS` accordingly, so the collector takes that budget
+as `funding_stale_after_seconds` rather than reusing the market-data one.
+
+Holding funding to the price budget re-fetched every venue's funding page
+several times a minute for nothing: measured on the acceptance host the
+snapshot-boundary funding refresh alone cost 4.0s of a 10.5s pass, which matters
+because GATE-001 checks cycle progress, not only freshness.
+
 ## The collection pass needs enough CPU to stay inside the budget
 
 One eight-venue collection pass measures about 12 seconds of wall clock, most of

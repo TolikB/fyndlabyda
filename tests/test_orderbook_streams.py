@@ -1210,3 +1210,65 @@ async def test_collector_refreshes_a_venue_before_it_runs_out_of_fresh_tickers()
     assert snapshot.incomplete_venues == ()
     for ticker in snapshot.tickers:
         assert (snapshot.captured_at - ticker.timestamp).total_seconds() <= 30
+
+
+@pytest.mark.asyncio
+async def test_funding_uses_its_own_budget_not_the_market_data_one() -> None:
+    """Funding is published on a venue schedule of hours, not of seconds."""
+
+    class CountingFundingMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.funding_calls = 0
+
+        async def get_funding_rates(self) -> list[FundingSnapshot]:
+            self.funding_calls += 1
+            rows = await super().get_funding_rates()
+            aged = datetime.now(UTC) - timedelta(seconds=45)
+            return [row.model_copy(update={"timestamp": aged}) for row in rows]
+
+    adapter = CountingFundingMock()
+    collector = MarketDataCollector(
+        [adapter],
+        enable_streams=False,
+        stale_after_seconds=30,
+        funding_stale_after_seconds=180,
+    )
+
+    await collector.collect_once()
+    await collector.close()
+
+    # 45s beats the 30s market-data budget but is well inside the funding one,
+    # so the boundary must not spend a second fetch on it.
+    assert adapter.funding_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_funding_still_refreshes_once_its_own_budget_lapses() -> None:
+    class AgingFundingMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.funding_calls = 0
+
+        async def get_funding_rates(self) -> list[FundingSnapshot]:
+            self.funding_calls += 1
+            rows = await super().get_funding_rates()
+            if self.funding_calls == 1:
+                aged = datetime.now(UTC) - timedelta(seconds=200)
+                return [row.model_copy(update={"timestamp": aged}) for row in rows]
+            return rows
+
+    adapter = AgingFundingMock()
+    collector = MarketDataCollector(
+        [adapter],
+        enable_streams=False,
+        stale_after_seconds=30,
+        funding_stale_after_seconds=180,
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert adapter.funding_calls == 2
+    for row in snapshot.funding:
+        assert (snapshot.captured_at - row.timestamp).total_seconds() <= 180
