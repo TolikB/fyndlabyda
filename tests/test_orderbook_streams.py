@@ -1465,3 +1465,32 @@ def test_a_book_is_replaced_before_it_reaches_its_budget() -> None:
     assert collector._book_needs_rest_validation(
         "bybit", ("BTCUSDT", InstrumentType.PERPETUAL), now
     )
+
+
+@pytest.mark.asyncio
+async def test_a_page_wide_stale_timestamp_does_not_cancel_the_ticker_stream() -> None:
+    """The stream is the fallback for a lagging venue snapshot, so keep it."""
+
+    class PageStampMock(MultiSymbolMock):
+        async def get_tickers(self) -> list[Ticker]:
+            rows = await super().get_tickers()
+            # Gate publishes one timestamp for the whole futures page, so a
+            # lagging snapshot makes every row stale at the same instant.
+            lagged = datetime.now(UTC) - timedelta(seconds=90)
+            return [row.model_copy(update={"timestamp": lagged}) for row in rows]
+
+    adapter = PageStampMock()
+    collector = MarketDataCollector(
+        [adapter], enable_streams=True, stale_after_seconds=30
+    )
+    subscribed = frozenset(
+        {("BTCUSDT", InstrumentType.PERPETUAL), ("ETHUSDT", InstrumentType.PERPETUAL)}
+    )
+    collector._stream_ticker_requests["bybit"] = subscribed
+
+    await collector.collect_once()
+
+    # The markets we want have not changed, so the subscription must survive the
+    # pass that produced no usable ticker.
+    assert collector._stream_ticker_requests.get("bybit") == subscribed
+    await collector.close()

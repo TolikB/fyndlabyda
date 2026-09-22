@@ -816,7 +816,12 @@ class MarketDataCollector:
                     self.market_asset_limit,
                     required_markets=pinned_markets,
                 )
-            self._ensure_ticker_stream(adapter, valid_tickers)
+            if valid_tickers:
+                # A venue can publish one page-wide timestamp, so a lagging
+                # snapshot makes every ticker stale at once. Re-subscribing to
+                # nothing would tear down the stream that covers exactly that
+                # case, and the markets we want have not changed.
+                self._ensure_ticker_stream(adapter, valid_tickers)
             ranked_discovery_books = _rank_orderbook_requests(
                 valid_tickers, venue_funding, venue_instruments
             )
