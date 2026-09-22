@@ -787,7 +787,10 @@ class MarketDataCollector:
                     *(pinned_discovery_books or ()),
                 ]
             )
-            if self.market_asset_limit is not None:
+            if self.market_asset_limit is not None and valid_tickers:
+                # With no usable ticker there is nothing to rank, and letting the
+                # limiter run would take the venue's funding and instruments down
+                # with it — leaving the snapshot boundary nothing to repair from.
                 venue_instruments, valid_tickers, venue_funding = _limit_venue_universe(
                     venue_instruments,
                     valid_tickers,

@@ -1341,3 +1341,43 @@ async def test_a_venue_keeps_its_books_when_its_cached_page_expires() -> None:
     # The venue must still contribute order books, which is what readiness checks.
     assert [key for key in snapshot.orderbooks if key[0] == "bybit"]
     assert snapshot.incomplete_venues == ()
+
+
+@pytest.mark.asyncio
+async def test_a_venue_whose_page_expires_keeps_its_funding_to_recover_from() -> None:
+    """The limiter ranks off tickers, so with none it must not run at all."""
+
+    class ExpiringMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ticker_calls = 0
+            self.serve_expired = False
+
+        async def get_tickers(self) -> list[Ticker]:
+            self.ticker_calls += 1
+            rows = await super().get_tickers()
+            if self.serve_expired:
+                self.serve_expired = False
+                expired = datetime.now(UTC) - timedelta(seconds=120)
+                return [row.model_copy(update={"timestamp": expired}) for row in rows]
+            return rows
+
+    adapter = ExpiringMock()
+    collector = MarketDataCollector(
+        [adapter],
+        market_asset_limit=2,
+        orderbook_symbol_limit=2,
+        enable_streams=False,
+        stale_after_seconds=30,
+    )
+
+    await collector.collect_once()
+    # The venue serves one wholly expired page, as a venue occasionally does.
+    adapter.serve_expired = True
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    # The boundary re-fetch restores the venue rather than leaving it with
+    # nothing to rank, so funding survives alongside the tickers.
+    assert [row for row in snapshot.funding if row.exchange == "bybit"]
+    assert [row for row in snapshot.tickers if row.exchange == "bybit"]
