@@ -1667,7 +1667,7 @@ requirements:
       tests/test_option_market_data.py: 94ab4ccfa9b467227f1ad42a3ecd7f48ba3854f46ff829aadd5e791db15b07c8
       tests/test_options_volatility.py: e75d1b482be3fc053f6344a0ff4a8ff7acdf53de2c3431b5b41edf3cf0cc5531
       tests/test_orderbook_protocols.py: 3015603cc1b70d4acc19e162adc2951a5962245cf32e9953e7addf15e23e703b
-      tests/test_orderbook_streams.py: 2c8785e5e5d3d7cba9eba061ff95f274792088f9b6c8ca28d09a0c8bab63ef87
+      tests/test_orderbook_streams.py: 558c70b5526bd6ef9609314a82676d19d7fd9b2b06ff905329f2a00796fd8141
       tests/test_orderflow_features.py: 1990afc18a927d805cd9a8f6e442a64ff2fe93e5deeec6aa912a705d1d2ce8d8
       tests/test_paper_backtest.py: e80250d535b7b09652384ce17d2ea68920584f3b3825b9299ed588d08a0b5eb0
       tests/test_paper_end_to_end.py: a9d914811bf5b7998598aaeed7cd812ce07c045b22d0e42a9f3838c937cbefe5

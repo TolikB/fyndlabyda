@@ -765,6 +765,21 @@ class MarketDataCollector:
             ).observe(time.monotonic() - market_started)
             venue_tickers = self._merge_stream_tickers(adapter.name, venue_tickers, now)
             valid_tickers = self._usable_tickers(adapter.name, venue_tickers, now)
+            if not valid_tickers and not refresh_tickers:
+                # The cached page expired before this pass reached the venue. The
+                # rest of the pass ranks the tradeable universe and the order books
+                # off these tickers, so carrying on with none would cost the venue
+                # its books for the cycle, and the snapshot boundary only repairs
+                # tickers.
+                now = datetime.now(UTC)
+                venue_tickers = self._merge_stream_tickers(
+                    adapter.name,
+                    await self._load_tickers_with_stream_fallback(
+                        adapter, cached_tickers, now
+                    ),
+                    now,
+                )
+                valid_tickers = self._usable_tickers(adapter.name, venue_tickers, now)
             venue_funding = all_venue_funding
             pinned_markets = set(
                 [

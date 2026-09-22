@@ -1298,3 +1298,46 @@ async def test_funding_is_refreshed_before_its_budget_lapses() -> None:
     assert snapshot.incomplete_venues == ()
     for row in snapshot.funding:
         assert (snapshot.captured_at - row.timestamp).total_seconds() <= 180
+
+
+@pytest.mark.asyncio
+async def test_a_venue_keeps_its_books_when_its_cached_page_expires() -> None:
+    """Books are ranked off the tickers, so an empty page costs the venue a cycle."""
+
+    class CountingMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ticker_calls = 0
+
+        async def get_tickers(self) -> list[Ticker]:
+            self.ticker_calls += 1
+            return await super().get_tickers()
+
+    adapter = CountingMock()
+    collector = MarketDataCollector(
+        [adapter],
+        orderbook_symbol_limit=2,
+        enable_streams=False,
+        stale_after_seconds=30,
+    )
+
+    await collector.collect_once()
+    first_ticker_calls = adapter.ticker_calls
+
+    # Exactly the production shape: the cached page is inside the revalidation
+    # interval, so the venue will reuse it, but every ticker on it has expired.
+    expired = datetime.now(UTC) - timedelta(seconds=90)
+    collector._rest_ticker_cache["bybit"] = [
+        ticker.model_copy(update={"timestamp": expired})
+        for ticker in collector._rest_ticker_cache["bybit"]
+    ]
+    collector._last_rest_ticker_fetch["bybit"] = datetime.now(UTC)
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert adapter.ticker_calls > first_ticker_calls
+    assert snapshot.tickers
+    # The venue must still contribute order books, which is what readiness checks.
+    assert [key for key in snapshot.orderbooks if key[0] == "bybit"]
+    assert snapshot.incomplete_venues == ()
