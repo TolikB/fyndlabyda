@@ -1057,17 +1057,28 @@ async def test_collector_drops_a_ticker_dated_beyond_tolerated_clock_skew() -> N
 
 
 def test_rest_revalidation_cannot_be_configured_beyond_the_staleness_budget() -> None:
-    """Cached REST tickers must be revalidated before they can breach the budget."""
+    """Without a stream the cached page is the only source, so it must stay fresh."""
 
     collector = MarketDataCollector(
+        [MockExchangeAdapter("bybit", sleep=0)],
+        stale_after_seconds=30,
+        enable_streams=False,
+        rest_validation_seconds=60,
+    )
+
+    assert collector.rest_validation_seconds < 30
+    assert collector.rest_validation_seconds == 15
+
+    # With a stream running, the snapshot boundary owns freshness and this
+    # cadence only paces discovery, so the configured value stands.
+    streaming = MarketDataCollector(
         [MockExchangeAdapter("bybit", sleep=0)],
         stale_after_seconds=30,
         enable_streams=True,
         rest_validation_seconds=60,
     )
 
-    assert collector.rest_validation_seconds < 30
-    assert collector.rest_validation_seconds == 15
+    assert streaming.rest_validation_seconds == 60
 
 
 @pytest.mark.asyncio

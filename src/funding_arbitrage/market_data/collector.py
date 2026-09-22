@@ -210,10 +210,15 @@ class MarketDataCollector:
         self.history_symbol_limit = history_symbol_limit
         self.stale_after_seconds = stale_after_seconds
         self.enable_streams = enable_streams
-        # REST revalidation has to land before cached tickers can breach the
-        # staleness budget, so the configured interval is an upper bound only.
-        self.rest_validation_seconds = min(
-            rest_validation_seconds, max(1, stale_after_seconds // 2)
+        # With streams on, this cadence only refreshes the discovery universe:
+        # the snapshot boundary owns freshness and re-fetches exactly the venues
+        # that need it, so pulling a full page here as well is duplicated work.
+        # With streams off there is no other source, so the page has to stay
+        # inside the staleness budget on its own.
+        self.rest_validation_seconds = (
+            rest_validation_seconds
+            if enable_streams
+            else min(rest_validation_seconds, max(1, stale_after_seconds // 2))
         )
         self.option_assets = tuple(
             dict.fromkeys(
