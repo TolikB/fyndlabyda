@@ -330,15 +330,22 @@ class MarketDataCollector:
                 for adapter in active_adapters
             )
         )
-        collections = await self._refresh_funding_aged_during_collection(
-            active_adapters, list(collections)
-        )
+        with market_data_phase_duration_seconds.labels(
+            "_boundary", "funding_refresh"
+        ).time():
+            collections = await self._refresh_funding_aged_during_collection(
+                active_adapters, list(collections)
+            )
+        boundary_started = time.monotonic()
         collections, captured_at = await self._refresh_required_tickers_aged_during_collection(
             active_adapters,
             collections,
             orderbook_symbols or {},
             bounded_discovery_books,
         )
+        market_data_phase_duration_seconds.labels(
+            "_boundary", "ticker_settle"
+        ).observe(time.monotonic() - boundary_started)
         instruments = [item for result in collections for item in result.instruments]
         tickers = [item for result in collections for item in result.tickers]
         funding = [item for result in collections for item in result.funding]
@@ -529,6 +536,9 @@ class MarketDataCollector:
         """Re-fetch one bulk ticker page for each venue that ran out of fresh data."""
 
         if stale_indexes:
+            market_data_phase_duration_seconds.labels(
+                "_boundary", "repair_rounds"
+            ).observe(len(stale_indexes))
             refreshed = await asyncio.gather(
                 *(adapters[index].get_tickers() for index in stale_indexes),
                 return_exceptions=True,
