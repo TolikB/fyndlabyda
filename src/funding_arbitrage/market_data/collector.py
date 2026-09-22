@@ -970,6 +970,19 @@ class MarketDataCollector:
                 and history_complete
             )
             operationally_complete = bool(valid_tickers) and non_ticker_complete
+            if not operationally_complete:
+                logger.warning(
+                    "venue_incomplete",
+                    extra={
+                        "exchange": adapter.name,
+                        "event": "market_data_collection",
+                        "error": (
+                            f"tickers={len(valid_tickers)} funding={len(venue_funding)} "
+                            f"books={len(orderbooks)} requested={len(requested_books or ())} "
+                            f"history_complete={history_complete}"
+                        ),
+                    },
+                )
             breaker.record_success()
             market_data_age_seconds.labels(adapter.name).set(
                 0 if operationally_complete else -1
