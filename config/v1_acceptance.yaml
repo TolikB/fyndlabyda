@@ -1667,7 +1667,7 @@ requirements:
       tests/test_option_market_data.py: 94ab4ccfa9b467227f1ad42a3ecd7f48ba3854f46ff829aadd5e791db15b07c8
       tests/test_options_volatility.py: e75d1b482be3fc053f6344a0ff4a8ff7acdf53de2c3431b5b41edf3cf0cc5531
       tests/test_orderbook_protocols.py: 3015603cc1b70d4acc19e162adc2951a5962245cf32e9953e7addf15e23e703b
-      tests/test_orderbook_streams.py: 0d153365821893d46fb8e186d1e1f7c3e0317aa9783c3252a41636f11f68ef9a
+      tests/test_orderbook_streams.py: 5017c4ba8ad04b1788dbf2677236e4dc1eedc25263cc32b2257924c77de81b68
       tests/test_orderflow_features.py: 1990afc18a927d805cd9a8f6e442a64ff2fe93e5deeec6aa912a705d1d2ce8d8
       tests/test_paper_backtest.py: e80250d535b7b09652384ce17d2ea68920584f3b3825b9299ed588d08a0b5eb0
       tests/test_paper_end_to_end.py: a9d914811bf5b7998598aaeed7cd812ce07c045b22d0e42a9f3838c937cbefe5
@@ -1838,7 +1838,7 @@ requirements:
       src/funding_arbitrage/services/daily_report.py: a5c119efaf7702646ca3556f7d751d0f90318df304fe9003a060750fe9a63014
       src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
       src/funding_arbitrage/services/multi_regime_runtime.py: f0240bba7f6f75f19a0918527c8b3e92d619efddb9ca029439fc8aab9a16b8ea
-      src/funding_arbitrage/services/paper_runner.py: 4e020e8fea8645d502b9d498c84410667ebe60ea8808ec09b1ded50ab1f02b0f
+      src/funding_arbitrage/services/paper_runner.py: 0b1f8565aab069d05730c6f232589394eb80dc268bc37184120a7f71aa561f66
       src/funding_arbitrage/services/runtime_strategy_contexts.py: f61529013d37649747d2d8d28741566621b29a7e84f1508f4fc217258836dc62
       src/funding_arbitrage/services/strategy_execution.py: 92eadd87568430e446e1fe93d7dfbefe024a3885a0f1a0ef1a04e38d0f3a25d1
       tests/test_advanced_paper.py: 1872b0e71c292682b435dd0c8a10ae1a8d5a92b0e9a42f8eed1493fea87c4475

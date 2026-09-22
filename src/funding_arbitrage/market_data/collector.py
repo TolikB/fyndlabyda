@@ -186,6 +186,7 @@ class MarketDataCollector:
         rest_validation_seconds: int = 60,
         *,
         funding_stale_after_seconds: int | None = None,
+        book_stale_after_seconds: int | None = None,
         option_assets: Iterable[str] = (),
         option_refresh_seconds: float = 5.0,
         option_maximum_expiries: int = 2,
@@ -224,6 +225,15 @@ class MarketDataCollector:
         self.funding_revalidation_seconds = max(
             1, self.funding_stale_after_seconds // 2
         )
+        # An order book streams continuously and carries its own budget too.
+        # Validating one against the ticker budget spends REST calls on books the
+        # contract still considers tradeable, and books dominate the pass.
+        self.book_stale_after_seconds = (
+            stale_after_seconds
+            if book_stale_after_seconds is None
+            else book_stale_after_seconds
+        )
+        self.book_revalidation_seconds = max(1, self.book_stale_after_seconds // 2)
         self.enable_streams = enable_streams
         # A cached page has to still be inside the staleness budget when the
         # snapshot closes, so the configured interval is an upper bound only.
@@ -820,7 +830,7 @@ class MarketDataCollector:
                 if (
                     streamed is not None
                     and (now - streamed.timestamp).total_seconds()
-                    <= self.stale_after_seconds
+                    <= self.book_stale_after_seconds
                 ):
                     orderbooks[key] = streamed
             rest_book_requests = [
@@ -1353,11 +1363,11 @@ class MarketDataCollector:
         last_rest = self._last_rest_book_fetch.get(key)
         if streamed is None:
             return True
-        if (now - streamed.timestamp).total_seconds() > self.stale_after_seconds:
+        if (now - streamed.timestamp).total_seconds() > self.book_stale_after_seconds:
             return True
         return (
             last_rest is None
-            or (now - last_rest).total_seconds() >= self.rest_validation_seconds
+            or (now - last_rest).total_seconds() >= self.book_revalidation_seconds
         )
 
     def _usable_tickers(

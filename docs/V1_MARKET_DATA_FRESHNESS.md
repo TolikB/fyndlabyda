@@ -75,15 +75,17 @@ during warm-up restarts the streak.
 
 ## Each kind of market data carries its own budget
 
-`MARKET_DATA_STALE_SECONDS` is the budget for a price. A funding rate is
-published on a venue schedule measured in hours, and the runtime gives it
-`FUNDING_SNAPSHOT_STALE_SECONDS` accordingly, so the collector takes that budget
-as `funding_stale_after_seconds` rather than reusing the market-data one.
+`MARKET_DATA_STALE_SECONDS` is the budget for a price. Funding rates and order
+books are published on their own schedules and the runtime gives each its own
+budget — `FUNDING_SNAPSHOT_STALE_SECONDS` and `ORDERBOOK_STREAM_STALE_SECONDS` —
+so the collector takes those as `funding_stale_after_seconds` and
+`book_stale_after_seconds` rather than reusing the market-data one.
 
-Holding funding to the price budget re-fetched every venue's funding page
-several times a minute for nothing: measured on the acceptance host the
-snapshot-boundary funding refresh alone cost 4.0s of a 10.5s pass, which matters
-because GATE-001 checks cycle progress, not only freshness.
+Holding them to the price budget spends REST calls on data the contract still
+considers tradeable, and that matters because GATE-001 checks cycle progress,
+not only freshness. Measured on the acceptance host, the snapshot-boundary
+funding refresh alone cost 4.0s of a 10.5s pass; order books, validated against
+the ticker budget rather than their own, dominate what is left.
 
 ## The collection pass needs enough CPU to stay inside the budget
 

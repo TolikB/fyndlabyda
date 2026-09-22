@@ -194,6 +194,7 @@ class PaperTestRunner:
                 and settings.market_data_streams_enabled
             ),
             funding_stale_after_seconds=settings.funding_snapshot_stale_seconds,
+            book_stale_after_seconds=settings.orderbook_stream_stale_seconds,
             option_assets=(
                 settings.multi_regime_asset_values
                 if settings.options_market_data_enabled

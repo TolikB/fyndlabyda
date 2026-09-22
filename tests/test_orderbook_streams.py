@@ -1381,3 +1381,55 @@ async def test_a_venue_whose_page_expires_keeps_its_funding_to_recover_from() ->
     # nothing to rank, so funding survives alongside the tickers.
     assert [row for row in snapshot.funding if row.exchange == "bybit"]
     assert [row for row in snapshot.tickers if row.exchange == "bybit"]
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_book_is_validated_on_its_own_budget() -> None:
+    """Books stream continuously, so the ticker budget over-fetches them."""
+
+    class CountingBookMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rest_books = 0
+
+        async def get_orderbook(
+            self,
+            symbol: str,
+            depth: int = 20,
+            instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+        ) -> OrderBook:
+            self.rest_books += 1
+            return await super().get_orderbook(symbol, depth, instrument_type)
+
+        async def stream_orderbooks(
+            self, requests: list[tuple[str, InstrumentType]], depth: int = 20
+        ) -> AsyncIterator[OrderBook]:
+            for symbol, instrument_type in requests:
+                yield await MockExchangeAdapter.get_orderbook(
+                    self, symbol, depth, instrument_type
+                )
+            await asyncio.Event().wait()
+
+    adapter = CountingBookMock()
+    collector = MarketDataCollector(
+        [adapter],
+        orderbook_symbol_limit=2,
+        enable_streams=True,
+        stale_after_seconds=30,
+        book_stale_after_seconds=120,
+    )
+    request = {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
+
+    await collector.collect_once(request)
+    for _ in range(50):
+        if collector._stream_orderbook_cache:
+            break
+        await asyncio.sleep(0)
+    after_first = adapter.rest_books
+
+    # A streamed book inside its own budget must not be re-fetched over REST.
+    await collector.collect_once(request)
+    await collector.close()
+
+    assert collector._stream_orderbook_cache
+    assert adapter.rest_books == after_first
