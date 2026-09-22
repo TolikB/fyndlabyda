@@ -488,6 +488,12 @@ class Settings(BaseSettings):
         le=240,
         alias="ACCEPTANCE_SAMPLE_INTERVAL_SECONDS",
     )
+    acceptance_warmup_snapshots: int = Field(
+        default=12,
+        ge=1,
+        le=600,
+        alias="ACCEPTANCE_WARMUP_SNAPSHOTS",
+    )
     paper_initial_balance_usd: Decimal = Field(
         default=Decimal("15000"), gt=0, alias="PAPER_INITIAL_BALANCE_USD"
     )

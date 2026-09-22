@@ -81,6 +81,7 @@ ACCEPTANCE_COLLECTOR_ENABLED=true
 ACCEPTANCE_WINDOW_ID=gate-001-release-001
 ACCEPTANCE_JOURNAL_PATH=/var/lib/funding-arbitrage/acceptance/gate-001-release-001.jsonl
 ACCEPTANCE_SAMPLE_INTERVAL_SECONDS=240
+ACCEPTANCE_WARMUP_SNAPSHOTS=12
 ```
 
 ## Paper configuration
@@ -103,6 +104,7 @@ ACCEPTANCE_COLLECTOR_ENABLED=true
 ACCEPTANCE_WINDOW_ID=gate-002-release-001
 ACCEPTANCE_JOURNAL_PATH=/var/lib/funding-arbitrage/acceptance/gate-002-release-001.jsonl
 ACCEPTANCE_SAMPLE_INTERVAL_SECONDS=240
+ACCEPTANCE_WARMUP_SNAPSHOTS=12
 ```
 
 Start with the acceptance overlay and explicit host paths:

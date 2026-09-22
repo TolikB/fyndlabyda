@@ -1199,3 +1199,26 @@ async def test_collector_refreshes_a_venue_before_it_runs_out_of_fresh_tickers()
     assert snapshot.incomplete_venues == ()
     for ticker in snapshot.tickers:
         assert (snapshot.captured_at - ticker.timestamp).total_seconds() <= 30
+
+
+@pytest.mark.asyncio
+async def test_revalidation_deadline_reserves_room_for_the_collection_pass() -> None:
+    """A cached page must still be inside the budget when the snapshot closes."""
+
+    collector = MarketDataCollector(
+        [MockExchangeAdapter("bybit", sleep=0)],
+        stale_after_seconds=30,
+        enable_streams=True,
+        rest_validation_seconds=60,
+    )
+
+    # A fresh collector has no measured pass yet, so the static half-budget
+    # bound still applies.
+    assert collector._ticker_revalidation_deadline() == 15.0
+
+    collector._last_pass_seconds = 12.5
+    assert collector._ticker_revalidation_deadline() == 12.5
+
+    # A pathologically slow pass cannot drive the deadline to zero.
+    collector._last_pass_seconds = 120.0
+    assert collector._ticker_revalidation_deadline() == 1.0

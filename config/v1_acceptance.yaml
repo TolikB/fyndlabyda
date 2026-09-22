@@ -1667,7 +1667,7 @@ requirements:
       tests/test_option_market_data.py: 94ab4ccfa9b467227f1ad42a3ecd7f48ba3854f46ff829aadd5e791db15b07c8
       tests/test_options_volatility.py: e75d1b482be3fc053f6344a0ff4a8ff7acdf53de2c3431b5b41edf3cf0cc5531
       tests/test_orderbook_protocols.py: 3015603cc1b70d4acc19e162adc2951a5962245cf32e9953e7addf15e23e703b
-      tests/test_orderbook_streams.py: 173f3480492a2ae7de42630ef4c39e676df2adc7762b65f858b4904c56a4bed3
+      tests/test_orderbook_streams.py: d0265316cbadc2352408e4f9df67e5008030196052d832d3497c37a91817925e
       tests/test_orderflow_features.py: 1990afc18a927d805cd9a8f6e442a64ff2fe93e5deeec6aa912a705d1d2ce8d8
       tests/test_paper_backtest.py: e80250d535b7b09652384ce17d2ea68920584f3b3825b9299ed588d08a0b5eb0
       tests/test_paper_end_to_end.py: a9d914811bf5b7998598aaeed7cd812ce07c045b22d0e42a9f3838c937cbefe5
@@ -1685,7 +1685,7 @@ requirements:
       tests/test_research_gates.py: 7920532cf1685bb4e87fd76eed0a28f7d5c84f0badff1eb134d9dce1d7e89986
       tests/test_research_validation.py: c01ac031d5f7c0392eb7827b59f894d068b76735e5bdcb37750f6b4cd444656a
       tests/test_rl_policy.py: d76f22b928fac2bcccdd6c2a8cfe03b31af685386d35fe0223c2bc00633161a8
-      tests/test_runtime_acceptance.py: 501fa1c5883bf8aae679eae30abc26f1fae807b71898db1536ed4be22f24f085
+      tests/test_runtime_acceptance.py: ebec09ed0659e530d131c8d89e96daccbf35efad46eab3ac80ef1e0a18859175
       tests/test_runtime_dangerous_research.py: 0955fd9af0a34a546e88e6d30343c5e68b74a29854a2f42198782d21be376c7b
       tests/test_runtime_decision_support.py: 0bffcec8e3c39a150c1c7d17bd9da1c6571ee9b1f9da1525decfdea322e64c42
       tests/test_runtime_entry_health.py: 8ef57e6175e133e6537e03938dbd1478e58cfb70f10b4dbda37343ae7aafc225

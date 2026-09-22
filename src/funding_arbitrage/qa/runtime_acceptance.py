@@ -343,6 +343,7 @@ class RuntimeAcceptanceCollector:
         self._sequence = 0
         self._last_sample_at: datetime | None = None
         self._last_health: _SnapshotHealth | None = None
+        self._consecutive_healthy_snapshots = 0
         self._interval_market_age = _ZERO
         self._interval_orderbook_age = _ZERO
         self._interval_funding_age = _ZERO
@@ -419,6 +420,16 @@ class RuntimeAcceptanceCollector:
             self._accumulate_ages(health)
             if not self._window_started:
                 if not health.ready or not health.data_quality_valid:
+                    self._consecutive_healthy_snapshots = 0
+                    return
+                # Caches are still filling right after start, so a single clean
+                # snapshot is not evidence the process can hold eight venues.
+                # A window that opens cold fails on the next sample instead.
+                self._consecutive_healthy_snapshots += 1
+                if (
+                    self._consecutive_healthy_snapshots
+                    < self.settings.acceptance_warmup_snapshots
+                ):
                     return
                 await self._assert_clean_financial_state()
                 guard = await self._database_guard()

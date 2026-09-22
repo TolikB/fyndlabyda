@@ -49,6 +49,10 @@ logger = logging.getLogger(__name__)
 # Venue clocks drift by a little; tolerate that before calling a ticker future dated.
 _MAX_TICKER_CLOCK_SKEW_SECONDS = 2.0
 
+# Repair attempts for a venue that runs out of fresh tickers while the snapshot
+# is being assembled. Bounded so a struggling venue cannot stall the cycle.
+_MAX_TICKER_REPAIR_ROUNDS = 2
+
 CanonicalBookEventSink = Callable[[BookEvent], Awaitable[None]]
 CanonicalOptionEventSink = Callable[
     [EventEnvelope[OptionQuoteSnapshot]], Awaitable[None]
@@ -227,6 +231,7 @@ class MarketDataCollector:
         self._funding_history_cache: dict[tuple[str, str], list[FundingHistoryPoint]] = {}
         self._instrument_cache: dict[str, list[NormalizedInstrument]] = {}
         self._rest_ticker_cache: dict[str, list[Ticker]] = {}
+        self._last_pass_seconds = 0.0
         self._funding_cache: dict[str, list[FundingSnapshot]] = {}
         self._last_rest_ticker_fetch: dict[str, datetime] = {}
         self._last_funding_fetch: dict[str, datetime] = {}
@@ -291,6 +296,7 @@ class MarketDataCollector:
         | None = None,
         discovery_history_symbols: dict[str, list[str]] | None = None,
     ) -> MarketSnapshot:
+        pass_started = datetime.now(UTC)
         bounded_discovery_books = {
             venue: list(dict.fromkeys(markets))[: self.orderbook_symbol_limit]
             for venue, markets in (discovery_orderbook_symbols or {}).items()
@@ -327,6 +333,12 @@ class MarketDataCollector:
             collections,
             orderbook_symbols or {},
             bounded_discovery_books,
+        )
+        # Keep the worst recent pass, decayed, so one quick cycle cannot shrink
+        # the reserve the next revalidation deadline needs.
+        self._last_pass_seconds = max(
+            (captured_at - pass_started).total_seconds(),
+            self._last_pass_seconds * 0.8,
         )
         instruments = [item for result in collections for item in result.instruments]
         tickers = [item for result in collections for item in result.tickers]
@@ -466,17 +478,57 @@ class MarketDataCollector:
         that same instant and returns it as the snapshot's `captured_at`.
         """
 
-        observed_at = datetime.now(UTC)
-        # Look past the re-fetch itself: a venue that is merely close to the
-        # budget now would be over it by the time the snapshot closes, and the
-        # final pass below has no second chance to repair one.
+        # Look past the re-fetch itself: a venue merely close to the budget now
+        # would be over it by the time the snapshot closes.
+        lookahead = max(1.0, self.stale_after_seconds / 6)
         stale_indexes = self._age_tickers(
             adapters,
             collections,
             required_books,
-            observed_at,
-            lookahead_seconds=max(1.0, self.stale_after_seconds / 6),
+            datetime.now(UTC),
+            lookahead_seconds=lookahead,
         )
+        for _ in range(_MAX_TICKER_REPAIR_ROUNDS):
+            if not stale_indexes:
+                break
+            await self._refetch_venue_tickers(
+                adapters,
+                collections,
+                stale_indexes,
+                required_books,
+                pinned_discovery_books,
+            )
+            # Re-age straight after the fetch, with no further I/O in between,
+            # so a venue that is still empty gets one more chance rather than
+            # reaching the snapshot with nothing.
+            stale_indexes = self._age_tickers(
+                adapters,
+                collections,
+                required_books,
+                datetime.now(UTC),
+                lookahead_seconds=lookahead,
+            )
+        # The snapshot closes now, so settle every venue against this instant:
+        # readiness measures ages against `captured_at`, not against when this
+        # pass started.
+        captured_at = datetime.now(UTC)
+        self._age_tickers(adapters, collections, required_books, captured_at)
+        for adapter, current in zip(adapters, collections, strict=True):
+            market_data_age_seconds.labels(adapter.name).set(
+                0 if current.operationally_complete else -1
+            )
+        return collections, captured_at
+
+    async def _refetch_venue_tickers(
+        self,
+        adapters: tuple[ExchangeAdapter, ...],
+        collections: list[_VenueCollection],
+        stale_indexes: list[int],
+        required_books: dict[str, list[tuple[str, InstrumentType]]],
+        pinned_discovery_books: dict[str, list[tuple[str, InstrumentType]]],
+    ) -> None:
+        """Re-fetch one bulk ticker page for each venue that ran out of fresh data."""
+
         if stale_indexes:
             refreshed = await asyncio.gather(
                 *(adapters[index].get_tickers() for index in stale_indexes),
@@ -555,16 +607,6 @@ class MarketDataCollector:
                 self._rest_ticker_cache[adapter.name] = value
                 self._last_rest_ticker_fetch[adapter.name] = refreshed_at
                 market_tickers_usable.labels(adapter.name).set(len(valid_tickers))
-        # The snapshot closes now, so settle every venue against this instant:
-        # a re-fetch above took time of its own, and readiness measures ages
-        # against `captured_at`, not against when this pass started.
-        captured_at = datetime.now(UTC)
-        self._age_tickers(adapters, collections, required_books, captured_at)
-        for adapter, current in zip(adapters, collections, strict=True):
-            market_data_age_seconds.labels(adapter.name).set(
-                0 if current.operationally_complete else -1
-            )
-        return collections, captured_at
 
     def _age_tickers(
         self,
@@ -659,7 +701,8 @@ class MarketDataCollector:
                 not self.enable_streams
                 or cached_tickers is None
                 or last_ticker_fetch is None
-                or (now - last_ticker_fetch).total_seconds() >= self.rest_validation_seconds
+                or (now - last_ticker_fetch).total_seconds()
+                >= self._ticker_revalidation_deadline()
             )
             cached_funding = self._funding_cache.get(adapter.name)
             last_funding_fetch = self._last_funding_fetch.get(adapter.name)
@@ -1241,6 +1284,21 @@ class MarketDataCollector:
         return (
             last_rest is None
             or (now - last_rest).total_seconds() >= self.rest_validation_seconds
+        )
+
+    def _ticker_revalidation_deadline(self) -> float:
+        """How old a cached REST ticker page may be when a venue is collected.
+
+        The page still has to be inside the staleness budget when the snapshot
+        closes, so the interval must leave room for a whole collection pass plus
+        the boundary margin. Without that reserve a venue's entire page expires
+        mid-pass and has to be re-fetched at the boundary instead.
+        """
+
+        reserve = self._last_pass_seconds + max(1.0, self.stale_after_seconds / 6)
+        return max(
+            1.0,
+            min(float(self.rest_validation_seconds), self.stale_after_seconds - reserve),
         )
 
     def _usable_tickers(

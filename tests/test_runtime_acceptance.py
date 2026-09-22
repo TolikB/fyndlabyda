@@ -71,7 +71,11 @@ class _MemoryJournal:
         self.closed = True
 
 
-def _settings(tmp_path: Path, mode: TradingMode = TradingMode.SHADOW) -> Settings:
+def _settings(
+    tmp_path: Path,
+    mode: TradingMode = TradingMode.SHADOW,
+    warmup_snapshots: int = 1,
+) -> Settings:
     paper = mode is TradingMode.PAPER
     return Settings(
         run_mode="paper_test",
@@ -86,6 +90,7 @@ def _settings(tmp_path: Path, mode: TradingMode = TradingMode.SHADOW) -> Setting
         acceptance_window_id=("paper-window" if paper else "shadow-window"),
         acceptance_journal_path=str(tmp_path / "acceptance.jsonl"),
         acceptance_sample_interval_seconds=1,
+        acceptance_warmup_snapshots=warmup_snapshots,
     )
 
 
@@ -872,3 +877,50 @@ async def test_runtime_cli_assembles_journal_and_never_overwrites(
     payload = load_acceptance_seal_input(output)
     assert payload.window_id == "shadow-window"
     assert payload.observations == tuple(memory.observations)
+
+
+async def test_window_opens_only_after_sustained_eight_venue_health(
+    database: tuple[object, async_sessionmaker[AsyncSession]],
+    tmp_path: Path,
+) -> None:
+    """A cold process can see one clean snapshot and lose a venue on the next."""
+
+    _, session_factory = database
+    started_at = datetime(2026, 8, 31, 10, 0, tzinfo=UTC)
+    settings = _settings(tmp_path, warmup_snapshots=3)
+    runtime = RuntimeState(settings, {})
+    journal = _MemoryJournal()
+    await _seed_process_start(session_factory, settings, started_at)
+    collector = RuntimeAcceptanceCollector(
+        settings,
+        runtime,
+        session_factory,
+        _identity(settings, started_at - timedelta(seconds=1)),
+        journal,
+        now=started_at,
+    )
+    await collector.start()
+
+    await collector.observe_market_snapshot(_snapshot(started_at))
+    await collector.observe_market_snapshot(
+        _snapshot(started_at + timedelta(seconds=1))
+    )
+    assert journal.observations == []
+
+    # A venue drops out while still warming up: the streak restarts rather than
+    # opening a window that would fail on its very next sample.
+    await collector.observe_market_snapshot(
+        _snapshot(started_at + timedelta(seconds=2), stale_venue="gate")
+    )
+    assert journal.observations == []
+
+    for offset in range(3, 5):
+        await collector.observe_market_snapshot(
+            _snapshot(started_at + timedelta(seconds=offset))
+        )
+    assert journal.observations == []
+
+    await collector.observe_market_snapshot(
+        _snapshot(started_at + timedelta(seconds=5))
+    )
+    assert len(journal.observations) == 1

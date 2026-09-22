@@ -8,12 +8,18 @@ true rather than nominal.
 
 `MarketDataCollector` keeps WebSocket tickers primary and revalidates them
 against REST periodically. The configured `rest_validation_seconds` is an upper
-bound only: the effective interval is `min(configured, stale_after_seconds // 2)`.
+bound only: the static bound is `min(configured, stale_after_seconds // 2)`, and
+`_ticker_revalidation_deadline` narrows it further at runtime.
 
 A revalidation interval at or above the staleness budget cannot keep cached REST
 tickers inside it, so any market the stream does not cover would age past the
-budget and the venue would never be healthy. Halving the budget leaves headroom
-for the fetch itself, which the venue matrix measures in the low seconds.
+budget and the venue would never be healthy. But halving the budget is not
+enough on its own: a cached page fetched when a venue is collected still has to
+be inside the budget when the snapshot closes, and a whole eight-venue pass
+measures around 12 seconds. With a 30-second budget and a 15-second interval,
+Gate's entire page expired mid-pass on 57% of measured passes. The deadline
+therefore reserves the last measured pass duration plus the boundary margin,
+decayed so one quick cycle cannot shrink the reserve for the next.
 
 ## A stale ticker is not market data
 
@@ -48,6 +54,22 @@ re-fetch.
 that re-fetch cannot re-verify — funding, requested order books, funding history
 — so a successful re-fetch can restore the venue to operationally complete,
 instead of only ever demoting it.
+
+The re-fetch decision looks `stale_after_seconds / 6` ahead, because a venue that
+is merely close to the budget when the decision is made would be over it once the
+fetch returns. A fetch takes time of its own, so the venues are re-aged
+immediately afterwards and repaired again, up to `_MAX_TICKER_REPAIR_ROUNDS`;
+otherwise a venue that expires during someone else's re-fetch reaches the
+snapshot with nothing and fails the window.
+
+## A window opens only after sustained health
+
+`ACCEPTANCE_WARMUP_SNAPSHOTS` consecutive clean eight-venue snapshots are
+required before `RuntimeAcceptanceCollector` opens a window. One clean snapshot
+from a process whose caches are still filling is not evidence it can hold eight
+venues, and because a single not-ready sample fails a window permanently, a
+window that opens cold simply fails on its next sample. Any venue dropping out
+during warm-up restarts the streak.
 
 ## The collection pass needs enough CPU to stay inside the budget
 
