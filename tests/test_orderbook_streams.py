@@ -1433,3 +1433,35 @@ async def test_a_streamed_book_is_validated_on_its_own_budget() -> None:
 
     assert collector._stream_orderbook_cache
     assert adapter.rest_books == after_first
+
+
+def test_a_book_is_replaced_before_it_reaches_its_budget() -> None:
+    """A book joins the snapshot seconds before it closes, so it needs headroom."""
+
+    collector = MarketDataCollector(
+        [MockExchangeAdapter("bybit", sleep=0)],
+        enable_streams=True,
+        stale_after_seconds=30,
+        book_stale_after_seconds=120,
+    )
+
+    assert collector.book_usable_seconds == 100
+    assert collector.book_revalidation_seconds == 60
+
+    now = datetime.now(UTC)
+    key = ("bybit", "BTCUSDT", InstrumentType.PERPETUAL)
+    collector._stream_orderbook_cache[key] = OrderBook(
+        exchange="bybit",
+        symbol="BTCUSDT",
+        instrument_type=InstrumentType.PERPETUAL,
+        bids=[OrderBookLevel(price=Decimal("100"), quantity=Decimal("1"))],
+        asks=[OrderBookLevel(price=Decimal("101"), quantity=Decimal("1"))],
+        timestamp=now - timedelta(seconds=110),
+    )
+    collector._last_rest_book_fetch[key] = now
+
+    # Inside the 120s budget, but past the usable margin, so it is refreshed
+    # rather than carried into a snapshot that closes seconds later.
+    assert collector._book_needs_rest_validation(
+        "bybit", ("BTCUSDT", InstrumentType.PERPETUAL), now
+    )

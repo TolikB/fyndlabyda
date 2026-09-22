@@ -234,6 +234,14 @@ class MarketDataCollector:
             else book_stale_after_seconds
         )
         self.book_revalidation_seconds = max(1, self.book_stale_after_seconds // 2)
+        # A book enters the snapshot from the venue's own stage, which is seconds
+        # before the snapshot closes, so accepting one right on the budget lets it
+        # reach readiness over the budget. Keep the same margin the tickers use.
+        self.book_usable_seconds = max(
+            1.0,
+            self.book_stale_after_seconds
+            - max(1.0, self.book_stale_after_seconds / 6),
+        )
         self.enable_streams = enable_streams
         # A cached page has to still be inside the staleness budget when the
         # snapshot closes, so the configured interval is an upper bound only.
@@ -830,7 +838,7 @@ class MarketDataCollector:
                 if (
                     streamed is not None
                     and (now - streamed.timestamp).total_seconds()
-                    <= self.book_stale_after_seconds
+                    <= self.book_usable_seconds
                 ):
                     orderbooks[key] = streamed
             rest_book_requests = [
@@ -1363,7 +1371,7 @@ class MarketDataCollector:
         last_rest = self._last_rest_book_fetch.get(key)
         if streamed is None:
             return True
-        if (now - streamed.timestamp).total_seconds() > self.book_stale_after_seconds:
+        if (now - streamed.timestamp).total_seconds() > self.book_usable_seconds:
             return True
         return (
             last_rest is None
