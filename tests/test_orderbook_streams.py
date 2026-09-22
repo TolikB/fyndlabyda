@@ -1272,3 +1272,37 @@ async def test_funding_still_refreshes_once_its_own_budget_lapses() -> None:
     assert adapter.funding_calls == 2
     for row in snapshot.funding:
         assert (snapshot.captured_at - row.timestamp).total_seconds() <= 180
+
+
+@pytest.mark.asyncio
+async def test_funding_is_refreshed_before_its_budget_lapses() -> None:
+    """Sitting on the ceiling means the rest of the pass tips the page over."""
+
+    class NearBudgetFundingMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.funding_calls = 0
+
+        async def get_funding_rates(self) -> list[FundingSnapshot]:
+            self.funding_calls += 1
+            rows = await super().get_funding_rates()
+            if self.funding_calls == 1:
+                aged = datetime.now(UTC) - timedelta(seconds=175)
+                return [row.model_copy(update={"timestamp": aged}) for row in rows]
+            return rows
+
+    adapter = NearBudgetFundingMock()
+    collector = MarketDataCollector(
+        [adapter],
+        enable_streams=False,
+        stale_after_seconds=30,
+        funding_stale_after_seconds=180,
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert adapter.funding_calls == 2
+    assert snapshot.incomplete_venues == ()
+    for row in snapshot.funding:
+        assert (snapshot.captured_at - row.timestamp).total_seconds() <= 180

@@ -218,6 +218,12 @@ class MarketDataCollector:
             if funding_stale_after_seconds is None
             else funding_stale_after_seconds
         )
+        # Refreshing only once the budget has already lapsed leaves the page
+        # sitting on the ceiling, and the rest of the pass tips it over. Half the
+        # budget keeps a funding page comfortably inside it.
+        self.funding_revalidation_seconds = max(
+            1, self.funding_stale_after_seconds // 2
+        )
         self.enable_streams = enable_streams
         # With streams on, this cadence only refreshes the discovery universe:
         # the snapshot boundary owns freshness and re-fetches exactly the venues
@@ -412,13 +418,17 @@ class MarketDataCollector:
     ) -> list[_VenueCollection]:
         """Refresh venue funding that became stale while slow books/history loaded."""
 
-        now = datetime.now(UTC)
+        # Look past the rest of the pass, so a page that is merely close to the
+        # budget now cannot reach the snapshot over it.
+        horizon = datetime.now(UTC) + timedelta(
+            seconds=max(1.0, self.funding_stale_after_seconds / 6)
+        )
         stale_indexes = [
             index
             for index, result in enumerate(collections)
             if result.funding
             and any(
-                (now - item.timestamp).total_seconds()
+                (horizon - item.timestamp).total_seconds()
                 > self.funding_stale_after_seconds
                 for item in result.funding
             )
@@ -728,7 +738,7 @@ class MarketDataCollector:
                 cached_funding is None
                 or last_funding_fetch is None
                 or (now - last_funding_fetch).total_seconds()
-                >= self.funding_stale_after_seconds
+                >= self.funding_revalidation_seconds
             )
             market_started = time.monotonic()
             if refresh_tickers and refresh_funding:
