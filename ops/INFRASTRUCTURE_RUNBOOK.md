@@ -112,7 +112,7 @@ waits for a fresh render, and the application unit runs preflight itself. If
 Vault stops or authentication fails, systemd stops the application and leaves it
 off for explicit operator inspection and restart.
 
-The host preflight requires UTC + synchronized Chrony, at least 6 GiB RAM and
+The host preflight requires UTC + synchronized Chrony, at least 8 GiB RAM and
 10 GiB free disk, exact Compose scope, private secret-file permissions, runtime
 UID readability, a clean checkout matching the signed image revision, exact
 root-owned release metadata, the locally present digest, and no public listeners

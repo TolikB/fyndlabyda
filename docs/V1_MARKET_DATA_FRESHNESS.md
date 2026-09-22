@@ -34,14 +34,33 @@ reason the limiter now ranks only assets that have a usable ticker, plus any
 asset pinned by an open position: an asset with funding but no priceable market
 would spend a universe slot and starve the venue of tradeable markets.
 
-## The snapshot boundary can still repair a venue
+## Freshness is decided at the snapshot boundary
 
-Venues are collected concurrently, so a slow venue lets an earlier venue's
-tickers age before the snapshot closes. `_VenueCollection.non_ticker_complete`
-records the completeness of everything the boundary refresh cannot re-verify —
-funding, requested order books, funding history — so that when the refresh
-re-fetches a required market's ticker successfully it can restore the venue to
-operationally complete, instead of only ever demoting it.
+Venues are collected concurrently, but the whole pass takes seconds, so a ticker
+that was inside the budget when its venue was collected can be outside it by the
+time the snapshot closes. Readiness measures every age against `captured_at`, so
+the collector does too: the boundary re-ages and re-filters every venue's tickers
+against the shared `observed_at` before the snapshot is assembled. A venue left
+with no usable ticker, or whose open-position mark is still stale, gets one bulk
+re-fetch.
+
+`_VenueCollection.non_ticker_complete` records the completeness of everything
+that re-fetch cannot re-verify — funding, requested order books, funding history
+— so a successful re-fetch can restore the venue to operationally complete,
+instead of only ever demoting it.
+
+## The collection pass needs enough CPU to stay inside the budget
+
+One eight-venue collection pass measures about 12 seconds of wall clock, most of
+it normalizing several thousand tickers per venue and validating the selected
+order books. Measured on the acceptance host, the app container ran pinned at
+~95% of a single CPU for the whole window, which is what stretched the pass and
+pushed data past the budget in the first place.
+
+The app service is therefore sized at 2 CPUs and 3 GiB, and
+`scripts/host_preflight.sh` requires an 8 GiB host so the full compose stack
+still fits with headroom. A window that is CPU-starved fails GATE-001 on data
+age even when every venue is healthy.
 
 ## What this does not do
 

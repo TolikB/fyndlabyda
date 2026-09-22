@@ -152,8 +152,8 @@ fi
 
 memory_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
 root_free_kib="$(df --output=avail / | tail -n 1 | tr -d ' ')"
-if (( memory_kib < 6291456 )); then
-  echo "host memory is below the 6 GiB safety floor" >&2
+if (( memory_kib < 8388608 )); then
+  echo "host memory is below the 8 GiB safety floor" >&2
   exit 1
 fi
 if (( root_free_kib < 10485760 )); then

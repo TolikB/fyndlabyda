@@ -17,7 +17,7 @@ and the exact env profiles. This document covers only the host around it.
 | Docker Engine 27+ with Compose v2 | The overlay uses `pull_policy: never` and a measured image ID |
 | Uninterrupted uptime for the window | The journal is opened `O_EXCL`; a restart cannot continue a window |
 | UTC clock with `chrony` synchronized | Every sample carries a timezone-explicit timestamp |
-| >= 6 GiB RAM, >= 10 GiB free disk | Enforced by `scripts/host_preflight.sh` |
+| >= 8 GiB RAM, >= 10 GiB free disk | Enforced by `scripts/host_preflight.sh` |
 | A `funding` system user at UID 10001 | The container runs unprivileged as `10001:10001` |
 
 Final trusted verification is Linux-only: it needs descriptor-relative `openat`,

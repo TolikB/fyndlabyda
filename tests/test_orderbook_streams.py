@@ -1068,3 +1068,68 @@ def test_rest_revalidation_cannot_be_configured_beyond_the_staleness_budget() ->
 
     assert collector.rest_validation_seconds < 30
     assert collector.rest_validation_seconds == 15
+
+
+@pytest.mark.asyncio
+async def test_collector_ages_tickers_against_the_snapshot_boundary() -> None:
+    """Collection takes time, so freshness only counts at the boundary."""
+
+    # A market whose last trade is fixed in the past: re-fetching cannot refresh it.
+    dead_at = datetime.now(UTC) - timedelta(seconds=9)
+
+    class SlowVenueMock(MultiSymbolMock):
+        def __init__(self, name: str, delay: float) -> None:
+            super().__init__()
+            self.name = name
+            self._delay = delay
+
+        async def get_instruments(self) -> list[NormalizedInstrument]:
+            rows = await super().get_instruments()
+            return [row.model_copy(update={"exchange": self.name}) for row in rows]
+
+        async def get_tickers(self) -> list[Ticker]:
+            rows = await super().get_tickers()
+            await asyncio.sleep(self._delay)
+            now = datetime.now(UTC)
+            # DOGEUSDT is inside the budget when the first venue is collected
+            # and outside it once the slow venue lets the snapshot close.
+            return [
+                row.model_copy(
+                    update={
+                        "exchange": self.name,
+                        "timestamp": dead_at if row.symbol == "DOGEUSDT" else now,
+                    }
+                )
+                for row in rows
+            ]
+
+        async def get_funding_rates(self) -> list[FundingSnapshot]:
+            rows = await super().get_funding_rates()
+            return [row.model_copy(update={"exchange": self.name}) for row in rows]
+
+        async def get_orderbook(
+            self,
+            symbol: str,
+            depth: int = 20,
+            instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+        ) -> OrderBook:
+            book = await super().get_orderbook(symbol, depth, instrument_type)
+            return book.model_copy(update={"exchange": self.name})
+
+    collector = MarketDataCollector(
+        [SlowVenueMock("bybit", 0.0), SlowVenueMock("okx", 1.5)],
+        enable_streams=False,
+        stale_after_seconds=10,
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert snapshot.tickers
+    symbols = {ticker.symbol for ticker in snapshot.tickers}
+    assert "BTCUSDT" in symbols
+    # Fresh when bybit was collected, over budget once the snapshot closed.
+    assert "DOGEUSDT" not in symbols
+    for ticker in snapshot.tickers:
+        age = (snapshot.captured_at - ticker.timestamp).total_seconds()
+        assert age <= 10, (ticker.exchange, ticker.symbol, age)

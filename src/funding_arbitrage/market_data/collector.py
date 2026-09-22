@@ -458,15 +458,23 @@ class MarketDataCollector:
         required_books: dict[str, list[tuple[str, InstrumentType]]],
         pinned_discovery_books: dict[str, list[tuple[str, InstrumentType]]],
     ) -> list[_VenueCollection]:
-        """Refresh open-position marks at the shared snapshot boundary."""
+        """Age every ticker against the shared snapshot boundary.
+
+        Venues are collected concurrently but the whole pass takes seconds, so a
+        ticker that was inside the budget when its venue was collected can be
+        outside it by the time the snapshot closes. Freshness is only meaningful
+        against `observed_at`, which is also what readiness measures against.
+        """
 
         observed_at = datetime.now(UTC)
         stale_indexes: list[int] = []
         for index, (adapter, current) in enumerate(
             zip(adapters, collections, strict=True)
         ):
-            merged = self._merge_stream_tickers(
-                adapter.name, current.tickers, observed_at
+            merged = self._usable_tickers(
+                adapter.name,
+                self._merge_stream_tickers(adapter.name, current.tickers, observed_at),
+                observed_at,
             )
             collections[index] = _VenueCollection(
                 current.instruments,
@@ -474,12 +482,12 @@ class MarketDataCollector:
                 current.funding,
                 current.orderbooks,
                 current.funding_history,
-                current.operationally_complete,
+                current.operationally_complete and bool(merged),
                 current.funding_history_refreshed,
                 current.option_quotes,
                 current.non_ticker_complete,
             )
-            if not _required_tickers_are_fresh(
+            if not merged or not _required_tickers_are_fresh(
                 adapter.name,
                 merged,
                 required_books.get(adapter.name),

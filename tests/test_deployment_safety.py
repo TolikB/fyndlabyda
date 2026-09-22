@@ -78,8 +78,8 @@ def test_every_service_has_cpu_and_memory_limits() -> None:
         assert service.get("mem_limit"), name
 
     app = services["app"]
-    assert app["cpus"] == "1.00"
-    assert app["mem_limit"] == "1536m"
+    assert app["cpus"] == "2.00"
+    assert app["mem_limit"] == "3072m"
     assert services["postgres"]["cpus"] == "0.50"
     assert services["postgres"]["mem_limit"] == "640m"
     assert services["postgres"]["memswap_limit"] == "1280m"
