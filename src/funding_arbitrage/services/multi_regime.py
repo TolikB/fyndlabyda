@@ -226,6 +226,8 @@ class MultiRegimeEngineConfig(BaseModel):
     efficiency_period: int = Field(default=10, gt=0)
     swing_lookback: int = Field(default=2, gt=0)
     seen_event_limit: int = Field(default=100_000, gt=0)
+    instrument_state_limit: int = Field(default=1_024, gt=0)
+    instrument_state_idle_seconds: int = Field(default=3_600, gt=0)
 
     @field_validator("assets")
     @classmethod
@@ -554,6 +556,7 @@ class _InstrumentState:
         self.regime_structure: MarketStructureSnapshot | None = None
         self.derivatives: DerivativesFeatureSnapshot | None = None
         self.regime: RegimeSnapshot | None = None
+        self.last_event_at: datetime | None = None
 
 
 class MultiRegimeEngine:
@@ -721,6 +724,7 @@ class MultiRegimeEngine:
                 raise ValueError("dynamic universe timestamp regressed")
             self._dynamic_universe_assets = frozenset(payload.selected_assets)
             self._latest_universe_selection = payload
+            self._prune_instrument_states(_utc(payload.exchange_timestamp))
             return None
         instrument = getattr(event.payload, "instrument", None)
         if not isinstance(instrument, InstrumentKey):
@@ -755,6 +759,7 @@ class MultiRegimeEngine:
                 return None
             return self._decide_option_event(event)
         state = self._state(instrument)
+        state.last_event_at = _utc(event.metadata.exchange_timestamp)
         if event.metadata.quality is not DataQuality.VALID:
             if isinstance(payload, (BookSnapshot, BookDelta)):
                 state.latest_book_quality = event.metadata.quality
@@ -1145,6 +1150,42 @@ class MultiRegimeEngine:
             self._states[key] = state
         return state
 
+    def _prune_instrument_states(self, now: datetime) -> None:
+        """Release feature state for instruments the universe has left behind.
+
+        The dynamic universe is re-selected continuously, so without this a
+        long-running process keeps a full feature stack — local book, candle
+        aggregators, technical, structure, orderflow and derivatives engines —
+        for every instrument it has ever seen.
+        """
+
+        active = self.active_assets
+        retention = timedelta(seconds=self.config.instrument_state_idle_seconds)
+        for key, state in tuple(self._states.items()):
+            instrument = state.local_book.instrument
+            if instrument.base_asset in active:
+                continue
+            last_event_at = state.last_event_at
+            if last_event_at is not None and now - last_event_at < retention:
+                continue
+            self._drop_instrument_state(key)
+        # Backstop: an unbounded universe must still not grow memory without limit.
+        excess = len(self._states) - self.config.instrument_state_limit
+        if excess <= 0:
+            return
+        stale_first = sorted(
+            self._states.items(),
+            key=lambda item: item[1].last_event_at or _EPOCH,
+        )
+        for key, _ in stale_first[:excess]:
+            self._drop_instrument_state(key)
+
+    def _drop_instrument_state(self, canonical_id: str) -> None:
+        self._states.pop(canonical_id, None)
+        for stream_key in tuple(self._latest_stream_timestamp):
+            if stream_key[0] == canonical_id:
+                del self._latest_stream_timestamp[stream_key]
+
     def _eligible(self, instrument: InstrumentKey) -> bool:
         return (
             instrument.instrument_type is InstrumentType.PERPETUAL
@@ -1240,6 +1281,9 @@ def _has_supplemental_contexts(contexts: SupplementalStrategyContexts) -> bool:
             contexts.dangerous_research,
         )
     )
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _utc(value: datetime) -> datetime:

@@ -46,6 +46,9 @@ from funding_arbitrage.monitoring.metrics import (
 
 logger = logging.getLogger(__name__)
 
+# Venue clocks drift by a little; tolerate that before calling a ticker future dated.
+_MAX_TICKER_CLOCK_SKEW_SECONDS = 2.0
+
 CanonicalBookEventSink = Callable[[BookEvent], Awaitable[None]]
 CanonicalOptionEventSink = Callable[
     [EventEnvelope[OptionQuoteSnapshot]], Awaitable[None]
@@ -160,6 +163,9 @@ class _VenueCollection:
         default_factory=dict
     )
     option_quotes: tuple[OptionQuoteSnapshot, ...] = ()
+    # Completeness of everything the snapshot-boundary ticker refresh cannot
+    # re-verify, so that refresh can restore a venue instead of only demoting it.
+    non_ticker_complete: bool = False
 
 
 class MarketDataCollector:
@@ -198,7 +204,11 @@ class MarketDataCollector:
         self.history_symbol_limit = history_symbol_limit
         self.stale_after_seconds = stale_after_seconds
         self.enable_streams = enable_streams
-        self.rest_validation_seconds = rest_validation_seconds
+        # REST revalidation has to land before cached tickers can breach the
+        # staleness budget, so the configured interval is an upper bound only.
+        self.rest_validation_seconds = min(
+            rest_validation_seconds, max(1, stale_after_seconds // 2)
+        )
         self.option_assets = tuple(
             dict.fromkeys(
                 asset.strip().upper() for asset in option_assets if asset.strip()
@@ -406,6 +416,7 @@ class MarketDataCollector:
                     False,
                     current.funding_history_refreshed,
                     current.option_quotes,
+                    False,
                 )
                 logger.warning(
                     "stale_funding_refresh_failed",
@@ -434,6 +445,7 @@ class MarketDataCollector:
                 current.operationally_complete,
                 current.funding_history_refreshed,
                 current.option_quotes,
+                current.non_ticker_complete,
             )
             self._funding_cache[adapter.name] = value
             self._last_funding_fetch[adapter.name] = refreshed_at
@@ -465,6 +477,7 @@ class MarketDataCollector:
                 current.operationally_complete,
                 current.funding_history_refreshed,
                 current.option_quotes,
+                current.non_ticker_complete,
             )
             if not _required_tickers_are_fresh(
                 adapter.name,
@@ -493,6 +506,7 @@ class MarketDataCollector:
                         False,
                         current.funding_history_refreshed,
                         current.option_quotes,
+                        current.non_ticker_complete,
                     )
                     logger.warning(
                         "stale_required_ticker_refresh_failed",
@@ -503,9 +517,9 @@ class MarketDataCollector:
                         },
                     )
                     continue
-                valid_tickers = self._merge_stream_tickers(
+                valid_tickers = self._usable_tickers(
                     adapter.name,
-                    [item for item in value if _is_valid_ticker(item)],
+                    self._merge_stream_tickers(adapter.name, value, refreshed_at),
                     refreshed_at,
                 )
                 venue_instruments = current.instruments
@@ -527,7 +541,8 @@ class MarketDataCollector:
                         )
                     )
                 operationally_complete = (
-                    current.operationally_complete
+                    current.non_ticker_complete
+                    and bool(valid_tickers)
                     and _required_tickers_are_fresh(
                         adapter.name,
                         valid_tickers,
@@ -545,6 +560,7 @@ class MarketDataCollector:
                     operationally_complete,
                     current.funding_history_refreshed,
                     current.option_quotes,
+                    current.non_ticker_complete,
                 )
                 self._rest_ticker_cache[adapter.name] = value
                 self._last_rest_ticker_fetch[adapter.name] = refreshed_at
@@ -626,21 +642,7 @@ class MarketDataCollector:
                 venue_tickers = cached_tickers or []
                 all_venue_funding = cached_funding or []
             venue_tickers = self._merge_stream_tickers(adapter.name, venue_tickers, now)
-            valid_tickers = [item for item in venue_tickers if _is_valid_ticker(item)]
-            dropped_tickers = len(venue_tickers) - len(valid_tickers)
-            if dropped_tickers:
-                market_data_dropped_total.labels(adapter.name, "invalid_ticker").inc(
-                    dropped_tickers
-                )
-                logger.warning(
-                    "invalid_tickers_dropped",
-                    extra={
-                        "exchange": adapter.name,
-                        "event": "market_data_validation",
-                        "error": f"dropped={dropped_tickers}",
-                    },
-                )
-            market_tickers_usable.labels(adapter.name).set(len(valid_tickers))
+            valid_tickers = self._usable_tickers(adapter.name, venue_tickers, now)
             venue_funding = all_venue_funding
             pinned_markets = set(
                 [
@@ -808,15 +810,15 @@ class MarketDataCollector:
                 )
                 history_complete = len(covered) == len(selected)
             option_quotes = await self._load_option_quotes(adapter, self._clock())
-            operationally_complete = (
-                bool(valid_tickers)
-                and bool(venue_funding)
+            non_ticker_complete = (
+                bool(venue_funding)
                 and all(
                     (adapter.name, symbol, instrument_type) in orderbooks
                     for symbol, instrument_type in requested_books or ()
                 )
                 and history_complete
             )
+            operationally_complete = bool(valid_tickers) and non_ticker_complete
             breaker.record_success()
             market_data_age_seconds.labels(adapter.name).set(
                 0 if operationally_complete else -1
@@ -830,6 +832,7 @@ class MarketDataCollector:
                 operationally_complete,
                 funding_history_refreshed,
                 option_quotes,
+                non_ticker_complete,
             )
         except _CanonicalBookPublicationError:
             raise
@@ -1190,6 +1193,52 @@ class MarketDataCollector:
             or (now - last_rest).total_seconds() >= self.rest_validation_seconds
         )
 
+    def _usable_tickers(
+        self, exchange: str, tickers: list[Ticker], now: datetime
+    ) -> list[Ticker]:
+        """Keep only tickers a strategy may legitimately price against.
+
+        A venue publishes a last-trade timestamp per market, so a thin market can
+        report a price hours old. Such a ticker is not market data any more, and
+        carrying it forward would both poison the venue's freshness health and let
+        the universe limiter rank a dead market into the tradeable set.
+        """
+
+        usable: list[Ticker] = []
+        invalid = 0
+        stale = 0
+        for ticker in tickers:
+            if not _is_valid_ticker(ticker):
+                invalid += 1
+                continue
+            age = (now - ticker.timestamp).total_seconds()
+            if age > self.stale_after_seconds or age < -_MAX_TICKER_CLOCK_SKEW_SECONDS:
+                stale += 1
+                continue
+            usable.append(ticker)
+        if invalid:
+            market_data_dropped_total.labels(exchange, "invalid_ticker").inc(invalid)
+            logger.warning(
+                "invalid_tickers_dropped",
+                extra={
+                    "exchange": exchange,
+                    "event": "market_data_validation",
+                    "error": f"dropped={invalid}",
+                },
+            )
+        if stale:
+            market_data_dropped_total.labels(exchange, "stale_ticker").inc(stale)
+            logger.warning(
+                "stale_tickers_dropped",
+                extra={
+                    "exchange": exchange,
+                    "event": "market_data_validation",
+                    "error": f"dropped={stale}",
+                },
+            )
+        market_tickers_usable.labels(exchange).set(len(usable))
+        return usable
+
     def _merge_stream_tickers(
         self, exchange: str, rest_tickers: list[Ticker], now: datetime
     ) -> list[Ticker]:
@@ -1301,7 +1350,15 @@ def _limit_venue_universe(
             abs(item.funding_rate_daily),
         )
     popular_rank = {"BTC": 0, "ETH": 1, "SOL": 2}
-    assets = set(volume_by_asset) | set(funding_by_asset)
+    # An asset with funding but no usable ticker cannot be priced, so spending a
+    # universe slot on it only starves the venue of tradeable markets.
+    assets = set(volume_by_asset)
+    required_assets = {
+        instrument.base_asset
+        for symbol, _ in required_markets or ()
+        if (instrument := instrument_by_symbol.get(symbol)) is not None
+    }
+    assets |= required_assets
     volume_rank = {
         asset: index
         for index, asset in enumerate(

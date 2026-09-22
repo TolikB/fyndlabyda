@@ -973,3 +973,98 @@ async def test_collector_refetches_funding_that_aged_during_collection() -> None
         and (snapshot.captured_at - row.timestamp).total_seconds() <= 1
         for row in snapshot.funding
     )
+
+
+@pytest.mark.asyncio
+async def test_collector_drops_tickers_a_venue_reports_as_long_stale() -> None:
+    """A thin market's last-trade price is not tradeable market data."""
+
+    class DeadMarketMock(MultiSymbolMock):
+        async def get_tickers(self) -> list[Ticker]:
+            rows = await super().get_tickers()
+            dead_at = datetime.now(UTC) - timedelta(seconds=420)
+            return [
+                row.model_copy(update={"timestamp": dead_at})
+                if row.symbol == "DOGEUSDT"
+                else row
+                for row in rows
+            ]
+
+    adapter = DeadMarketMock()
+    collector = MarketDataCollector(
+        [adapter], enable_streams=False, stale_after_seconds=30
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert snapshot.tickers
+    assert {row.symbol for row in snapshot.tickers} == {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+    assert snapshot.incomplete_venues == ()
+
+
+@pytest.mark.asyncio
+async def test_collector_keeps_a_stale_market_out_of_the_selected_universe() -> None:
+    """The limiter ranks on funding, so a dead market must never reach it."""
+
+    class DeadLeaderMock(MultiSymbolMock):
+        async def get_tickers(self) -> list[Ticker]:
+            rows = await super().get_tickers()
+            dead_at = datetime.now(UTC) - timedelta(seconds=95_000)
+            return [
+                row.model_copy(update={"timestamp": dead_at})
+                if row.symbol in {"BTCUSDT", "ETHUSDT"}
+                else row
+                for row in rows
+            ]
+
+    adapter = DeadLeaderMock()
+    collector = MarketDataCollector(
+        [adapter],
+        market_asset_limit=2,
+        enable_streams=False,
+        stale_after_seconds=30,
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert {row.symbol for row in snapshot.tickers} == {"SOLUSDT", "DOGEUSDT"}
+
+
+@pytest.mark.asyncio
+async def test_collector_drops_a_ticker_dated_beyond_tolerated_clock_skew() -> None:
+    class FutureDatedMock(MultiSymbolMock):
+        async def get_tickers(self) -> list[Ticker]:
+            rows = await super().get_tickers()
+            ahead = datetime.now(UTC) + timedelta(seconds=30)
+            return [
+                row.model_copy(update={"timestamp": ahead})
+                if row.symbol == "DOGEUSDT"
+                else row
+                for row in rows
+            ]
+
+    adapter = FutureDatedMock()
+    collector = MarketDataCollector(
+        [adapter], enable_streams=False, stale_after_seconds=30
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert "DOGEUSDT" not in {row.symbol for row in snapshot.tickers}
+
+
+def test_rest_revalidation_cannot_be_configured_beyond_the_staleness_budget() -> None:
+    """Cached REST tickers must be revalidated before they can breach the budget."""
+
+    collector = MarketDataCollector(
+        [MockExchangeAdapter("bybit", sleep=0)],
+        stale_after_seconds=30,
+        enable_streams=True,
+        rest_validation_seconds=60,
+    )
+
+    assert collector.rest_validation_seconds < 30
+    assert collector.rest_validation_seconds == 15

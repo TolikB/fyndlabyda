@@ -225,3 +225,112 @@ def test_filter_tracks_dynamic_universe_add_and_remove() -> None:
     )
     engine.restore_event(removed_event)
     assert not engine.accepts_persisted_event(sol_event)
+
+
+def _universe_event(
+    assets: tuple[str, ...], number: int
+) -> EventEnvelope[UniverseSelectionSnapshot]:
+    timestamp = NOW + timedelta(seconds=number)
+    payload = UniverseSelectionSnapshot(
+        selection_id=f"selection-{number}",
+        selector_version="test-v1",
+        selected=tuple(
+            UniverseSelectionEntry(
+                instrument=_instrument(asset),
+                asset=asset,
+                score=Decimal("1"),
+                liquidity_score=Decimal("1"),
+                funding_score=Decimal("1"),
+                quality_score=Decimal("1"),
+            )
+            for asset in assets
+        ),
+        input_fingerprint=f"{number:064x}",
+        exchange_timestamp=timestamp,
+    )
+    return EventEnvelope[UniverseSelectionSnapshot](
+        kind=EventKind.UNIVERSE_SELECTION_SNAPSHOT,
+        metadata=EventMetadata(
+            event_id=f"universe-{number}",
+            exchange_timestamp=timestamp,
+            receive_timestamp=timestamp,
+            monotonic_ns=number,
+            sequence_id=f"u{number}",
+            source="BYBIT.PUBLIC.UNIVERSE",
+            correlation_id="universe-churn",
+            payload_version=1,
+        ),
+        payload=payload,
+    )
+
+
+def test_engine_releases_feature_state_for_instruments_the_universe_dropped() -> None:
+    """Universe churn must not accumulate a feature stack per instrument seen."""
+
+    engine = MultiRegimeEngine(
+        MultiRegimeEngineConfig(
+            assets=frozenset({"BTC"}),
+            instrument_state_idle_seconds=60,
+        )
+    )
+    engine.restore_event(_universe_event(("SOL",), 1))
+    engine.restore_event(_trade("SOL", 2))
+    assert _instrument("SOL").canonical_id in engine._states
+
+    # SOL leaves the universe, and enough time passes for the retention to lapse.
+    engine.restore_event(_universe_event((), 300))
+
+    assert _instrument("SOL").canonical_id not in engine._states
+    assert not [key for key in engine._latest_stream_timestamp if key[0].startswith("BYBIT")]
+
+
+def test_engine_keeps_feature_state_while_an_instrument_is_still_selected() -> None:
+    engine = MultiRegimeEngine(
+        MultiRegimeEngineConfig(
+            assets=frozenset({"BTC"}),
+            instrument_state_idle_seconds=60,
+        )
+    )
+    engine.restore_event(_universe_event(("SOL",), 1))
+    engine.restore_event(_trade("SOL", 2))
+
+    engine.restore_event(_universe_event(("SOL",), 300))
+
+    assert _instrument("SOL").canonical_id in engine._states
+
+
+def test_engine_keeps_recently_active_state_until_retention_lapses() -> None:
+    engine = MultiRegimeEngine(
+        MultiRegimeEngineConfig(
+            assets=frozenset({"BTC"}),
+            instrument_state_idle_seconds=3_600,
+        )
+    )
+    engine.restore_event(_universe_event(("SOL",), 1))
+    engine.restore_event(_trade("SOL", 2))
+
+    engine.restore_event(_universe_event((), 300))
+
+    assert _instrument("SOL").canonical_id in engine._states
+
+
+def test_engine_bounds_instrument_state_even_without_idle_time() -> None:
+    engine = MultiRegimeEngine(
+        MultiRegimeEngineConfig(
+            assets=frozenset({"BTC"}),
+            instrument_state_limit=2,
+            instrument_state_idle_seconds=3_600,
+        )
+    )
+    churn = ("AAA", "BBB", "CCC", "DDD")
+    engine.restore_event(_universe_event(churn, 1))
+    for number, asset in enumerate(churn, start=2):
+        engine.restore_event(_trade(asset, number))
+    assert len(engine._states) == 4
+
+    engine.restore_event(_universe_event(churn, 100))
+
+    assert len(engine._states) == 2
+    # The backstop sheds the least recently active instruments first.
+    assert _instrument("CCC").canonical_id in engine._states
+    assert _instrument("DDD").canonical_id in engine._states
