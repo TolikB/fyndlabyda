@@ -8,18 +8,20 @@ true rather than nominal.
 
 `MarketDataCollector` keeps WebSocket tickers primary and revalidates them
 against REST periodically. The configured `rest_validation_seconds` is an upper
-bound only: the static bound is `min(configured, stale_after_seconds // 2)`, and
-`_ticker_revalidation_deadline` narrows it further at runtime.
+bound only: the effective interval is `min(configured, stale_after_seconds // 2)`.
 
 A revalidation interval at or above the staleness budget cannot keep cached REST
 tickers inside it, so any market the stream does not cover would age past the
-budget and the venue would never be healthy. But halving the budget is not
-enough on its own: a cached page fetched when a venue is collected still has to
-be inside the budget when the snapshot closes, and a whole eight-venue pass
-measures around 12 seconds. With a 30-second budget and a 15-second interval,
-Gate's entire page expired mid-pass on 57% of measured passes. The deadline
-therefore reserves the last measured pass duration plus the boundary margin,
-decayed so one quick cycle cannot shrink the reserve for the next.
+budget and the venue would never be healthy. Halving the budget leaves room for
+the pass itself, which matters because a page fetched when a venue is collected
+still has to be inside the budget when the snapshot closes.
+
+The interval and the pass duration are a pair. When the pass measured 12 seconds
+against a 30-second budget, a 15-second interval was not enough and Gate's whole
+page expired mid-pass on 57% of passes; widening the interval instead simply
+moved every venue onto the boundary repair. Keeping the pass short is what makes
+the half-budget interval hold, which is why the phase timings below are part of
+the contract rather than mere diagnostics.
 
 ## A stale ticker is not market data
 

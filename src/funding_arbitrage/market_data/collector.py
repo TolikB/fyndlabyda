@@ -225,15 +225,12 @@ class MarketDataCollector:
             1, self.funding_stale_after_seconds // 2
         )
         self.enable_streams = enable_streams
-        # With streams on, this cadence only refreshes the discovery universe:
-        # the snapshot boundary owns freshness and re-fetches exactly the venues
-        # that need it, so pulling a full page here as well is duplicated work.
-        # With streams off there is no other source, so the page has to stay
-        # inside the staleness budget on its own.
-        self.rest_validation_seconds = (
-            rest_validation_seconds
-            if enable_streams
-            else min(rest_validation_seconds, max(1, stale_after_seconds // 2))
+        # A cached page has to still be inside the staleness budget when the
+        # snapshot closes, so the configured interval is an upper bound only.
+        # Half the budget leaves room for the pass itself; the boundary repair
+        # then stays the exception rather than every venue, every cycle.
+        self.rest_validation_seconds = min(
+            rest_validation_seconds, max(1, stale_after_seconds // 2)
         )
         self.option_assets = tuple(
             dict.fromkeys(
