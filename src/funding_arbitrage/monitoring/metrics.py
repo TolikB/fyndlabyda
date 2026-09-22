@@ -113,6 +113,11 @@ paper_runner_stage_duration_seconds = Histogram(
     "Paper runner stage duration",
     ["stage"],
 )
+market_data_phase_duration_seconds = Histogram(
+    "funding_market_data_phase_duration_seconds",
+    "Market-data collection phase duration per venue",
+    ["exchange", "phase"],
+)
 decision_support_artifact_loaded = Gauge(
     "funding_decision_support_artifact_loaded",
     "Whether a checksummed decision-support artifact is active",

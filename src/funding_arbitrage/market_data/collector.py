@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -39,6 +40,7 @@ from funding_arbitrage.monitoring.metrics import (
     funding_history_coverage_ratio,
     market_data_age_seconds,
     market_data_dropped_total,
+    market_data_phase_duration_seconds,
     market_tickers_usable,
     orderbook_coverage_ratio,
     stale_or_missing_orderbooks,
@@ -231,7 +233,6 @@ class MarketDataCollector:
         self._funding_history_cache: dict[tuple[str, str], list[FundingHistoryPoint]] = {}
         self._instrument_cache: dict[str, list[NormalizedInstrument]] = {}
         self._rest_ticker_cache: dict[str, list[Ticker]] = {}
-        self._last_pass_seconds = 0.0
         self._funding_cache: dict[str, list[FundingSnapshot]] = {}
         self._last_rest_ticker_fetch: dict[str, datetime] = {}
         self._last_funding_fetch: dict[str, datetime] = {}
@@ -296,7 +297,6 @@ class MarketDataCollector:
         | None = None,
         discovery_history_symbols: dict[str, list[str]] | None = None,
     ) -> MarketSnapshot:
-        pass_started = datetime.now(UTC)
         bounded_discovery_books = {
             venue: list(dict.fromkeys(markets))[: self.orderbook_symbol_limit]
             for venue, markets in (discovery_orderbook_symbols or {}).items()
@@ -333,12 +333,6 @@ class MarketDataCollector:
             collections,
             orderbook_symbols or {},
             bounded_discovery_books,
-        )
-        # Keep the worst recent pass, decayed, so one quick cycle cannot shrink
-        # the reserve the next revalidation deadline needs.
-        self._last_pass_seconds = max(
-            (captured_at - pass_started).total_seconds(),
-            self._last_pass_seconds * 0.8,
         )
         instruments = [item for result in collections for item in result.instruments]
         tickers = [item for result in collections for item in result.tickers]
@@ -701,8 +695,7 @@ class MarketDataCollector:
                 not self.enable_streams
                 or cached_tickers is None
                 or last_ticker_fetch is None
-                or (now - last_ticker_fetch).total_seconds()
-                >= self._ticker_revalidation_deadline()
+                or (now - last_ticker_fetch).total_seconds() >= self.rest_validation_seconds
             )
             cached_funding = self._funding_cache.get(adapter.name)
             last_funding_fetch = self._last_funding_fetch.get(adapter.name)
@@ -712,6 +705,7 @@ class MarketDataCollector:
                 or (now - last_funding_fetch).total_seconds()
                 >= self.stale_after_seconds
             )
+            market_started = time.monotonic()
             if refresh_tickers and refresh_funding:
                 venue_tickers, all_venue_funding = await asyncio.gather(
                     self._load_tickers_with_stream_fallback(
@@ -734,6 +728,9 @@ class MarketDataCollector:
             else:
                 venue_tickers = cached_tickers or []
                 all_venue_funding = cached_funding or []
+            market_data_phase_duration_seconds.labels(
+                adapter.name, "tickers_funding"
+            ).observe(time.monotonic() - market_started)
             venue_tickers = self._merge_stream_tickers(adapter.name, venue_tickers, now)
             valid_tickers = self._usable_tickers(adapter.name, venue_tickers, now)
             venue_funding = all_venue_funding
@@ -781,13 +778,16 @@ class MarketDataCollector:
                 for request in book_requests
                 if self._book_needs_rest_validation(adapter.name, request, now)
             ]
-            book_results = await asyncio.gather(
-                *(
-                    adapter.get_orderbook(symbol, 20, instrument_type)
-                    for symbol, instrument_type in rest_book_requests
-                ),
-                return_exceptions=True,
-            )
+            with market_data_phase_duration_seconds.labels(
+                adapter.name, "orderbooks"
+            ).time():
+                book_results = await asyncio.gather(
+                    *(
+                        adapter.get_orderbook(symbol, 20, instrument_type)
+                        for symbol, instrument_type in rest_book_requests
+                    ),
+                    return_exceptions=True,
+                )
             accepted_rest_books: list[OrderBook] = []
             for (symbol, instrument_type), book_result in zip(
                 rest_book_requests, book_results, strict=True
@@ -840,18 +840,23 @@ class MarketDataCollector:
                 book_event_source = (
                     f"{adapter.name.upper()}.PUBLIC.ORDERBOOK.COLLECTOR_SNAPSHOT"
                 )
+            publish_started = time.monotonic()
             await self._publish_rest_book_events(
                 adapter.name,
                 venue_instruments,
                 books_to_publish,
                 source=book_event_source,
             )
+            market_data_phase_duration_seconds.labels(
+                adapter.name, "canonical_publish"
+            ).observe(time.monotonic() - publish_started)
             orderbook_coverage_ratio.labels(adapter.name).set(
                 len(orderbooks) / len(book_requests) if book_requests else 0
             )
             stale_or_missing_orderbooks.labels(adapter.name).set(
                 max(0, len(book_requests) - len(orderbooks))
             )
+            history_started = time.monotonic()
             if include_history:
                 end = datetime.now(UTC)
                 start = end - timedelta(days=30)
@@ -902,7 +907,13 @@ class MarketDataCollector:
                     len(covered) / len(selected) if selected else 0
                 )
                 history_complete = len(covered) == len(selected)
-            option_quotes = await self._load_option_quotes(adapter, self._clock())
+            market_data_phase_duration_seconds.labels(
+                adapter.name, "funding_history"
+            ).observe(time.monotonic() - history_started)
+            with market_data_phase_duration_seconds.labels(
+                adapter.name, "options"
+            ).time():
+                option_quotes = await self._load_option_quotes(adapter, self._clock())
             non_ticker_complete = (
                 bool(venue_funding)
                 and all(
@@ -1284,21 +1295,6 @@ class MarketDataCollector:
         return (
             last_rest is None
             or (now - last_rest).total_seconds() >= self.rest_validation_seconds
-        )
-
-    def _ticker_revalidation_deadline(self) -> float:
-        """How old a cached REST ticker page may be when a venue is collected.
-
-        The page still has to be inside the staleness budget when the snapshot
-        closes, so the interval must leave room for a whole collection pass plus
-        the boundary margin. Without that reserve a venue's entire page expires
-        mid-pass and has to be re-fetched at the boundary instead.
-        """
-
-        reserve = self._last_pass_seconds + max(1.0, self.stale_after_seconds / 6)
-        return max(
-            1.0,
-            min(float(self.rest_validation_seconds), self.stale_after_seconds - reserve),
         )
 
     def _usable_tickers(
