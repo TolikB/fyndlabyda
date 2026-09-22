@@ -489,3 +489,31 @@ async def test_htx_funding_history_pages_backward_and_sorts() -> None:
     assert len(history) == 102
     assert history == sorted(history, key=lambda row: row.funding_timestamp)
     assert int(calls[1]["end_time"]) < int(calls[0]["end_time"])
+
+
+@pytest.mark.asyncio
+async def test_kucoin_skips_a_market_without_a_positive_funding_schedule() -> None:
+    """One malformed schedule must not cost the whole venue its funding data."""
+
+    broken = _kucoin_perpetual()
+    broken.update({"symbol": "BROKENUSDTM", "currentFundingRateGranularity": "0"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/contracts/active":
+            return httpx.Response(
+                200,
+                json={"code": "200000", "data": [broken, _kucoin_perpetual()]},
+            )
+        assert request.url.path == "/api/v2/symbols"
+        return httpx.Response(200, json={"code": "200000", "data": []})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = KucoinPublicAdapter(
+        spot_base_url="https://spot.invalid",
+        futures_base_url="https://futures.invalid",
+        http_client=client,
+    )
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert [row.symbol for row in funding] == ["XBTUSDTM"]

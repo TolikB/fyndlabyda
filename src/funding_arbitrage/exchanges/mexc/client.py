@@ -331,19 +331,35 @@ class MexcPublicAdapter(ExchangeAdapter):
 
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         payload = await self._futures("/api/v1/contract/funding_rate")
-        snapshots = [self._parse_funding(row) for row in _rows(payload, "funding rates")]
+        snapshots = [
+            snapshot
+            for row in _rows(payload, "funding rates")
+            if (snapshot := self._parse_funding(row)) is not None
+        ]
         for snapshot in snapshots:
             self._funding_intervals[snapshot.symbol] = snapshot.funding_interval_hours
         return snapshots
 
-    def _parse_funding(self, row: object) -> FundingSnapshot:
+    def _parse_funding(self, row: object) -> FundingSnapshot | None:
         if not isinstance(row, dict):
             raise InvalidResponseError("MEXC funding row is not an object")
+        interval_hours = decimal(row["collectCycle"], "collectCycle")
+        if interval_hours <= 0:
+            logger.warning(
+                "funding_schedule_rejected",
+                extra={
+                    "exchange": self.name,
+                    "symbol": str(row.get("symbol", "")),
+                    "event": "market_data_validation",
+                    "error": f"funding_interval_hours={interval_hours}",
+                },
+            )
+            return None
         return FundingSnapshot(
             exchange=self.name,
             symbol=str(row["symbol"]),
             funding_rate=decimal(row["fundingRate"], "fundingRate"),
-            funding_interval_hours=decimal(row["collectCycle"], "collectCycle"),
+            funding_interval_hours=interval_hours,
             next_funding_time=(
                 _utc_from_ms(row["nextSettleTime"], "nextSettleTime")
                 if row.get("nextSettleTime") not in (None, "")

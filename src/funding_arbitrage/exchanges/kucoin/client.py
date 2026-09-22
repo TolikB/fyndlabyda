@@ -191,7 +191,12 @@ class KucoinPublicAdapter(ExchangeAdapter):
                     "fundingRateGranularity",
                 )
                 interval_hours = interval_ms / Decimal("3600000")
-                self._funding_intervals[symbol] = interval_hours
+                if interval_hours <= 0:
+                    # The venue did not publish a usable schedule for this market;
+                    # the instrument is still tradeable, its funding rate is not.
+                    interval_hours = None
+                else:
+                    self._funding_intervals[symbol] = interval_hours
             contract_size = decimal(row["multiplier"], "multiplier")
             if contract_size <= 0:
                 raise ValueError("contract multiplier must be positive")
@@ -336,6 +341,17 @@ class KucoinPublicAdapter(ExchangeAdapter):
                 or "28800000",
                 "fundingRateGranularity",
             ) / Decimal("3600000")
+            if interval <= 0:
+                logger.warning(
+                    "funding_schedule_rejected",
+                    extra={
+                        "exchange": self.name,
+                        "symbol": symbol,
+                        "event": "market_data_validation",
+                        "error": f"funding_interval_hours={interval}",
+                    },
+                )
+                continue
             self._funding_intervals[symbol] = interval
             result.append(
                 FundingSnapshot(

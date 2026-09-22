@@ -483,6 +483,17 @@ class BybitPublicAdapter(ExchangeAdapter):
             else:
                 interval_minutes = int(row.get("fundingInterval", 480))
                 interval_hours = Decimal(interval_minutes) / Decimal("60")
+            if interval_hours <= 0:
+                logger.warning(
+                    "funding_schedule_rejected",
+                    extra={
+                        "exchange": self.name,
+                        "symbol": str(row.get("symbol", "")),
+                        "event": "market_data_validation",
+                        "error": f"funding_interval_hours={interval_hours}",
+                    },
+                )
+                continue
             snapshots.append(
                 FundingSnapshot(
                     exchange=self.name,

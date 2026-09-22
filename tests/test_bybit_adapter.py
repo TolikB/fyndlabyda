@@ -288,3 +288,39 @@ async def test_http_network_errors_are_typed() -> None:
     with pytest.raises(NetworkError):
         await adapter.get_tickers()
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bybit_skips_a_market_without_a_positive_funding_schedule() -> None:
+    """One malformed schedule must not cost the whole venue its funding data."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response(
+            {
+                "list": [
+                    {
+                        "symbol": "BROKENUSDT",
+                        "fundingRate": "0.0001",
+                        "fundingInterval": 0,
+                        "nextFundingTime": "1735689600000",
+                    },
+                    {
+                        "symbol": "BTCUSDT",
+                        "fundingRate": "0.0001",
+                        "fundingInterval": 480,
+                        "nextFundingTime": "1735689600000",
+                    },
+                ]
+            }
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    )
+    adapter = BybitPublicAdapter(base_url="https://test.invalid", http_client=client)
+
+    snapshots = await adapter.get_funding_rates()
+    await adapter.close()
+
+    assert [item.symbol for item in snapshots] == ["BTCUSDT"]
+    assert snapshots[0].funding_interval_hours == Decimal("8")

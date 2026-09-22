@@ -277,3 +277,43 @@ def _varint(value: int) -> bytes:
         result.append(byte | (0x80 if value else 0))
         if not value:
             return bytes(result)
+
+
+@pytest.mark.asyncio
+async def test_mexc_skips_a_market_without_a_positive_funding_schedule() -> None:
+    """One malformed schedule must not cost the whole venue its funding data."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/contract/funding_rate"
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": 0,
+                "data": [
+                    {
+                        "symbol": "BROKEN_USDT",
+                        "fundingRate": "0.0001",
+                        "collectCycle": "0",
+                        "nextSettleTime": 1735689600000,
+                    },
+                    {
+                        "symbol": "BTC_USDT",
+                        "fundingRate": "0.0001",
+                        "collectCycle": "8",
+                        "nextSettleTime": 1735689600000,
+                    },
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    )
+    adapter = MexcPublicAdapter(base_url="https://test.invalid", http_client=client)
+
+    snapshots = await adapter.get_funding_rates()
+    await adapter.close()
+
+    assert [item.symbol for item in snapshots] == ["BTC_USDT"]
+    assert snapshots[0].funding_interval_hours == Decimal("8")
