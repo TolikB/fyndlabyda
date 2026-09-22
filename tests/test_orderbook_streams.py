@@ -1133,3 +1133,69 @@ async def test_collector_ages_tickers_against_the_snapshot_boundary() -> None:
     for ticker in snapshot.tickers:
         age = (snapshot.captured_at - ticker.timestamp).total_seconds()
         assert age <= 10, (ticker.exchange, ticker.symbol, age)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_timestamp_bounds_every_ticker_age() -> None:
+    """A re-fetch takes time of its own; captured_at must still bound the ages."""
+
+    class SlowRefetchMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ticker_calls = 0
+
+        async def get_tickers(self) -> list[Ticker]:
+            self.ticker_calls += 1
+            rows = await super().get_tickers()
+            if self.ticker_calls == 1:
+                # Forces the boundary re-fetch by leaving nothing usable.
+                stale_at = datetime.now(UTC) - timedelta(seconds=45)
+                return [row.model_copy(update={"timestamp": stale_at}) for row in rows]
+            await asyncio.sleep(0.5)
+            return rows
+
+    adapter = SlowRefetchMock()
+    collector = MarketDataCollector(
+        [adapter], enable_streams=False, stale_after_seconds=30
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert adapter.ticker_calls >= 2
+    assert snapshot.tickers
+    for ticker in snapshot.tickers:
+        age = (snapshot.captured_at - ticker.timestamp).total_seconds()
+        assert 0 <= age <= 30, (ticker.symbol, age)
+
+
+@pytest.mark.asyncio
+async def test_collector_refreshes_a_venue_before_it_runs_out_of_fresh_tickers() -> None:
+    """A venue close to the budget is refreshed rather than left to go empty."""
+
+    class AgingMock(MultiSymbolMock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ticker_calls = 0
+
+        async def get_tickers(self) -> list[Ticker]:
+            self.ticker_calls += 1
+            rows = await super().get_tickers()
+            if self.ticker_calls == 1:
+                # Still inside the budget, but only just.
+                nearly = datetime.now(UTC) - timedelta(seconds=27)
+                return [row.model_copy(update={"timestamp": nearly}) for row in rows]
+            return rows
+
+    adapter = AgingMock()
+    collector = MarketDataCollector(
+        [adapter], enable_streams=False, stale_after_seconds=30
+    )
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert adapter.ticker_calls == 2
+    assert snapshot.incomplete_venues == ()
+    for ticker in snapshot.tickers:
+        assert (snapshot.captured_at - ticker.timestamp).total_seconds() <= 30

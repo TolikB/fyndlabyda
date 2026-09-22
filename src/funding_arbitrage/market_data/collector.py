@@ -322,13 +322,12 @@ class MarketDataCollector:
         collections = await self._refresh_funding_aged_during_collection(
             active_adapters, list(collections)
         )
-        collections = await self._refresh_required_tickers_aged_during_collection(
+        collections, captured_at = await self._refresh_required_tickers_aged_during_collection(
             active_adapters,
             collections,
             orderbook_symbols or {},
             bounded_discovery_books,
         )
-        captured_at = datetime.now(UTC)
         instruments = [item for result in collections for item in result.instruments]
         tickers = [item for result in collections for item in result.tickers]
         funding = [item for result in collections for item in result.funding]
@@ -457,44 +456,27 @@ class MarketDataCollector:
         collections: list[_VenueCollection],
         required_books: dict[str, list[tuple[str, InstrumentType]]],
         pinned_discovery_books: dict[str, list[tuple[str, InstrumentType]]],
-    ) -> list[_VenueCollection]:
-        """Age every ticker against the shared snapshot boundary.
+    ) -> tuple[list[_VenueCollection], datetime]:
+        """Age every ticker against the instant the snapshot closes.
 
         Venues are collected concurrently but the whole pass takes seconds, so a
         ticker that was inside the budget when its venue was collected can be
-        outside it by the time the snapshot closes. Freshness is only meaningful
-        against `observed_at`, which is also what readiness measures against.
+        outside it by the time the snapshot closes. Readiness measures every age
+        against the snapshot timestamp, so the collector settles freshness against
+        that same instant and returns it as the snapshot's `captured_at`.
         """
 
         observed_at = datetime.now(UTC)
-        stale_indexes: list[int] = []
-        for index, (adapter, current) in enumerate(
-            zip(adapters, collections, strict=True)
-        ):
-            merged = self._usable_tickers(
-                adapter.name,
-                self._merge_stream_tickers(adapter.name, current.tickers, observed_at),
-                observed_at,
-            )
-            collections[index] = _VenueCollection(
-                current.instruments,
-                merged,
-                current.funding,
-                current.orderbooks,
-                current.funding_history,
-                current.operationally_complete and bool(merged),
-                current.funding_history_refreshed,
-                current.option_quotes,
-                current.non_ticker_complete,
-            )
-            if not merged or not _required_tickers_are_fresh(
-                adapter.name,
-                merged,
-                required_books.get(adapter.name),
-                observed_at,
-                self.stale_after_seconds,
-            ):
-                stale_indexes.append(index)
+        # Look past the re-fetch itself: a venue that is merely close to the
+        # budget now would be over it by the time the snapshot closes, and the
+        # final pass below has no second chance to repair one.
+        stale_indexes = self._age_tickers(
+            adapters,
+            collections,
+            required_books,
+            observed_at,
+            lookahead_seconds=max(1.0, self.stale_after_seconds / 6),
+        )
         if stale_indexes:
             refreshed = await asyncio.gather(
                 *(adapters[index].get_tickers() for index in stale_indexes),
@@ -573,11 +555,71 @@ class MarketDataCollector:
                 self._rest_ticker_cache[adapter.name] = value
                 self._last_rest_ticker_fetch[adapter.name] = refreshed_at
                 market_tickers_usable.labels(adapter.name).set(len(valid_tickers))
+        # The snapshot closes now, so settle every venue against this instant:
+        # a re-fetch above took time of its own, and readiness measures ages
+        # against `captured_at`, not against when this pass started.
+        captured_at = datetime.now(UTC)
+        self._age_tickers(adapters, collections, required_books, captured_at)
         for adapter, current in zip(adapters, collections, strict=True):
             market_data_age_seconds.labels(adapter.name).set(
                 0 if current.operationally_complete else -1
             )
-        return collections
+        return collections, captured_at
+
+    def _age_tickers(
+        self,
+        adapters: tuple[ExchangeAdapter, ...],
+        collections: list[_VenueCollection],
+        required_books: dict[str, list[tuple[str, InstrumentType]]],
+        moment: datetime,
+        *,
+        lookahead_seconds: float = 0.0,
+    ) -> list[int]:
+        """Re-age every venue's tickers against one instant, in place.
+
+        Returns the venues that hold no usable ticker, or whose open-position
+        mark is stale, at `moment` plus `lookahead_seconds`. The tickers kept are
+        always the ones usable at `moment`; the look-ahead only decides who is
+        worth re-fetching before the snapshot closes.
+        """
+
+        horizon = moment + timedelta(seconds=lookahead_seconds)
+        stale_indexes: list[int] = []
+        for index, (adapter, current) in enumerate(
+            zip(adapters, collections, strict=True)
+        ):
+            merged = self._usable_tickers(
+                adapter.name,
+                self._merge_stream_tickers(adapter.name, current.tickers, moment),
+                moment,
+            )
+            surviving = [
+                ticker
+                for ticker in merged
+                if (horizon - ticker.timestamp).total_seconds()
+                <= self.stale_after_seconds
+            ]
+            required_fresh = _required_tickers_are_fresh(
+                adapter.name,
+                surviving,
+                required_books.get(adapter.name),
+                horizon,
+                self.stale_after_seconds,
+            )
+            collections[index] = _VenueCollection(
+                current.instruments,
+                merged,
+                current.funding,
+                current.orderbooks,
+                current.funding_history,
+                current.non_ticker_complete and bool(merged) and required_fresh,
+                current.funding_history_refreshed,
+                current.option_quotes,
+                current.non_ticker_complete,
+            )
+            if not surviving or not required_fresh:
+                stale_indexes.append(index)
+        return stale_indexes
 
     async def _collect_venue(
         self,
