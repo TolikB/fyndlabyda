@@ -46,14 +46,22 @@ accepted.
 
 ## GATE-001 is running
 
-A window opened **2026-09-22T23:17:16Z** on revision `069dfae` and completes no
-earlier than **2026-09-25T23:17Z**.
+A window opened **2026-09-23T00:25:58Z** on revision
+`c76c591daca0ffc6c499f7fac4ff0f5022a1fc78` and completes no earlier than
+**2026-09-26T00:26Z**.
 
 Check it without touching the process:
 
 ```bash
-tail -n 3 /srv/funding-arbitrage-v1/acceptance/gate-001-069dfae/gate-001-069dfae.jsonl
+tail -n 3 /srv/funding-arbitrage-v1/acceptance/gate-001-c76c591/gate-001-c76c591.jsonl
 ```
+
+Always supply the revision to the window script as `$(git rev-parse HEAD)`. An
+earlier attempt was discarded because a hand-typed 40-hex revision shared the
+real commit's 7-character prefix but named a commit that does not exist; gate
+evidence is bound to the revision by Git-object equality, so it would have run
+the full 72 hours and then failed verification. After starting, confirm that
+`/run/funding-arbitrage/release-identity.json` reports exactly `git rev-parse HEAD`.
 
 The gate fails closed on the **first** not-ready sample, so a window that has
 failed shows it immediately and every later sample reports
