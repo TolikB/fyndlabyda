@@ -1,11 +1,13 @@
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import httpx
 import pytest
 
-from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
+from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError, RateLimitError
 from funding_arbitrage.exchanges.base.models import InstrumentType, Ticker
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 
@@ -144,6 +146,60 @@ async def test_gate_rest_payloads_are_normalized() -> None:
     assert "KODEX200_USDT" not in {item.symbol for item in funding}
     assert history[0].funding_timestamp.year == 2025
     assert orderbook.sequence == 42
+
+
+@pytest.mark.asyncio
+async def test_gate_tickers_fetch_both_markets_concurrently_through_limiter() -> None:
+    paths: list[str] = []
+    both_started = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if len(paths) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        return response([])
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://test.invalid/api/v4",
+    ) as client:
+        adapter = GatePublicAdapter(base_url="https://test.invalid/api/v4", http_client=client)
+        with patch.object(adapter._limiter, "acquire", wraps=adapter._limiter.acquire) as acquire:
+            assert await adapter.get_tickers() == []
+            assert acquire.await_count == 2
+
+    assert set(paths) == {
+        "/api/v4/futures/usdt/tickers",
+        "/api/v4/spot/tickers",
+    }
+
+
+@pytest.mark.asyncio
+async def test_gate_ticker_rate_limit_cancels_other_inflight_request() -> None:
+    futures_started = asyncio.Event()
+    futures_cancelled = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/futures/usdt/tickers"):
+            futures_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                futures_cancelled.set()
+                raise
+        await futures_started.wait()
+        return httpx.Response(429)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://test.invalid/api/v4",
+    ) as client:
+        adapter = GatePublicAdapter(base_url="https://test.invalid/api/v4", http_client=client)
+        with pytest.raises(RateLimitError):
+            await asyncio.wait_for(adapter.get_tickers(), timeout=1)
+
+    assert futures_cancelled.is_set()
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,18 @@
+import json
 import os
 import re
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
 import yaml
 
 COMPOSE_PATH = Path(__file__).resolve().parents[1] / "docker-compose.yml"
+PAPER_CONTABO_OVERLAY_PATH = (
+    Path(__file__).resolve().parents[1] / "docker-compose.paper-contabo.yml"
+)
 DOCKERFILE_PATH = Path(__file__).resolve().parents[1] / "Dockerfile"
 REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements.lock"
 LINUX_REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements-linux.lock"
@@ -55,6 +62,108 @@ def _compose() -> dict[str, object]:
     payload = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return payload
+
+
+def test_contabo_paper_overlay_pins_safe_mode_and_has_no_exchange_keys() -> None:
+    class OverrideLoader(yaml.SafeLoader):
+        pass
+
+    OverrideLoader.add_constructor(
+        "!override", lambda loader, node: loader.construct_sequence(node)
+    )
+    payload = yaml.load(
+        PAPER_CONTABO_OVERLAY_PATH.read_text(encoding="utf-8"), Loader=OverrideLoader
+    )
+    app = payload["services"]["app"]
+    assert app["restart"] == "unless-stopped"
+    paper_boundary = {
+        "RUN_MODE": "paper_test",
+        "TRADING_MODE": "PAPER",
+        "MARKET_DATA_MODE": "live_public",
+        "EXECUTION_MODE": "paper",
+        "LIVE_AUTOTRADE": "false",
+        "LIVE_TRADING_CONFIRM": "",
+        "DANGEROUS_CAPABILITY_AUTHORIZATION": "",
+    }
+    for key, value in paper_boundary.items():
+        assert app["environment"][key] == value
+    private_keys = {
+        "BYBIT_API_KEY", "BYBIT_API_SECRET", "GATE_API_KEY", "GATE_API_SECRET",
+        "OKX_API_KEY", "OKX_API_SECRET", "OKX_API_PASSPHRASE",
+        "BINANCE_API_KEY", "BINANCE_API_SECRET", "HYPERLIQUID_PRIVATE_KEY",
+        "MEXC_API_KEY", "MEXC_API_SECRET", "KUCOIN_API_KEY",
+        "KUCOIN_API_SECRET", "KUCOIN_API_PASSPHRASE", "HTX_API_KEY",
+        "HTX_API_SECRET",
+    }
+    assert all(app["environment"][key] == "" for key in private_keys)
+    assert len(app["env_file"]) == 2
+    assert "APP_RUNTIME_SECRETS_ENV_FILE" not in str(app["env_file"])
+    assert app["volumes"][1].startswith("${PAPER_EMPTY_EXCHANGE_SECRETS_DIR:")
+    assert app["ports"] == ["127.0.0.1:8000:8000"]
+    assert app["networks"] == ["default", "data_plane"]
+
+
+def test_contabo_paper_effective_compose_drops_private_secret_sources(
+    tmp_path: Path,
+) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker Compose is not installed")
+    if subprocess.run(
+        [docker, "compose", "version"], capture_output=True, check=False
+    ).returncode != 0:
+        pytest.skip("Docker Compose v2 is not available")
+
+    root = COMPOSE_PATH.parent
+    secret_env = tmp_path / "must-not-load.env"
+    secret_env.write_text("SECRET_SOURCE_SENTINEL=unsafe-test-value\n", encoding="utf-8")
+    exchange_dir = tmp_path / "empty-exchange"
+    exchange_dir.mkdir()
+    release_sha = "a" * 40
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_ENV_FILE": str(root / ".env.paper-live-data.example"),
+            "PAPER_RUNTIME_ENV_FILE": str(root / ".env.paper-test.example"),
+            "APP_RUNTIME_SECRETS_ENV_FILE": str(secret_env),
+            "PAPER_EMPTY_EXCHANGE_SECRETS_DIR": str(exchange_dir),
+            "INTERNAL_TLS_SECRETS_DIR": str(tmp_path),
+            "APP_IMAGE": "funding-arbitrage-paper:merge-test",
+            "RELEASE_COMMIT_SHA": release_sha,
+            "POSTGRES_PASSWORD": "compose-merge-test-only",
+            "CLICKHOUSE_PASSWORD": "compose-merge-test-only",
+            "GRAFANA_ADMIN_PASSWORD": "compose-merge-test-only",
+            "BYBIT_API_KEY": "unsafe-test-key",
+        }
+    )
+    result = subprocess.run(
+        [
+            docker, "compose", "-p", "funding_arbitrage_paper_merge_test",
+            "-f", str(COMPOSE_PATH), "-f", str(PAPER_CONTABO_OVERLAY_PATH),
+            "config", "--format", "json",
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    app = json.loads(result.stdout)["services"]["app"]
+    assert app["image"] == "funding-arbitrage-paper:merge-test"
+    assert app["environment"]["RELEASE_COMMIT_SHA"] == release_sha
+    assert app["environment"]["RUN_MODE"] == "paper_test"
+    assert app["environment"]["TRADING_MODE"] == "PAPER"
+    assert app["environment"]["MARKET_DATA_MODE"] == "live_public"
+    assert app["environment"]["EXECUTION_MODE"] == "paper"
+    assert app["environment"]["LIVE_AUTOTRADE"] == "false"
+    assert app["environment"]["BYBIT_API_KEY"] == ""
+    assert "SECRET_SOURCE_SENTINEL" not in app["environment"]
+    assert app["restart"] == "unless-stopped"
+    volumes = {volume["target"]: volume for volume in app["volumes"]}
+    assert volumes["/run/secrets/exchange"]["source"] == str(exchange_dir)
+    assert volumes["/run/secrets/exchange"]["read_only"] is True
+    assert {port["host_ip"] for port in app["ports"]} == {"127.0.0.1"}
 
 
 def test_shell_scripts_are_lf_only() -> None:

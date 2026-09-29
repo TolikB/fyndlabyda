@@ -12,7 +12,7 @@ offline deterministic mock profile is also available.
 - TCP access to port `8000` for the API/dashboard, and optionally `9090` and
   `3000` for Prometheus/Grafana. Keep database and Redis ports private.
 
-## Start
+## Start on an isolated local host
 
 ```bash
 cd /path/to/funding-bot
@@ -23,8 +23,11 @@ docker compose ps
 
 The app runs Alembic migrations before Uvicorn. The paper runner starts in the
 background and performs a cycle every 15 seconds with real public data from
-Bybit, Gate, OKX, Binance, Hyperliquid, MEXC, KuCoin, and HTX. All eight venues
-receive $1,000 of tradable virtual balance plus a separate reserve.
+Bybit, Gate, OKX, Binance, Hyperliquid, MEXC, KuCoin, and HTX. The portfolio
+starts with $1,000 total virtual equity: the configured reserve is set aside,
+and the remainder is split equally among the eight venues. In comparison mode,
+candidate and baseline each have their own independent $1,000 portfolio; their
+balances must not be added together as one trading budget.
 
 The default deployment is resource-limited and starts app, PostgreSQL, and
 Redis only. On a larger host, start monitoring with:
@@ -33,8 +36,66 @@ Redis only. On a larger host, start monitoring with:
 docker compose --profile observability up -d
 ```
 
-For the baseline/candidate PnL comparison on the current small VM, enable the
-shared-feed comparison in `.env`:
+## Contabo paper-only release
+
+On the shared Contabo host, use the existing `/opt/funding_arbitrage_paper`
+database and Compose project `funding_arbitrage_paper`. Keep each source release
+under that project's `releases/` directory. Do not deploy a release over the
+existing source tree or recreate PostgreSQL/Redis while updating the app.
+Before any app startup (which runs Alembic migrations), back up the existing
+paper PostgreSQL database with `pg_dump -Fc`, the project `.env`, Compose
+overrides, release markers, and internal TLS directory. Verify the dump with
+`pg_restore -l`, record its checksum, and keep the previous immutable release
+and its runtime env as the rollback source. If a migration changes the schema,
+restoring the old database requires a separate controlled outage and approval;
+do not assume merely restarting the old image will undo a migration.
+
+Use `docker-compose.paper-contabo.yml` with a release-specific copy of
+`ops/paper-contabo-runtime.env.example`. The Compose overlay pins `paper_test`,
+`PAPER`, `live_public`, and paper execution; it replaces the exchange-secret
+mount with an empty directory, and Docker restarts this paper-only app after a
+host reboot. The base Compose file alone does **not** provide these guarantees.
+The existing project `.env` supplies database and Telegram secrets; the second
+runtime env file contains only non-secret mode, budget, and version settings.
+Both files must be mode `0600`, and the empty exchange-secret directory must
+contain no files. Replace `RELEASE`, `SHA7`, and
+`REPLACE_WITH_EXACT_40_HEX_SHA` in the runtime template with the cloned commit
+directory, its seven-character prefix, and its verified full 40-character SHA.
+The existing project `.env` must supply the Compose interpolation values
+`POSTGRES_PASSWORD`, `CLICKHOUSE_PASSWORD`, and `GRAFANA_ADMIN_PASSWORD` even
+when optional services are inactive. Never print or commit those values.
+
+Run Compose from the immutable release directory, passing the existing project
+env and the release-specific runtime env in that order:
+
+```bash
+docker compose -p funding_arbitrage_paper \
+  --env-file /opt/funding_arbitrage_paper/.env \
+  --env-file ./paper-runtime.env \
+  -f docker-compose.yml -f docker-compose.paper-contabo.yml config --quiet
+docker compose -p funding_arbitrage_paper \
+  --env-file /opt/funding_arbitrage_paper/.env \
+  --env-file ./paper-runtime.env \
+  -f docker-compose.yml -f docker-compose.paper-contabo.yml \
+  up -d --no-deps --build app
+```
+
+For preflight, keep `PAPER_AUTOTRADE=false`, `TELEGRAM_ENABLED=false`, and a
+fresh preflight-only simulation version. Confirm all eight public venues,
+funding history, and fresh executable books before enabling entries. For the
+active run, create a **different** runtime env file with unique candidate and
+baseline versions, an explicit UTC `PAPER_AUTOTRADE_START_UTC`,
+`PAPER_AUTOTRADE=true`, `PAPER_COMPARISON_ENABLED=true`, and
+`TELEGRAM_ENABLED=true`; point its `PAPER_RUNTIME_ENV_FILE` at itself. Check
+the effective configuration without printing secrets, then recreate **only**
+the app with `up -d --no-deps --force-recreate app`. Do not combine historical
+preflight or older simulation PnL with the active run. Candidate and baseline
+each start with an independent $1,000 virtual balance; the $100 funding limit
+is aggregate across each portfolio's two-leg funding positions.
+
+For the baseline/candidate PnL comparison, set unique versions and a new UTC
+start boundary in the release-specific runtime env. The following is an
+illustration only; never reuse these historical namespaces or boundary:
 
 ```dotenv
 PAPER_COMPARISON_ENABLED=true
@@ -43,7 +104,8 @@ PAPER_SIMULATION_VERSION=v33-multi-regime-candidate
 PAPER_BASELINE_SIMULATION_VERSION=v33-multi-regime-baseline
 ```
 
-Then run `docker compose up -d --build`. Candidate and baseline retain separate
+On Contabo, use the complete Compose command above with the exact project and
+both files, and recreate `app` only. Candidate and baseline retain separate
 portfolios and simulation-version ledgers, but process the exact same immutable
 `MarketSnapshot` from one collector. This avoids doubling public API/WebSocket
 load and removes feed timing as a source of comparison bias. Do not combine the
@@ -60,7 +122,10 @@ curl http://127.0.0.1:8000/analytics/paper
 curl http://127.0.0.1:8000/analytics/compare
 curl 'http://127.0.0.1:8000/analytics/attribution?simulation_version=v33-multi-regime-candidate'
 curl http://127.0.0.1:8000/metrics | grep funding_paper_runner
-docker compose logs -f app
+docker compose -p funding_arbitrage_paper \
+  --env-file /opt/funding_arbitrage_paper/.env \
+  --env-file ./paper-runtime.env \
+  -f docker-compose.yml -f docker-compose.paper-contabo.yml logs -f app
 ```
 
 After the first cycle, `/health/ready` becomes `ready`. After confirmation and
@@ -195,11 +260,17 @@ timeouts or restarts; operators can inspect the delivery_unknown ledger state
 if a report is missing. Until the token and chat ID are set, no Telegram request
 is made.
 
-## Stop without deleting data
+## Stop only the Contabo paper app without deleting data
 
 ```bash
-docker compose stop
-docker compose start
+docker compose -p funding_arbitrage_paper \
+  --env-file /opt/funding_arbitrage_paper/.env \
+  --env-file ./paper-runtime.env \
+  -f docker-compose.yml -f docker-compose.paper-contabo.yml stop app
+docker compose -p funding_arbitrage_paper \
+  --env-file /opt/funding_arbitrage_paper/.env \
+  --env-file ./paper-runtime.env \
+  -f docker-compose.yml -f docker-compose.paper-contabo.yml start app
 ```
 
 Do not use `docker compose down -v` unless the PostgreSQL paper history should

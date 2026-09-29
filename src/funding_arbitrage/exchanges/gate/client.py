@@ -268,8 +268,20 @@ class GatePublicAdapter(ExchangeAdapter):
             raise InvalidResponseError(f"invalid Gate spot instrument: {row!r}") from exc
 
     async def get_tickers(self) -> list[Ticker]:
-        futures_payload = await self._request(f"/futures/{self.settle}/tickers")
-        spot_payload = await self._request("/spot/tickers")
+        # Two independent endpoints: awaiting them in turn puts the sum of both
+        # round trips on the collection pass, and this venue's page is the
+        # largest of the eight.
+        futures_task = asyncio.create_task(self._request(f"/futures/{self.settle}/tickers"))
+        spot_task = asyncio.create_task(self._request("/spot/tickers"))
+        try:
+            futures_payload, spot_payload = await asyncio.gather(futures_task, spot_task)
+        except BaseException:
+            # gather propagates the first failure without cancelling its sibling.
+            # Do not leave an HTTP request running after a rate limit or shutdown.
+            futures_task.cancel()
+            spot_task.cancel()
+            await asyncio.gather(futures_task, spot_task, return_exceptions=True)
+            raise
         if not isinstance(futures_payload, list) or not isinstance(spot_payload, list):
             raise InvalidResponseError("Gate ticker responses must be arrays")
         now = datetime.now(UTC)

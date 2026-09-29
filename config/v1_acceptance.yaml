@@ -235,7 +235,7 @@ requirements:
       src/funding_arbitrage/exchanges/bybit/orderbook.py: a91b396eaa09435046517d80f904a8264006bd6b482768fd22e7d66dc8b64a33
       src/funding_arbitrage/exchanges/factory.py: 1ec037ca0c9b220d4026191db3c1e1542a42960a3a74a6430547b3e8560417fa
       src/funding_arbitrage/exchanges/gate/__init__.py: 41a4c988c4c46031be07f994169a1527fede6522f7ef365e992d5c4324f56741
-      src/funding_arbitrage/exchanges/gate/client.py: 4a609a0a2d6c1919e0e4b55d4a48e316319b3d8b656c6711d11f881f7617b86c
+      src/funding_arbitrage/exchanges/gate/client.py: c8f120757f369e6bf531fb557da957138b6ca923e03e7fb331ce874550f9aeda
       src/funding_arbitrage/exchanges/gate/orderbook.py: d155f85cebcf531b71078c89acb4c00986fb6cade88a379e5e6fbd935c4c67af
       src/funding_arbitrage/exchanges/htx/__init__.py: 2a9b647d38809426cfa9a06d31bcb4922cec3e4d6cc42bfb99f144b43f856066
       src/funding_arbitrage/exchanges/htx/client.py: 0cab2e4f16858e09d624a5c450620a1ca9275c984b3d41afa861c9a1e8486d64
@@ -360,7 +360,7 @@ requirements:
       src/funding_arbitrage/exchanges/bybit/orderbook.py: a91b396eaa09435046517d80f904a8264006bd6b482768fd22e7d66dc8b64a33
       src/funding_arbitrage/exchanges/factory.py: 1ec037ca0c9b220d4026191db3c1e1542a42960a3a74a6430547b3e8560417fa
       src/funding_arbitrage/exchanges/gate/__init__.py: 41a4c988c4c46031be07f994169a1527fede6522f7ef365e992d5c4324f56741
-      src/funding_arbitrage/exchanges/gate/client.py: 4a609a0a2d6c1919e0e4b55d4a48e316319b3d8b656c6711d11f881f7617b86c
+      src/funding_arbitrage/exchanges/gate/client.py: c8f120757f369e6bf531fb557da957138b6ca923e03e7fb331ce874550f9aeda
       src/funding_arbitrage/exchanges/gate/orderbook.py: d155f85cebcf531b71078c89acb4c00986fb6cade88a379e5e6fbd935c4c67af
       src/funding_arbitrage/exchanges/htx/__init__.py: 2a9b647d38809426cfa9a06d31bcb4922cec3e4d6cc42bfb99f144b43f856066
       src/funding_arbitrage/exchanges/htx/client.py: 0cab2e4f16858e09d624a5c450620a1ca9275c984b3d41afa861c9a1e8486d64
@@ -1326,7 +1326,7 @@ requirements:
       src/funding_arbitrage/security/revocation.py: 0f7ff1b4afcb11464423fb734d93c51c2b3d2be853ca31bae53ec65f983ab363
       src/funding_arbitrage/storage/clickhouse.py: 00edfc197bfd0956dda3851eecebf2533e82ad02886e9db3c9a7c1df575daab7
       tests/test_analytics_storage.py: d6c85dc22827d114bafd0abf703974535ea76eb96b359df497480a360dce9405
-      tests/test_deployment_safety.py: 63c86d202f9dc066f5bda5aba7c150869b3bd2ff07abe037d78a3e8f79b9a83b
+      tests/test_deployment_safety.py: f4fb0b0aa3be6e383175a4c5b8099af7f1dc45e5797723904740e718743d0562
       tests/test_internal_tls.py: b6991fcb4868eb7bd13c2f78ec4b20b7e7ab45bbb51f64ed9494541771639a34
   - id: OBS-001
     category: monitoring
@@ -1598,7 +1598,7 @@ requirements:
       tests/test_dated_basis_strategy.py: d5ee8c3bb98673fbbee4281a57098285819b56cbedecefebc53d583c36377c31
       tests/test_decision_pipeline.py: b46aa048264404dba01633e8e5e497aa83b43d29a5e4056d8bdde8223b0488e6
       tests/test_decision_support.py: ed562aba54c0f83938624e32dbb1c3a051e99cc76af8a76516606d644d5fd121
-      tests/test_deployment_safety.py: 63c86d202f9dc066f5bda5aba7c150869b3bd2ff07abe037d78a3e8f79b9a83b
+      tests/test_deployment_safety.py: f4fb0b0aa3be6e383175a4c5b8099af7f1dc45e5797723904740e718743d0562
       tests/test_derivatives_features.py: cf2205c1afe3bab24bae010d04f57b508c128fd2551c60aa31920a2d911fdd0a
       tests/test_dex_execution.py: 13b84a28ea4870f06c49613952d06ced06afc9142facebeb07384cf8ba7b1941
       tests/test_directional_paper_broker.py: cab38ab7e40752c262da6819d98e1c6d3b4e84380683e6cc9d1dc1cf64799301
@@ -1621,7 +1621,7 @@ requirements:
       tests/test_funding_ledger_repository.py: 0be54984eed5f584c95de2f5aea513485047c5c1ce01bc2bd09a83da9515d103
       tests/test_funding_payment_audit.py: 08f3f7d2df1fa4db88796f5e3c2e4ee3633c724f2be6b3eb0113b6efccf23e8e
       tests/test_funding_schedule_probe.py: 7618b9109fa3b34fb12fefe01bfd4d618405a84e7078960bb45b19c0190ae9c8
-      tests/test_gate_adapter.py: 03b2df1dca054a44a4272241ebde3a516bed3199949a6c8d6d283c48d0c23536
+      tests/test_gate_adapter.py: bdbede787f9a547b214b3513ebed873803b8b0c7ec544bf9bd34ad86a11c8ec5
       tests/test_gate_canonical_orderbook.py: 846eab13d8562e19f0f2348863c31fb85cc99decc690b0c242440c57aeb94501
       tests/test_guarded_capabilities.py: 888a680309a2ce79cc16ac173e83f730487eb79781c618d60e67999cbaa7af00
       tests/test_historical_replay.py: 5b952df00a15d1aa807afee856809f46014e33b9e76687acaa0891b77de6ca63
