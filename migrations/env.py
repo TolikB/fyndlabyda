@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -14,6 +15,19 @@ config = context.config
 if config.config_file_name is not None and config.get_section("loggers"):
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata
+
+# The application's DATABASE_URL wins over alembic.ini so migrations run against the
+# same database as the service (inside Docker the host is "postgres", not localhost).
+_database_url = os.environ.get("DATABASE_URL")
+if not _database_url:
+    try:
+        from funding_arbitrage.config import get_settings
+
+        _database_url = get_settings().database_url
+    except Exception:  # noqa: BLE001 - fall back to alembic.ini
+        _database_url = None
+if _database_url:
+    config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

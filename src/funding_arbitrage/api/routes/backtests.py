@@ -25,6 +25,10 @@ async def create_backtest(
     runtime: Annotated[RuntimeState, Depends(get_runtime)],
     session: Annotated[AsyncSession, Depends(get_session_factory)],
 ) -> dict[str, object]:
+    if runtime.settings.run_mode == "paper_test":
+        raise HTTPException(
+            status_code=403, detail="backtests are read-only while the paper runner runs"
+        )
     events: list[BacktestEvent] = [
         PositionEvent(
             timestamp=datetime.strptime(f"{month}-01", "%Y-%m-%d").replace(tzinfo=UTC),

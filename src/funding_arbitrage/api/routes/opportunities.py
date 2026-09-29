@@ -22,9 +22,7 @@ async def opportunity_history(
 ) -> list[dict[str, object]]:
     rows = (
         await session.execute(
-            select(OpportunityRecord)
-            .order_by(OpportunityRecord.created_at.desc())
-            .limit(limit)
+            select(OpportunityRecord).order_by(OpportunityRecord.created_at.desc()).limit(limit)
         )
     ).scalars()
     return [row.payload for row in rows]

@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from funding_arbitrage.exchanges.base.models import InstrumentType
+
 
 class StrategyName(StrEnum):
     SPOT_PERP = "spot_perp"
@@ -24,11 +26,22 @@ class OpportunityStatus(StrEnum):
 
 
 class FeeSchedule(BaseModel):
+    """Taker/maker fees of one venue; spot fees default to the derivative fees."""
+
     maker_fee: Decimal = Field(ge=0)
     taker_fee: Decimal = Field(ge=0)
+    spot_maker_fee: Decimal | None = Field(default=None, ge=0)
+    spot_taker_fee: Decimal | None = Field(default=None, ge=0)
+
+    def taker(self, instrument_type: InstrumentType) -> Decimal:
+        if instrument_type is InstrumentType.SPOT and self.spot_taker_fee is not None:
+            return self.spot_taker_fee
+        return self.taker_fee
 
 
 class CostBreakdown(BaseModel):
+    """Round-trip costs as a fraction of the per-leg notional (or USD when sized)."""
+
     entry_fees: Decimal = Field(ge=0)
     exit_fees: Decimal = Field(ge=0)
     entry_spread: Decimal = Field(ge=0)
@@ -71,8 +84,15 @@ class Opportunity(BaseModel):
     price_b: Decimal = Field(gt=0)
     funding_a: Decimal = Decimal("0")
     funding_b: Decimal = Decimal("0")
+    # Funding captured per 8 hours in the position's favour (normalized across intervals).
+    funding_rate_8h: Decimal = Decimal("0")
+    funding_interval_hours_a: Decimal | None = None
+    funding_interval_hours_b: Decimal | None = None
+    next_funding_time_a: datetime | None = None
+    next_funding_time_b: datetime | None = None
     unstable_funding: bool = False
     gross_edge: Decimal
+    # Fractions of the per-leg notional (0.001 = 0.1%).
     trading_fees: Decimal = Field(default=Decimal("0"), ge=0)
     estimated_slippage: Decimal = Field(default=Decimal("0"), ge=0)
     borrow_cost: Decimal = Field(default=Decimal("0"), ge=0)
@@ -89,6 +109,7 @@ class Opportunity(BaseModel):
     funding_sample_count: int = Field(default=0, ge=0)
     opportunity_score: Decimal = Decimal("0")
     basis_percent: Decimal = Decimal("0")
+    has_orderbooks: bool = False
     status: OpportunityStatus = OpportunityStatus.CANDIDATE
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime | None = None
@@ -97,3 +118,30 @@ class Opportunity(BaseModel):
     def with_expiry(self, seconds: int) -> Opportunity:
         self.expires_at = self.created_at + timedelta(seconds=seconds)
         return self
+
+    @property
+    def key(self) -> str:
+        """Stable identity across scans: same markets, same direction."""
+
+        return ":".join(
+            [
+                str(self.strategy),
+                self.asset,
+                self.venue_a,
+                self.symbol_a or "",
+                self.leg_a_type,
+                self.leg_a_side,
+                self.venue_b or "",
+                self.symbol_b or "",
+                self.leg_b_type,
+                self.leg_b_side,
+            ]
+        )
+
+    @property
+    def leg_a_instrument_type(self) -> InstrumentType:
+        return InstrumentType(self.leg_a_type)
+
+    @property
+    def leg_b_instrument_type(self) -> InstrumentType:
+        return InstrumentType(self.leg_b_type)

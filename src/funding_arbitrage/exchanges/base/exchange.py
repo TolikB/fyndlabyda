@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
 
 from .models import (
@@ -21,6 +21,13 @@ class ExchangeAdapter(ABC):
 
     async def close(self) -> None:
         """Release transport resources owned by the adapter."""
+        return None
+
+    def set_priority_symbols(self, symbols: Iterable[str]) -> None:
+        """Hint symbols whose funding must be fresh every cycle (open paper legs).
+
+        Venues that publish funding for all symbols in one call ignore the hint.
+        """
         return None
 
     @abstractmethod

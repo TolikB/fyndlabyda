@@ -40,13 +40,4 @@ class OpportunityDebouncer:
 
     @staticmethod
     def key(opportunity: Opportunity) -> str:
-        return ":".join(
-            [
-                str(opportunity.strategy),
-                opportunity.asset,
-                opportunity.venue_a,
-                opportunity.venue_b or "",
-                opportunity.leg_a_type,
-                opportunity.leg_b_type,
-            ]
-        )
+        return opportunity.key

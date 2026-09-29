@@ -12,6 +12,10 @@ class NetworkError(ExchangeError):
 class RateLimitError(ExchangeError):
     """The exchange rejected a request because of a rate limit."""
 
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
 
 class InvalidResponseError(ExchangeError):
     """The exchange response was malformed or rejected."""

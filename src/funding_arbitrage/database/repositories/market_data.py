@@ -1,26 +1,28 @@
-"""Persistence mapping from normalized models to SQLAlchemy records."""
+"""Persistence mapping from normalized models to SQLAlchemy records.
+
+Writes are set-based (one statement per chunk) so a cycle never issues one
+round trip per instrument or ticker.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
     FundingSnapshot,
     NormalizedInstrument,
+    OrderBook,
     Ticker,
 )
-from funding_arbitrage.execution.base import PaperFill
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.opportunity.models import Opportunity
-from funding_arbitrage.portfolio.portfolio import PortfolioSnapshot
-from funding_arbitrage.portfolio.position import PaperPosition
 
 from ..models import (
     BacktestResultRecord,
@@ -31,169 +33,178 @@ from ..models import (
     InstrumentRecord,
     OpportunityRecord,
     OrderBookSnapshotRecord,
-    PaperFillRecord,
-    PaperFundingPaymentRecord,
-    PaperPositionRecord,
-    PortfolioSnapshotRecord,
     TickerSnapshotRecord,
 )
 
-
-async def save_instruments(session: AsyncSession, instruments: list[NormalizedInstrument]) -> None:
-    for item in instruments:
-        record = await session.scalar(
-            select(InstrumentRecord).where(
-                InstrumentRecord.exchange == item.exchange,
-                InstrumentRecord.exchange_symbol == item.exchange_symbol,
-                InstrumentRecord.instrument_type == item.instrument_type.value,
-            )
-        )
-        values = {
-            "exchange": item.exchange,
-            "exchange_symbol": item.exchange_symbol,
-            "canonical_id": item.canonical_id,
-            "base_asset": item.base_asset,
-            "quote_asset": item.quote_asset,
-            "instrument_type": item.instrument_type.value,
-            "settlement_asset": item.settlement_asset,
-            "contract_size": item.contract_size,
-            "tick_size": item.tick_size,
-            "step_size": item.step_size,
-            "min_order_size": item.min_order_size,
-            "funding_interval": item.funding_interval,
-            "expiry": item.expiry,
-            "is_active": item.is_active,
-        }
-        if record is None:
-            session.add(InstrumentRecord(**values))
-        else:
-            for field, value in values.items():
-                setattr(record, field, value)
-    await session.commit()
+# asyncpg accepts at most 32767 bind parameters per statement.
+_CHUNK = 1000
 
 
-async def save_tickers(session: AsyncSession, tickers: list[Ticker]) -> None:
-    session.add_all(
-        [
-            TickerSnapshotRecord(
-                exchange=item.exchange,
-                symbol=item.symbol,
-                instrument_type=item.instrument_type.value,
-                last_price=item.last_price,
-                mark_price=item.mark_price,
-                index_price=item.index_price,
-                best_bid=item.best_bid,
-                best_ask=item.best_ask,
-                volume_24h=item.volume_24h,
-                open_interest=item.open_interest,
-                timestamp=item.timestamp,
-            )
-            for item in tickers
-        ]
-    )
-    await session.commit()
+def _chunks(rows: Sequence[dict[str, Any]]) -> Iterable[Sequence[dict[str, Any]]]:
+    for start in range(0, len(rows), _CHUNK):
+        yield rows[start : start + _CHUNK]
 
 
-async def save_funding_snapshots(session: AsyncSession, snapshots: list[FundingSnapshot]) -> None:
-    session.add_all(
-        [
-            FundingSnapshotRecord(
-                exchange=item.exchange,
-                symbol=item.symbol,
-                funding_rate=item.funding_rate,
-                funding_interval_hours=item.funding_interval_hours,
-                next_funding_time=item.next_funding_time,
-                mark_price=item.mark_price,
-                index_price=item.index_price,
-                timestamp=item.timestamp,
-            )
-            for item in snapshots
-        ]
-    )
-    await session.commit()
-
-
-async def save_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
-    for item in points:
-        record = await session.scalar(
-            select(FundingHistoryRecord).where(
-                FundingHistoryRecord.exchange == item.exchange,
-                FundingHistoryRecord.symbol == item.symbol,
-                FundingHistoryRecord.funding_timestamp == item.funding_timestamp,
-            )
-        )
-        if record is None:
-            session.add(
-                FundingHistoryRecord(
-                    exchange=item.exchange,
-                    symbol=item.symbol,
-                    funding_rate=item.funding_rate,
-                    funding_timestamp=item.funding_timestamp,
-                    mark_price=item.mark_price,
-                )
-            )
-        else:
-            record.funding_rate = item.funding_rate
-            record.mark_price = item.mark_price
-    await session.commit()
-
-
-async def save_market_snapshot(session: AsyncSession, snapshot: MarketSnapshot) -> None:
-    """Persist one normalized snapshot, including depth used for cost estimates."""
-
-    await save_instruments(session, snapshot.instruments)
-    await save_tickers(session, snapshot.tickers)
-    await save_funding_snapshots(session, snapshot.funding)
-    for exchange in sorted(
-        {
-            item.exchange for item in snapshot.instruments + snapshot.tickers + snapshot.funding
-        }
-    ):
-        record = await session.scalar(select(ExchangeRecord).where(ExchangeRecord.name == exchange))
-        if record is None:
-            session.add(
-                ExchangeRecord(
-                    name=exchange,
-                    enabled=True,
-                    status="ONLINE",
-                    last_seen_at=snapshot.captured_at,
-                    metadata_json={"source": "public_read_only"},
-                )
-            )
-        else:
-            record.status = "ONLINE"
-            record.last_seen_at = snapshot.captured_at
-    if snapshot.funding_history:
-        await save_funding_history(
-            session,
-            [point for points in snapshot.funding_history.values() for point in points],
-        )
-    session.add_all(
-        [
-            OrderBookSnapshotRecord(
-                exchange=book.exchange,
-                symbol=book.symbol,
-                timestamp=book.timestamp,
-                sequence=book.sequence,
-                bids=[[str(level.price), str(level.quantity)] for level in book.bids],
-                asks=[[str(level.price), str(level.quantity)] for level in book.asks],
-            )
-            for book in snapshot.orderbooks.values()
-        ]
-    )
-    await session.commit()
-
-
-async def save_opportunities(
-    session: AsyncSession, opportunities: Iterable[Opportunity]
+async def upsert_instruments(
+    session: AsyncSession, instruments: list[NormalizedInstrument]
 ) -> None:
+    rows = list(
+        {
+            (item.exchange, item.exchange_symbol, item.instrument_type.value): {
+                "exchange": item.exchange,
+                "exchange_symbol": item.exchange_symbol,
+                "canonical_id": item.canonical_id,
+                "base_asset": item.base_asset,
+                "quote_asset": item.quote_asset,
+                "instrument_type": item.instrument_type.value,
+                "settlement_asset": item.settlement_asset,
+                "contract_size": item.contract_size,
+                "tick_size": item.tick_size,
+                "step_size": item.step_size,
+                "min_order_size": item.min_order_size,
+                "funding_interval": item.funding_interval,
+                "expiry": item.expiry,
+                "is_active": item.is_active,
+            }
+            for item in instruments
+        }.values()
+    )
+    for chunk in _chunks(rows):
+        statement = pg_insert(InstrumentRecord).values(list(chunk))
+        excluded = statement.excluded
+        await session.execute(
+            statement.on_conflict_do_update(
+                constraint="uq_instrument_exchange_symbol_type",
+                set_={
+                    "canonical_id": excluded.canonical_id,
+                    "base_asset": excluded.base_asset,
+                    "quote_asset": excluded.quote_asset,
+                    "settlement_asset": excluded.settlement_asset,
+                    "contract_size": excluded.contract_size,
+                    "tick_size": excluded.tick_size,
+                    "step_size": excluded.step_size,
+                    "min_order_size": excluded.min_order_size,
+                    "funding_interval": excluded.funding_interval,
+                    "expiry": excluded.expiry,
+                    "is_active": excluded.is_active,
+                },
+            )
+        )
+
+
+async def insert_tickers(session: AsyncSession, tickers: list[Ticker]) -> None:
+    rows = [
+        {
+            "exchange": item.exchange,
+            "symbol": item.symbol,
+            "instrument_type": item.instrument_type.value,
+            "last_price": item.last_price,
+            "mark_price": item.mark_price,
+            "index_price": item.index_price,
+            "best_bid": item.best_bid,
+            "best_ask": item.best_ask,
+            "volume_24h": item.volume_24h,
+            "open_interest": item.open_interest,
+            "timestamp": item.timestamp,
+        }
+        for item in tickers
+    ]
+    for chunk in _chunks(rows):
+        await session.execute(insert(TickerSnapshotRecord), list(chunk))
+
+
+async def insert_funding_snapshots(session: AsyncSession, snapshots: list[FundingSnapshot]) -> None:
+    rows = [
+        {
+            "exchange": item.exchange,
+            "symbol": item.symbol,
+            "funding_rate": item.funding_rate,
+            "funding_interval_hours": item.funding_interval_hours,
+            "next_funding_time": item.next_funding_time,
+            "mark_price": item.mark_price,
+            "index_price": item.index_price,
+            "timestamp": item.timestamp,
+        }
+        for item in snapshots
+    ]
+    for chunk in _chunks(rows):
+        await session.execute(insert(FundingSnapshotRecord), list(chunk))
+
+
+async def upsert_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
+    rows = list(
+        {
+            (item.exchange, item.symbol, item.funding_timestamp): {
+                "exchange": item.exchange,
+                "symbol": item.symbol,
+                "funding_rate": item.funding_rate,
+                "funding_timestamp": item.funding_timestamp,
+                "mark_price": item.mark_price,
+            }
+            for item in points
+        }.values()
+    )
+    for chunk in _chunks(rows):
+        statement = pg_insert(FundingHistoryRecord).values(list(chunk))
+        await session.execute(
+            statement.on_conflict_do_update(
+                constraint="uq_funding_history_event",
+                set_={
+                    "funding_rate": statement.excluded.funding_rate,
+                    "mark_price": statement.excluded.mark_price,
+                },
+            )
+        )
+
+
+async def insert_orderbooks(session: AsyncSession, books: Iterable[OrderBook]) -> None:
+    rows = [
+        {
+            "exchange": book.exchange,
+            "symbol": book.symbol,
+            "instrument_type": book.instrument_type.value,
+            "timestamp": book.timestamp,
+            "sequence": book.sequence,
+            "bids": [[str(level.price), str(level.quantity)] for level in book.bids],
+            "asks": [[str(level.price), str(level.quantity)] for level in book.asks],
+        }
+        for book in books
+    ]
+    for chunk in _chunks(rows):
+        await session.execute(insert(OrderBookSnapshotRecord), list(chunk))
+
+
+async def upsert_exchanges(session: AsyncSession, snapshot: MarketSnapshot) -> None:
+    rows = [
+        {
+            "name": name,
+            "enabled": True,
+            "status": str(state.status),
+            "last_seen_at": state.last_success_at,
+            "metadata_json": {"source": "public_read_only", "last_error": state.last_error},
+        }
+        for name, state in snapshot.venues.items()
+    ]
+    if not rows:
+        return
+    statement = pg_insert(ExchangeRecord).values(rows)
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=["name"],
+            set_={
+                "status": statement.excluded.status,
+                "last_seen_at": statement.excluded.last_seen_at,
+                "metadata_json": statement.excluded.metadata_json,
+            },
+        )
+    )
+
+
+async def upsert_opportunities(session: AsyncSession, opportunities: Iterable[Opportunity]) -> None:
     """Upsert scanner output so unused opportunities remain available for research."""
 
-    for item in opportunities:
-        record = await session.scalar(
-            select(OpportunityRecord).where(OpportunityRecord.opportunity_id == item.id)
-        )
-        values: dict[str, Any] = {
+    rows = [
+        {
             "opportunity_id": item.id,
             "strategy": str(item.strategy),
             "asset": item.asset,
@@ -208,28 +219,70 @@ async def save_opportunities(
             "expires_at": item.expires_at,
             "payload": item.model_dump(mode="json"),
         }
-        if record is None:
-            session.add(OpportunityRecord(**values))
-        else:
-            for field, value in values.items():
-                setattr(record, field, value)
-    await session.commit()
-
-
-async def save_portfolio_snapshot(session: AsyncSession, snapshot: PortfolioSnapshot) -> None:
-    session.add(
-        PortfolioSnapshotRecord(
-            timestamp=snapshot.timestamp,
-            equity=snapshot.equity,
-            cash=snapshot.cash,
-            locked_capital=snapshot.locked_capital,
-            total_pnl=snapshot.total_pnl,
-            funding_pnl=snapshot.funding_pnl,
-            fees=snapshot.fees,
-            balances={key: str(value) for key, value in snapshot.balances.items()},
+        for item in opportunities
+    ]
+    for chunk in _chunks(rows):
+        statement = pg_insert(OpportunityRecord).values(list(chunk))
+        await session.execute(
+            statement.on_conflict_do_update(
+                index_elements=["opportunity_id"],
+                set_={
+                    "status": statement.excluded.status,
+                    "net_apr": statement.excluded.net_apr,
+                    "opportunity_score": statement.excluded.opportunity_score,
+                    "payload": statement.excluded.payload,
+                },
+            )
         )
-    )
+
+
+async def save_market_snapshot(
+    session: AsyncSession,
+    snapshot: MarketSnapshot,
+    *,
+    instruments: bool = True,
+    tickers: bool = True,
+    funding: bool = True,
+    orderbooks: bool = True,
+) -> None:
+    """Persist one normalized snapshot in a single transaction."""
+
+    if instruments:
+        await upsert_instruments(session, snapshot.instruments)
+    if tickers:
+        await insert_tickers(session, snapshot.tickers)
+    if funding:
+        await insert_funding_snapshots(session, snapshot.funding)
+    await upsert_exchanges(session, snapshot)
+    if snapshot.funding_history:
+        await upsert_funding_history(
+            session,
+            [point for points in snapshot.funding_history.values() for point in points],
+        )
+    if orderbooks:
+        await insert_orderbooks(session, snapshot.orderbooks.values())
     await session.commit()
+
+
+async def save_opportunities(session: AsyncSession, opportunities: Iterable[Opportunity]) -> None:
+    await upsert_opportunities(session, opportunities)
+    await session.commit()
+
+
+async def prune_market_data(session: AsyncSession, older_than: datetime) -> dict[str, int]:
+    """Delete high-volume market rows older than the retention horizon."""
+
+    removed: dict[str, int] = {}
+    for name, table, column in (
+        ("tickers", TickerSnapshotRecord, TickerSnapshotRecord.timestamp),
+        ("funding_snapshots", FundingSnapshotRecord, FundingSnapshotRecord.timestamp),
+        ("orderbooks", OrderBookSnapshotRecord, OrderBookSnapshotRecord.timestamp),
+        ("opportunities", OpportunityRecord, OpportunityRecord.created_at),
+    ):
+        result = await session.execute(delete(table).where(column < older_than))
+        removed[name] = int(getattr(result, "rowcount", 0) or 0)
+    await session.commit()
+    return removed
 
 
 async def save_backtest_result(
@@ -262,86 +315,6 @@ async def save_backtest_result(
                 "monthly_returns": result.metrics.monthly_returns,
             },
             created_at=finished_at,
-        )
-    )
-    await session.commit()
-
-
-async def save_paper_position(session: AsyncSession, position: PaperPosition) -> None:
-    """Upsert paper position state and its complete PnL payload."""
-
-    values: dict[str, Any] = {
-        "position_id": position.id,
-        "opportunity_id": position.opportunity_id,
-        "state": str(position.state),
-        "asset": position.asset,
-        "capital": position.capital,
-        "opened_at": position.opened_at,
-        "closed_at": position.closed_at,
-        "payload": position.model_dump(mode="json"),
-    }
-    record = await session.scalar(
-        select(PaperPositionRecord).where(PaperPositionRecord.position_id == position.id)
-    )
-    if record is None:
-        session.add(PaperPositionRecord(**values))
-    else:
-        for field, value in values.items():
-            setattr(record, field, value)
-    for fill in (
-        position.leg_a,
-        position.leg_b,
-        position.close_leg_a,
-        position.close_leg_b,
-    ):
-        if fill is not None:
-            await save_paper_fill(session, fill, position.id)
-    await session.commit()
-
-
-async def save_paper_fill(
-    session: AsyncSession, fill: PaperFill, position_id: str | None = None
-) -> None:
-    values: dict[str, Any] = {
-        "fill_id": fill.fill_id,
-        "position_id": position_id,
-        "exchange": fill.exchange,
-        "symbol": fill.symbol,
-        "side": fill.side,
-        "filled_quantity": fill.filled_quantity,
-        "price": fill.price,
-        "fee": fill.fee,
-        "slippage": fill.slippage,
-        "status": str(fill.status),
-        "timestamp": fill.timestamp,
-        "payload": fill.model_dump(mode="json"),
-    }
-    record = await session.scalar(
-        select(PaperFillRecord).where(PaperFillRecord.fill_id == fill.fill_id)
-    )
-    if record is None:
-        session.add(PaperFillRecord(**values))
-    else:
-        for field, value in values.items():
-            setattr(record, field, value)
-
-
-async def save_paper_funding_payment(
-    session: AsyncSession,
-    position_id: str,
-    funding: FundingSnapshot,
-    notional: Decimal,
-    pnl: Decimal,
-) -> None:
-    session.add(
-        PaperFundingPaymentRecord(
-            position_id=position_id,
-            exchange=funding.exchange,
-            symbol=funding.symbol,
-            funding_timestamp=funding.timestamp,
-            funding_rate=funding.funding_rate,
-            notional=notional,
-            pnl=pnl,
         )
     )
     await session.commit()

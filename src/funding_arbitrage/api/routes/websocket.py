@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -39,7 +40,11 @@ async def opportunities_socket(websocket: WebSocket) -> None:
 @router.websocket("/ws/portfolio")
 async def portfolio_socket(websocket: WebSocket) -> None:
     await _stream(
-        websocket, lambda: websocket.app.state.runtime.portfolio.snapshot().model_dump(mode="json")
+        websocket,
+        lambda: {
+            series_id: account.snapshot(datetime.now(UTC)).model_dump(mode="json")
+            for series_id, account in websocket.app.state.runtime.accounts.items()
+        },
     )
 
 

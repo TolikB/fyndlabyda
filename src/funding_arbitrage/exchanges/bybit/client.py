@@ -12,17 +12,15 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import partial
 from typing import Any
 
 import httpx
 import websockets
 
-from funding_arbitrage.exchanges.base.exceptions import (
-    InvalidResponseError,
-    NetworkError,
-    RateLimitError,
-)
+from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError, NetworkError
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
+from funding_arbitrage.exchanges.base.http import parse_rows, rate_limited
 from funding_arbitrage.exchanges.base.models import (
     FundingHistoryPoint,
     FundingSnapshot,
@@ -36,6 +34,9 @@ from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
 from funding_arbitrage.market_data.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+# retCode values Bybit uses for request-frequency limits.
+_RATE_LIMIT_CODES = {10006, 10018}
 
 
 def _utc_from_ms(value: object, field: str = "timestamp") -> datetime:
@@ -73,6 +74,8 @@ class BybitPublicAdapter(ExchangeAdapter):
         self._limiter = RateLimiter(requests_per_second, burst)
         self._sleep = sleep
         self.max_reconnects = max_reconnects
+        # Linear symbols are shared by perpetuals and dated futures.
+        self._linear_types: dict[str, InstrumentType] = {}
 
     async def __aenter__(self) -> BybitPublicAdapter:
         await self._ensure_http()
@@ -97,19 +100,22 @@ class BybitPublicAdapter(ExchangeAdapter):
         try:
             response = await client.get(endpoint, params=params)
         except httpx.HTTPError as exc:
-            raise NetworkError(f"Bybit request failed: {exc}") from exc
-        if response.status_code == 429:
-            raise RateLimitError("Bybit HTTP rate limit")
+            raise NetworkError(f"Bybit request failed: {type(exc).__name__}: {exc}") from exc
+        if response.status_code in (403, 429):
+            # Bybit answers IP-level throttling with HTTP 403 "access too frequent".
+            raise rate_limited("Bybit", response, self._limiter)
         try:
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPStatusError, ValueError) as exc:
             raise InvalidResponseError(
-                f"invalid Bybit HTTP response: {response.text[:200]}"
+                f"invalid Bybit HTTP response: {response.status_code} {response.text[:200]}"
             ) from exc
         if not isinstance(payload, dict) or payload.get("retCode") != 0:
             code = payload.get("retCode") if isinstance(payload, dict) else "unknown"
             message = payload.get("retMsg") if isinstance(payload, dict) else "invalid JSON"
+            if code in _RATE_LIMIT_CODES:
+                raise rate_limited("Bybit", response, self._limiter)
             raise InvalidResponseError(f"Bybit retCode={code}: {message}")
         result = payload.get("result")
         if not isinstance(result, dict):
@@ -128,11 +134,24 @@ class BybitPublicAdapter(ExchangeAdapter):
                 rows = result.get("list")
                 if not isinstance(rows, list):
                     raise InvalidResponseError("Bybit instrument list is missing")
-                instruments.extend(self._parse_instrument(row, category) for row in rows)
+                instruments.extend(
+                    parse_rows(
+                        rows,
+                        partial(self._parse_instrument, category=category),
+                        logger=logger,
+                        venue=self.name,
+                        what=f"instruments:{category}",
+                    )
+                )
                 next_cursor = result.get("nextPageCursor")
                 if not isinstance(next_cursor, str) or not next_cursor:
                     break
                 cursor = next_cursor
+        self._linear_types = {
+            item.exchange_symbol: item.instrument_type
+            for item in instruments
+            if item.instrument_type is not InstrumentType.SPOT
+        }
         return instruments
 
     def _parse_instrument(self, row: object, category: str) -> NormalizedInstrument:
@@ -152,25 +171,28 @@ class BybitPublicAdapter(ExchangeAdapter):
                 instrument_type = InstrumentType.SPOT
                 step = lot_filter.get("basePrecision", lot_filter.get("qtyStep", "1"))
                 minimum = lot_filter.get("minOrderQty", "0")
+                min_notional = lot_filter.get("minOrderAmt")
                 settlement = quote
                 funding_interval = None
             elif "Futures" in contract_type:
                 instrument_type = InstrumentType.FUTURE
                 step = lot_filter["qtyStep"]
                 minimum = lot_filter["minOrderQty"]
+                min_notional = lot_filter.get("minNotionalValue")
                 settlement = str(row.get("settleCoin", quote))
                 funding_interval = None
             else:
                 instrument_type = InstrumentType.PERPETUAL
                 step = lot_filter["qtyStep"]
                 minimum = lot_filter["minOrderQty"]
+                min_notional = lot_filter.get("minNotionalValue")
                 settlement = str(row.get("settleCoin", quote))
                 funding_interval = (
-                    int(row["fundingInterval"]) // 60 if row.get("fundingInterval") else 8
+                    max(1, int(row["fundingInterval"]) // 60) if row.get("fundingInterval") else 8
                 )
             expiry = (
                 _utc_from_ms(row["deliveryTime"], "deliveryTime")
-                if row.get("deliveryTime")
+                if row.get("deliveryTime") not in (None, "", "0", 0)
                 else None
             )
             return NormalizedInstrument(
@@ -184,6 +206,7 @@ class BybitPublicAdapter(ExchangeAdapter):
                 tick_size=decimal(price_filter["tickSize"], "tickSize"),
                 step_size=decimal(step, "stepSize"),
                 min_order_size=decimal(minimum, "minOrderQty"),
+                min_notional=_optional_decimal(min_notional, "minNotional"),
                 funding_interval=funding_interval,
                 expiry=expiry,
                 is_active=status in {"Trading", "1"},
@@ -198,24 +221,44 @@ class BybitPublicAdapter(ExchangeAdapter):
             rows = result.get("list")
             if not isinstance(rows, list):
                 raise InvalidResponseError("Bybit ticker list is missing")
-            tickers.extend(self._parse_ticker(row, category, result.get("time")) for row in rows)
+            response_time = result.get("time")
+            tickers.extend(
+                parse_rows(
+                    rows,
+                    partial(self._parse_ticker, category=category, response_time=response_time),
+                    logger=logger,
+                    venue=self.name,
+                    what=f"tickers:{category}",
+                )
+            )
         return tickers
 
-    def _parse_ticker(self, row: object, category: str, response_time: object) -> Ticker:
+    def _parse_ticker(self, row: object, category: str, response_time: object) -> Ticker | None:
         if not isinstance(row, dict):
             raise InvalidResponseError("Bybit ticker row is not an object")
-        instrument_type = InstrumentType.SPOT if category == "spot" else InstrumentType.PERPETUAL
-        timestamp = _utc_from_ms(row.get("ts", response_time or "0"))
+        if row.get("lastPrice") in (None, ""):
+            return None
+        symbol = str(row["symbol"])
+        if category == "spot":
+            instrument_type = InstrumentType.SPOT
+        else:
+            instrument_type = self._linear_types.get(symbol, InstrumentType.PERPETUAL)
+        timestamp = _utc_from_ms(row.get("ts") or response_time or "0")
+        last_price = decimal(row["lastPrice"], "lastPrice")
+        if last_price <= 0:
+            return None
+        turnover = _optional_decimal(row.get("turnover24h"), "turnover24h")
+        volume = decimal(row.get("volume24h") or "0", "volume24h")
         return Ticker(
             exchange=self.name,
-            symbol=str(row["symbol"]),
+            symbol=symbol,
             instrument_type=instrument_type,
-            last_price=decimal(row["lastPrice"], "lastPrice"),
+            last_price=last_price,
             mark_price=_optional_decimal(row.get("markPrice"), "markPrice"),
             index_price=_optional_decimal(row.get("indexPrice"), "indexPrice"),
             best_bid=_optional_decimal(row.get("bid1Price"), "bid1Price"),
             best_ask=_optional_decimal(row.get("ask1Price"), "ask1Price"),
-            volume_24h=decimal(row.get("volume24h", "0"), "volume24h"),
+            volume_24h=turnover if turnover is not None else volume * last_price,
             open_interest=_optional_decimal(row.get("openInterest"), "openInterest"),
             timestamp=timestamp,
         )
@@ -225,34 +268,38 @@ class BybitPublicAdapter(ExchangeAdapter):
         rows = result.get("list")
         if not isinstance(rows, list):
             raise InvalidResponseError("Bybit funding ticker list is missing")
-        timestamp = _utc_from_ms(result.get("time", "0"))
-        snapshots: list[FundingSnapshot] = []
-        for row in rows:
-            if not isinstance(row, dict) or row.get("fundingRate") in (None, ""):
-                continue
-            interval_hour_value = row.get("fundingIntervalHour")
-            if interval_hour_value not in (None, ""):
-                interval_hours = decimal(interval_hour_value, "fundingIntervalHour")
-            else:
-                interval_minutes = int(row.get("fundingInterval", 480))
-                interval_hours = Decimal(interval_minutes) / Decimal("60")
-            snapshots.append(
-                FundingSnapshot(
-                    exchange=self.name,
-                    symbol=str(row["symbol"]),
-                    funding_rate=decimal(row["fundingRate"], "fundingRate"),
-                    funding_interval_hours=interval_hours,
-                    next_funding_time=(
-                        _utc_from_ms(row["nextFundingTime"], "nextFundingTime")
-                        if row.get("nextFundingTime")
-                        else None
-                    ),
-                    mark_price=_optional_decimal(row.get("markPrice"), "markPrice"),
-                    index_price=_optional_decimal(row.get("indexPrice"), "indexPrice"),
-                    timestamp=timestamp,
-                )
-            )
-        return snapshots
+        timestamp = _utc_from_ms(result.get("time") or "0")
+        return parse_rows(
+            rows,
+            lambda row: self._parse_funding(row, timestamp),
+            logger=logger,
+            venue=self.name,
+            what="funding",
+        )
+
+    def _parse_funding(self, row: object, timestamp: datetime) -> FundingSnapshot | None:
+        if not isinstance(row, dict) or row.get("fundingRate") in (None, ""):
+            return None
+        interval_hour_value = row.get("fundingIntervalHour")
+        if interval_hour_value not in (None, ""):
+            interval_hours = decimal(interval_hour_value, "fundingIntervalHour")
+        else:
+            interval_minutes = int(row.get("fundingInterval") or 480)
+            interval_hours = Decimal(interval_minutes) / Decimal("60")
+        return FundingSnapshot(
+            exchange=self.name,
+            symbol=str(row["symbol"]),
+            funding_rate=decimal(row["fundingRate"], "fundingRate"),
+            funding_interval_hours=interval_hours,
+            next_funding_time=(
+                _utc_from_ms(row["nextFundingTime"], "nextFundingTime")
+                if row.get("nextFundingTime") not in (None, "", "0")
+                else None
+            ),
+            mark_price=_optional_decimal(row.get("markPrice"), "markPrice"),
+            index_price=_optional_decimal(row.get("indexPrice"), "indexPrice"),
+            timestamp=timestamp,
+        )
 
     async def get_funding_history(
         self, symbol: str, start: datetime, end: datetime
@@ -283,10 +330,8 @@ class BybitPublicAdapter(ExchangeAdapter):
             if len(batch) < 200 or not timestamps:
                 break
             cursor_end = min(timestamps) - 1
-        return sorted(
-            {(point.funding_timestamp, point): point for point in points}.values(),
-            key=lambda p: p.funding_timestamp,
-        )
+        unique = {point.funding_timestamp: point for point in points}
+        return [unique[key] for key in sorted(unique)]
 
     def _parse_funding_history(self, row: object, symbol: str) -> FundingHistoryPoint:
         if not isinstance(row, dict):
@@ -303,8 +348,9 @@ class BybitPublicAdapter(ExchangeAdapter):
         self, symbol: str, depth: int, instrument_type: InstrumentType = InstrumentType.PERPETUAL
     ) -> OrderBook:
         category = "spot" if instrument_type is InstrumentType.SPOT else "linear"
+        limit = min(depth, 200) if category == "spot" else min(depth, 500)
         result = await self._request(
-            "/v5/market/orderbook", {"category": category, "symbol": symbol, "limit": depth}
+            "/v5/market/orderbook", {"category": category, "symbol": symbol, "limit": limit}
         )
         try:
             bids = tuple(
@@ -326,6 +372,7 @@ class BybitPublicAdapter(ExchangeAdapter):
                 asks=asks,
                 timestamp=_utc_from_ms(result["ts"]),
                 sequence=int(result["u"]) if result.get("u") is not None else None,
+                instrument_type=instrument_type,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidResponseError(f"invalid Bybit order book: {result!r}") from exc
@@ -364,9 +411,11 @@ class BybitPublicAdapter(ExchangeAdapter):
                 if isinstance(payload, dict) and payload.get("success") is False:
                     raise InvalidResponseError(f"Bybit WebSocket subscription failed: {payload}")
                 if isinstance(payload, dict) and payload.get("topic", "").startswith("tickers."):
-                    yield self._parse_ws_ticker(payload)
+                    ticker = self._parse_ws_ticker(payload)
+                    if ticker is not None:
+                        yield ticker
 
-    def _parse_ws_ticker(self, payload: object) -> Ticker:
+    def _parse_ws_ticker(self, payload: object) -> Ticker | None:
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise InvalidResponseError("invalid Bybit WebSocket ticker payload")
         data = payload["data"]

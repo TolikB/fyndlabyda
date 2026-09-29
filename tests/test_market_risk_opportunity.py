@@ -94,12 +94,8 @@ def test_opportunity_engine_finds_cross_exchange_funding_spread() -> None:
         ),
     ]
     opportunities = OpportunityEngine(
-        filter_config=OpportunityFilterConfig(
-            minimum_funding_samples=0, minimum_liquidity_score=0
-        )
-    ).scan(
-        MarketSnapshot(instruments, tickers, funding, {}, timestamp)
-    )
+        filter_config=OpportunityFilterConfig(minimum_funding_samples=0, minimum_liquidity_score=0)
+    ).scan(MarketSnapshot(instruments, tickers, funding, {}, timestamp))
     assert opportunities
     assert opportunities[0].strategy == "cross_exchange_funding"
     assert opportunities[0].size_quotes

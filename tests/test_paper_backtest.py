@@ -1,68 +1,40 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-
 from funding_arbitrage.backtest.engine import BacktestEngine
 from funding_arbitrage.backtest.events import FundingEvent, PositionEvent
-from funding_arbitrage.exchanges.base.models import (
-    InstrumentType,
-    OrderBook,
-    OrderBookLevel,
-    Ticker,
-)
-from funding_arbitrage.execution.paper import PaperTradingExecutor
+from funding_arbitrage.exchanges.base.models import InstrumentType
+from funding_arbitrage.execution.paper import PaperExecutionSimulator
 from funding_arbitrage.market_data.collector import MarketSnapshot
-from funding_arbitrage.opportunity.models import Opportunity, StrategyName
-from funding_arbitrage.portfolio.portfolio import PaperPortfolio
-from funding_arbitrage.portfolio.position import PositionState
+from funding_arbitrage.opportunity.models import FeeSchedule, Opportunity, StrategyName
+from funding_arbitrage.portfolio.portfolio import INVARIANT_TOLERANCE, PaperAccount
+from tests.builders import book, instrument, snapshot, ticker
+
+NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
 
-def make_snapshot() -> MarketSnapshot:
-    timestamp = datetime.now(UTC)
-    return MarketSnapshot(
-        instruments=[],
-        tickers=[
-            Ticker(
-                exchange="bybit",
-                symbol="BTCUSDT",
-                instrument_type=InstrumentType.PERPETUAL,
-                last_price=Decimal("100"),
-                timestamp=timestamp,
-            ),
-            Ticker(
-                exchange="gate",
-                symbol="BTC_USDT",
-                instrument_type=InstrumentType.PERPETUAL,
-                last_price=Decimal("100"),
-                timestamp=timestamp,
-            ),
+def perp_perp_market() -> MarketSnapshot:
+    return snapshot(
+        NOW,
+        [
+            instrument("bybit", "BTCUSDT", InstrumentType.PERPETUAL),
+            instrument("gate", "BTC_USDT", InstrumentType.PERPETUAL, step="0.0001"),
         ],
-        funding=[],
-        orderbooks={
-            ("bybit", "BTCUSDT"): OrderBook(
-                exchange="bybit",
-                symbol="BTCUSDT",
-                bids=(OrderBookLevel(price=Decimal("99"), quantity=Decimal("10")),),
-                asks=(OrderBookLevel(price=Decimal("101"), quantity=Decimal("10")),),
-                timestamp=timestamp,
-            ),
-            ("gate", "BTC_USDT"): OrderBook(
-                exchange="gate",
-                symbol="BTC_USDT",
-                bids=(OrderBookLevel(price=Decimal("99"), quantity=Decimal("10")),),
-                asks=(OrderBookLevel(price=Decimal("101"), quantity=Decimal("10")),),
-                timestamp=timestamp,
-            ),
-        },
-        captured_at=timestamp,
+        [
+            ticker("bybit", "BTCUSDT", InstrumentType.PERPETUAL, "100", NOW),
+            ticker("gate", "BTC_USDT", InstrumentType.PERPETUAL, "100", NOW),
+        ],
+        [],
+        [
+            book("bybit", "BTCUSDT", InstrumentType.PERPETUAL, "100", NOW),
+            book("gate", "BTC_USDT", InstrumentType.PERPETUAL, "100", NOW),
+        ],
     )
 
 
-@pytest.mark.asyncio
-async def test_paper_executor_supports_two_leg_open_and_close() -> None:
+async def test_cross_venue_position_locks_collateral_on_both_legs() -> None:
     opportunity = Opportunity(
-        strategy=StrategyName.PERP_PERP,
+        strategy=StrategyName.CROSS_EXCHANGE_FUNDING,
         asset="BTC",
         venue_a="bybit",
         venue_b="gate",
@@ -70,8 +42,8 @@ async def test_paper_executor_supports_two_leg_open_and_close() -> None:
         symbol_b="BTC_USDT",
         leg_a_type="PERPETUAL",
         leg_b_type="PERPETUAL",
-        leg_a_side="BUY",
-        leg_b_side="SELL",
+        leg_a_side="SELL",
+        leg_b_side="BUY",
         price_a=Decimal("100"),
         price_b=Decimal("100"),
         gross_edge=Decimal("0.01"),
@@ -81,12 +53,31 @@ async def test_paper_executor_supports_two_leg_open_and_close() -> None:
         available_liquidity=Decimal("10000"),
         risk_score=Decimal("20"),
     )
-    executor = PaperTradingExecutor(fee_rate=Decimal("0.001"))
-    position = await executor.open(opportunity, Decimal("500"), make_snapshot())
-    assert position.state is PositionState.OPEN
-    closed = await executor.close(position, make_snapshot())
-    assert closed.state is PositionState.CLOSED
-    assert closed.close_leg_a is not None
+    fees = {
+        "bybit": FeeSchedule(maker_fee=Decimal("0"), taker_fee=Decimal("0.00055")),
+        "gate": FeeSchedule(maker_fee=Decimal("0"), taker_fee=Decimal("0.0005")),
+    }
+    simulator = PaperExecutionSimulator(fees)
+    account = PaperAccount("s", Decimal("1000"))
+    market = perp_perp_market()
+    position, fills = simulator.open(
+        opportunity,
+        Decimal("50"),
+        market,
+        NOW,
+        series_id="s",
+        perp_leverage=Decimal("2"),
+    )
+    account.open_position(position, fills)
+    opened = account.snapshot(NOW)
+    # Both legs post notional / leverage; the old engine counted one leg only.
+    assert opened.locked_capital == sum((fill.notional for fill in fills), Decimal("0")) / 2
+    entry_fees = sum((fill.fee for fill in fills), Decimal("0"))
+    assert opened.equity == Decimal("1000") - entry_fees + opened.unrealized_pnl
+    closed_fills = simulator.close(position, market, NOW)
+    account.close_position(position, closed_fills, "test", NOW)
+    assert account.snapshot(NOW).invariant_diff <= INVARIANT_TOLERANCE
+    assert account.snapshot(NOW).locked_capital == 0
 
 
 def test_backtest_is_deterministic_and_reports_net_profit() -> None:
@@ -107,9 +98,3 @@ def test_backtest_is_deterministic_and_reports_net_profit() -> None:
     assert first.config_hash == second.config_hash
     assert first.metrics.net_profit_after_costs == Decimal("15")
     assert first.metrics.funding_income == Decimal("10")
-
-
-def test_portfolio_keeps_reserve_separate_from_venue_balances() -> None:
-    portfolio = PaperPortfolio(Decimal("15000"), ("bybit", "gate"), Decimal("20"))
-    assert portfolio.balances["Reserve"] == Decimal("3000")
-    assert portfolio.balances["bybit"] + portfolio.balances["gate"] == Decimal("12000")

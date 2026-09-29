@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -18,6 +19,8 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+LEGACY_SERIES_ID = "legacy"
 
 
 class Base(DeclarativeBase):
@@ -121,7 +124,7 @@ class ExchangeRecord(Base):
 
 
 class OrderBookSnapshotRecord(Base):
-    """Depth snapshot retained for conservative execution analysis."""
+    """Depth snapshot retained as evidence for simulated fills."""
 
     __tablename__ = "orderbook_snapshots"
     __table_args__ = (
@@ -131,14 +134,16 @@ class OrderBookSnapshotRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     exchange: Mapped[str] = mapped_column(String(32), index=True)
     symbol: Mapped[str] = mapped_column(String(128), index=True)
+    instrument_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Venue update ids and OKX millisecond timestamps exceed 32 bits.
+    sequence: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     bids: Mapped[list[list[str]]] = mapped_column(JSON)
     asks: Mapped[list[list[str]]] = mapped_column(JSON)
 
 
 class OpportunityRecord(Base):
-    """Immutable opportunity history, including opportunities not paper-traded."""
+    """Opportunity history, including opportunities not paper-traded."""
 
     __tablename__ = "opportunities"
     __table_args__ = (
@@ -161,6 +166,21 @@ class OpportunityRecord(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class PaperSeriesRecord(Base):
+    """One independently accounted paper series (candidate, baseline, legacy)."""
+
+    __tablename__ = "paper_series"
+
+    series_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(32), index=True)
+    simulator_version: Mapped[str] = mapped_column(String(32))
+    config_hash: Mapped[str] = mapped_column(String(64))
+    config: Mapped[dict[str, Any]] = mapped_column(JSON)
+    initial_balance: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class PaperPositionRecord(Base):
     """Paper position state and full PnL breakdown."""
 
@@ -168,12 +188,21 @@ class PaperPositionRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     position_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    series_id: Mapped[str] = mapped_column(String(64), index=True, default=LEGACY_SERIES_ID)
     opportunity_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    strategy: Mapped[str | None] = mapped_column(String(32), nullable=True)
     state: Mapped[str] = mapped_column(String(16), index=True)
     asset: Mapped[str] = mapped_column(String(32), index=True)
     capital: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    exposure: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    booked_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    funding_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    fees: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    slippage: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
@@ -184,12 +213,15 @@ class PaperFillRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     fill_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    series_id: Mapped[str] = mapped_column(String(64), index=True, default=LEGACY_SERIES_ID)
     position_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    purpose: Mapped[str | None] = mapped_column(String(8), nullable=True)
     exchange: Mapped[str] = mapped_column(String(32), index=True)
     symbol: Mapped[str] = mapped_column(String(128), index=True)
     side: Mapped[str] = mapped_column(String(8))
     filled_quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    notional: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     fee: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     slippage: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     status: Mapped[str] = mapped_column(String(16))
@@ -211,29 +243,98 @@ class PaperFundingPaymentRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    series_id: Mapped[str] = mapped_column(String(64), index=True, default=LEGACY_SERIES_ID)
     position_id: Mapped[str] = mapped_column(String(64), index=True)
+    leg_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     exchange: Mapped[str] = mapped_column(String(32), index=True)
     symbol: Mapped[str] = mapped_column(String(128), index=True)
     funding_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     funding_rate: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    mark_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     notional: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     pnl: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    rate_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    price_source: Mapped[str | None] = mapped_column(String(24), nullable=True)
+
+
+class PaperLedgerEntryRecord(Base):
+    """Append-only cash movements; the verifiable source of every paper balance."""
+
+    __tablename__ = "paper_ledger_entries"
+    __table_args__ = (
+        UniqueConstraint("series_id", "reference", name="uq_paper_ledger_series_reference"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    series_id: Mapped[str] = mapped_column(String(64), index=True)
+    position_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    entry_type: Mapped[str] = mapped_column(String(24), index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    reference: Mapped[str] = mapped_column(String(160))
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class PortfolioSnapshotRecord(Base):
-    """Point-in-time virtual equity, balances, and PnL totals."""
+    """Point-in-time virtual equity, balances, and PnL totals of one series."""
 
     __tablename__ = "portfolio_snapshots"
+    __table_args__ = (Index("ix_portfolio_snapshots_series_timestamp", "series_id", "timestamp"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    series_id: Mapped[str] = mapped_column(String(64), default=LEGACY_SERIES_ID)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     equity: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     cash: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     locked_capital: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    unrealized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     total_pnl: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     funding_pnl: Mapped[Decimal] = mapped_column(Numeric(38, 18))
     fees: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    slippage: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    exposure: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    open_positions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    invariant_diff: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     balances: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class PaperCycleRecord(Base):
+    """One runner cycle; gaps and errors between rows are the data-quality record."""
+
+    __tablename__ = "paper_cycles"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    stage: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    venues_ok: Mapped[list[str]] = mapped_column(JSON)
+    venues_failed: Mapped[list[str]] = mapped_column(JSON)
+    opportunities: Mapped[int] = mapped_column(Integer, default=0)
+    books_fetched: Mapped[int] = mapped_column(Integer, default=0)
+    autotrade: Mapped[bool] = mapped_column(Boolean, default=False)
+    incidents: Mapped[list[str]] = mapped_column(JSON)
+
+
+class PaperRunnerSessionRecord(Base):
+    """Runner process lifetime, for start/stop notices and crash detection."""
+
+    __tablename__ = "paper_runner_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    clean_stop: Mapped[bool] = mapped_column(Boolean, default=False)
+    simulator_version: Mapped[str] = mapped_column(String(32))
+    release_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    autotrade: Mapped[bool] = mapped_column(Boolean, default=False)
+    series: Mapped[list[str]] = mapped_column(JSON)
 
 
 class BacktestRunRecord(Base):
@@ -265,12 +366,16 @@ class BacktestResultRecord(Base):
 
 
 class TelegramDailyReportRecord(Base):
-    """Idempotency ledger for one Telegram report per local calendar day."""
+    """Idempotency ledger for one Telegram report per series and local calendar day."""
 
     __tablename__ = "telegram_daily_reports"
+    __table_args__ = (
+        UniqueConstraint("series_id", "report_date", name="uq_telegram_series_report_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    report_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    series_id: Mapped[str] = mapped_column(String(64), index=True, default=LEGACY_SERIES_ID)
+    report_date: Mapped[date] = mapped_column(Date, index=True)
     status: Mapped[str] = mapped_column(String(24), index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     message: Mapped[str] = mapped_column(String(4096))

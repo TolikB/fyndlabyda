@@ -1,0 +1,56 @@
+# Paper series run side by side on the same market snapshots.
+#
+# * Each series is a separate virtual account with its own ledger; 1000 USDT is the
+#   TOTAL starting balance of a series, not a per-exchange balance.
+# * "label" is the durable identity of a statistic. Changing any setting below (or a
+#   simulator upgrade) requires a new label; the service refuses to continue a series
+#   under different settings so results are never mixed.
+# * Exposure = hedged size per position (per-leg notional at entry). Collateral is the
+#   spot notional plus perp notional / perp_leverage, so a 50 USDT spot/perp position
+#   locks about 100 USDT at leverage 1.
+primary_series: candidate
+
+series:
+  - name: candidate
+    label: candidate-sim2-2026q4
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "100"
+    max_open_positions: 2
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0.0002"   # 0.02% per 8h in the position's favour
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "8"
+      max_hold_hours: "72"
+      exit_funding_rate_8h: "0.00005"
+      exit_confirmations: 3
+
+  - name: baseline
+    label: baseline-sim2-2026q4
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0"        # legacy entry rule: net APR only
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "8"
+      max_hold_hours: "72"
+      exit_funding_rate_8h: "0.00005"
+      exit_confirmations: 3
