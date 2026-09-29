@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from funding_arbitrage.portfolio.ledger import LedgerEntryType, LedgerTotals
 from funding_arbitrage.portfolio.portfolio import AccountSnapshot, PaperAccount
 from funding_arbitrage.portfolio.position import PaperPosition, PositionState
+from funding_arbitrage.services.series import changed_keys
 
 from ..models import (
     PaperCycleRecord,
@@ -94,11 +95,13 @@ async def ensure_series(
     if record.status == "legacy":
         raise SeriesConfigMismatch(f"series '{series_id}' is reserved for legacy data")
     if record.config_hash != config_hash or record.simulator_version != simulator_version:
+        changes = changed_keys(record.config, config)[:10]
         raise SeriesConfigMismatch(
             f"series '{series_id}' was started with simulator {record.simulator_version} and "
             f"config {record.config_hash[:12]}; the current settings differ "
-            f"(simulator {simulator_version}, config {config_hash[:12]}). Give the series a "
-            "new label to start a separate statistic instead of mixing results."
+            f"(simulator {simulator_version}, config {config_hash[:12]}; changed: "
+            f"{', '.join(changes) or 'unknown'}). Give the series a new label to start a "
+            "separate statistic instead of mixing results."
         )
     return False
 

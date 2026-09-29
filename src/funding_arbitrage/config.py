@@ -157,6 +157,10 @@ class Settings(BaseSettings):
     scanner_minimum_duration_seconds: int = Field(
         default=30, alias="SCANNER_MINIMUM_DURATION_SECONDS"
     )
+    # Horizon over which one day of funding must amortize the round-trip costs.
+    scanner_expected_holding_hours: Decimal = Field(
+        default=Decimal("24"), alias="SCANNER_EXPECTED_HOLDING_HOURS"
+    )
     scanner_allow_short_spot: bool = Field(default=False, alias="SCANNER_ALLOW_SHORT_SPOT")
     scanner_max_cross_price_deviation: Decimal = Field(
         default=Decimal("0.015"), alias="SCANNER_MAX_CROSS_PRICE_DEVIATION"
@@ -318,7 +322,8 @@ def get_settings() -> Settings:
 def _validate_safe_values(settings: Settings) -> None:
     if settings.run_mode == "paper_test" and settings.execution_mode != "paper":
         raise ValueError("paper_test requires EXECUTION_MODE=paper")
-    positive = {
+    positive: dict[str, Decimal | float | int] = {
+        "SCANNER_EXPECTED_HOLDING_HOURS": settings.scanner_expected_holding_hours,
         "PAPER_LOOP_INTERVAL_SECONDS": settings.paper_loop_interval_seconds,
         "PAPER_BOOK_DEPTH": settings.paper_book_depth,
         "PAPER_MAX_BOOK_AGE_SECONDS": settings.paper_max_book_age_seconds,

@@ -17,7 +17,13 @@ from .models import Base
 
 
 def create_database(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True, future=True)
+    connect_args: dict[str, float] = {}
+    if "+asyncpg" in settings.database_url:
+        # A hung database must fail the cycle (and be retried), not freeze the runner.
+        connect_args = {"timeout": 10, "command_timeout": 120}
+    engine = create_async_engine(
+        settings.database_url, pool_pre_ping=True, connect_args=connect_args
+    )
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 

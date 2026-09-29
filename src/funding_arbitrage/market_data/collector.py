@@ -297,8 +297,13 @@ class MarketDataCollector:
         cached = self._history.get(key)
         return cached is not None and (now or self.clock()) - cached[0] < self.history_ttl
 
-    async def ensure_funding_history(self, keys: Iterable[FundingKey], budget: int) -> int:
-        """Load 30-day history for keys lacking a fresh copy; at most ``budget`` requests."""
+    async def ensure_funding_history(
+        self, keys: Iterable[FundingKey], budget: int
+    ) -> list[FundingKey]:
+        """Load 30-day history for keys lacking a fresh copy; at most ``budget`` requests.
+
+        Returns the keys whose history was (re)loaded.
+        """
 
         now = self.clock()
         pending = [
@@ -307,12 +312,10 @@ class MarketDataCollector:
             if key[0] in self.adapters and not self.history_fresh(key, now)
         ][: max(0, budget)]
         if not pending:
-            return 0
+            return []
         start = now - timedelta(days=self.history_days)
-        results = await asyncio.gather(
-            *(self._load_history(key, start, now) for key in pending), return_exceptions=False
-        )
-        return sum(1 for ok in results if ok)
+        results = await asyncio.gather(*(self._load_history(key, start, now) for key in pending))
+        return [key for key, ok in zip(pending, results, strict=True) if ok]
 
     async def _load_history(self, key: FundingKey, start: datetime, end: datetime) -> bool:
         exchange, symbol = key

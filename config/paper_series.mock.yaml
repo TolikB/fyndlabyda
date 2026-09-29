@@ -1,0 +1,33 @@
+# Offline mock profile: same two series with short holds so a local run shows
+# openings, funding settlements, and closes within minutes. Never use for statistics.
+primary_series: candidate
+
+series:
+  - name: candidate
+    label: candidate-mock
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "100"
+    max_open_positions: 2
+    entry:
+      min_funding_rate_8h: "0.0002"
+      min_funding_samples: 5
+    exit:
+      min_hold_hours: "0"
+      max_hold_hours: "0.2"
+      exit_confirmations: 1
+
+  - name: baseline
+    label: baseline-mock
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 4
+    entry:
+      min_funding_rate_8h: "0"
+      min_funding_samples: 5
+    exit:
+      min_hold_hours: "0"
+      max_hold_hours: "0.2"
+      exit_confirmations: 1

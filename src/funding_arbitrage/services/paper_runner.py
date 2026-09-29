@@ -89,7 +89,12 @@ from funding_arbitrage.services.daily_report import (
 )
 from funding_arbitrage.services.funding_settlement import FundingSettler
 from funding_arbitrage.services.runtime import RuntimeState
-from funding_arbitrage.services.series import PaperSeriesFile, SeriesConfig, load_series_file
+from funding_arbitrage.services.series import (
+    PaperSeriesFile,
+    SeriesConfig,
+    load_series_file,
+    simulation_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +225,7 @@ class PaperTestRunner:
                 "another paper runner already writes to this database; refusing to start"
             )
         now = self.clock()
+        context = simulation_context(self.settings)
         async with self.session_factory() as session:
             for config in self.series_file.series:
                 await ensure_series(
@@ -227,8 +233,8 @@ class PaperTestRunner:
                     series_id=config.label,
                     name=config.name,
                     simulator_version=SIMULATOR_VERSION,
-                    config_hash=config.config_hash(SIMULATOR_VERSION),
-                    config=config.model_dump(mode="json"),
+                    config_hash=config.config_hash(SIMULATOR_VERSION, context),
+                    config=config.identity(SIMULATOR_VERSION, context),
                     initial_balance=config.initial_balance_usdt,
                     now=now,
                 )
@@ -726,7 +732,7 @@ class PaperTestRunner:
         snapshot: MarketSnapshot,
         opportunities: list[Opportunity],
         evidence: list[OrderBook],
-        fetched_history: int,
+        fetched_history: list[FundingKey],
     ) -> None:
         settings = self.settings
         refreshed = self.collector.instrument_refreshes()
@@ -764,8 +770,8 @@ class PaperTestRunner:
                         session,
                         [
                             point
-                            for points in snapshot.funding_history.values()
-                            for point in points[-200:]
+                            for key in fetched_history
+                            for point in snapshot.funding_history.get(key, [])
                         ],
                     )
                 if evidence:

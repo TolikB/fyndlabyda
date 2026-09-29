@@ -54,6 +54,7 @@ class RuntimeState:
             cost_engine=CostEngine(fees=settings.fee_schedules),
             filter_config=filter_config,
             strategies=strategies,
+            holding_hours=settings.scanner_expected_holding_hours,
             max_ticker_age_seconds=settings.market_data_stale_seconds,
             max_funding_age_seconds=settings.market_funding_stale_seconds,
             allow_short_spot=settings.scanner_allow_short_spot,

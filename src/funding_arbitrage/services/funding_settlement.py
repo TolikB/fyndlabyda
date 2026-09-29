@@ -58,9 +58,15 @@ class FundingSettler:
                 continue
             leg.funding_interval_hours = funding.funding_interval_hours
             upcoming = funding.next_funding_time
-            if upcoming is None or (
-                leg.last_funding_time is not None and upcoming <= leg.last_funding_time
+            if (
+                upcoming is None
+                or upcoming <= position.opened_at
+                or (leg.last_funding_time is not None and upcoming <= leg.last_funding_time)
             ):
+                continue
+            if leg.next_funding_time is None and upcoming <= now:
+                # A feed still showing a passed settlement is not a new one to wait for;
+                # past events are found by the history poll instead.
                 continue
             # Until the awaited settlement passes, the live feed defines it; afterwards
             # it stays frozen until the payment is booked.
@@ -182,6 +188,9 @@ class FundingSettler:
                     "funding_timestamp": expected,
                 },
             )
+            # Stop waiting (the position may exit again); a late history record is still
+            # booked by the next poll because it is newer than the last settled event.
+            leg.next_funding_time = None
             return [f"funding_event_unresolved:{leg.exchange}:{leg.symbol}"]
         return []
 

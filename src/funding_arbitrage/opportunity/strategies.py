@@ -222,6 +222,7 @@ def scan_spot_perp(snapshot: MarketSnapshot, context: ScanContext) -> list[Oppor
             context.min_net_apr
         ):
             continue
+        gross_edge = gross_daily * context.holding_hours / Decimal("24")
         spot_ticker = _fresh_ticker(
             snapshot, exchange, spot.exchange_symbol, InstrumentType.SPOT, context
         )
@@ -263,7 +264,7 @@ def scan_spot_perp(snapshot: MarketSnapshot, context: ScanContext) -> list[Oppor
             perp_side.value,
             spot_ticker.last_price,
             perp_ticker.last_price,
-            gross_daily,
+            gross_edge,
             costs,
             context.holding_hours,
             min(_liquidity(spot_ticker, spot_book), _liquidity(perp_ticker, perp_book)),
@@ -342,6 +343,7 @@ def scan_cross_exchange_funding(
                     context.min_net_apr
                 ):
                     continue
+                gross_edge = gross_daily * context.holding_hours / Decimal("24")
                 deviation = high_ticker.reference_price / low_ticker.reference_price - Decimal("1")
                 if abs(deviation) > context.max_cross_price_deviation:
                     # Same ticker, different token, or a broken feed.
@@ -381,7 +383,7 @@ def scan_cross_exchange_funding(
                     OrderSide.BUY.value,
                     high_ticker.last_price,
                     low_ticker.last_price,
-                    gross_daily,
+                    gross_edge,
                     costs,
                     context.holding_hours,
                     min(_liquidity(high_ticker, high_book), _liquidity(low_ticker, low_book)),

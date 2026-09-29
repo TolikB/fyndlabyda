@@ -226,8 +226,15 @@ async def test_changed_settings_need_a_new_series_label(
     await runner.start()
     await runner.shutdown()
     changed = make_runner(database, clock, series_file(candidate_min_rate="0.0003"))
-    with pytest.raises(SeriesConfigMismatch):
+    with pytest.raises(SeriesConfigMismatch) as error:
         await changed.start()
+    assert "series.entry.min_funding_rate_8h" in str(error.value)
+
+    # Global settings that change PnL (fees here) are part of the identity too.
+    new_fees = make_runner(database, clock, series_file(), bybit_taker_fee=Decimal("0.0006"))
+    with pytest.raises(SeriesConfigMismatch) as error:
+        await new_fees.start()
+    assert "context.fees.bybit.taker_fee" in str(error.value)
 
 
 async def test_observe_mode_collects_without_positions(

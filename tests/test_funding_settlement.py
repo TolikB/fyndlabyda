@@ -165,3 +165,48 @@ async def test_history_outage_is_reported_not_guessed() -> None:
     assert incidents == ["funding_history_unavailable:bybit:BTCUSDT"]
     assert account.pending_funding == []
     assert position.funding_due(now)
+
+
+async def test_position_opened_right_after_a_settlement_does_not_wait_for_it() -> None:
+    simulator = PaperExecutionSimulator(
+        {"bybit": FeeSchedule(maker_fee=D("0"), taker_fee=D("0.0005"))}
+    )
+    account = PaperAccount("candidate", D("1000"))
+    opened = T1 + timedelta(seconds=2)
+    # The feed has not rolled its next funding time yet.
+    market = spot_perp_market(opened, next_time=T1)
+    position, fills = simulator.open(
+        spot_perp_opportunity(), D("50"), market, opened, series_id="candidate"
+    )
+    account.open_position(position, fills)
+    settler = FundingSettler(FakeHistory([history_point("bybit", "BTCUSDT", "0.0004", T1)]))
+    later = opened + timedelta(seconds=20)
+    stale = spot_perp_market(later, next_time=T1)
+    settler.observe(position, stale, later)
+    await settler.settle(account, position, stale, later)
+    assert not position.funding_due(later)
+    assert account.pending_funding == []  # T1 happened before the position existed
+    rolled = spot_perp_market(later, next_time=T2)
+    settler.observe(position, rolled, later)
+    assert position.legs[1].next_funding_time == T2
+
+
+async def test_unresolved_settlement_stops_blocking_the_exit_after_give_up() -> None:
+    account, position = opened_account()
+    settler = FundingSettler(FakeHistory([]), grace_seconds=900, give_up_seconds=3600)
+    early = T1 + timedelta(minutes=1)
+    market = spot_perp_market(early, next_time=T1)
+    settler.observe(position, market, early)
+    await settler.settle(account, position, market, early)
+    assert position.funding_due(early)
+
+    late = T1 + timedelta(hours=1, minutes=1)
+    market = spot_perp_market(late, next_time=T1)
+    settler.observe(position, market, late)
+    incidents = await settler.settle(account, position, market, late)
+    assert incidents == ["funding_event_unresolved:bybit:BTCUSDT"]
+    assert not position.funding_due(late)
+    assert account.pending_funding == []
+    # The stale feed value is not re-adopted, so the incident is not repeated.
+    settler.observe(position, market, late + timedelta(seconds=15))
+    assert position.legs[1].next_funding_time is None

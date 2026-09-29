@@ -250,7 +250,13 @@ class PaperExecutionSimulator:
                     collateral=fill.notional / leverage,
                     entry_fee=fill.fee,
                     entry_slippage=fill.slippage,
-                    next_funding_time=funding.next_funding_time if funding else None,
+                    next_funding_time=(
+                        funding.next_funding_time
+                        if funding is not None
+                        and funding.next_funding_time is not None
+                        and funding.next_funding_time > now
+                        else None
+                    ),
                     funding_interval_hours=funding.funding_interval_hours if funding else None,
                     mark_price=ticker.reference_price if ticker else fill.mid_price,
                     mark_time=now,

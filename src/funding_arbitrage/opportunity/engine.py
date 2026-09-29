@@ -32,6 +32,7 @@ class OpportunityEngine:
         ),
         *,
         strategies: frozenset[StrategyName] | None = None,
+        holding_hours: Decimal = Decimal("24"),
         max_ticker_age_seconds: float = 60.0,
         max_funding_age_seconds: float = 900.0,
         allow_short_spot: bool = False,
@@ -49,6 +50,9 @@ class OpportunityEngine:
                 StrategyName.FUTURES_BASIS,
             }
         )
+        if holding_hours <= 0:
+            raise ValueError("holding_hours must be positive")
+        self.holding_hours = holding_hours
         self.max_ticker_age_seconds = max_ticker_age_seconds
         self.max_funding_age_seconds = max_funding_age_seconds
         self.allow_short_spot = allow_short_spot
@@ -61,6 +65,7 @@ class OpportunityEngine:
             now=now,
             cost_engine=self.cost_engine,
             sizes=self.size_grid,
+            holding_hours=self.holding_hours,
             max_ticker_age_seconds=self.max_ticker_age_seconds,
             max_funding_age_seconds=self.max_funding_age_seconds,
             min_net_apr=self.filter_config.minimum_net_apr,

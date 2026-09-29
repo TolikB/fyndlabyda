@@ -6,13 +6,16 @@ import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from funding_arbitrage.opportunity.filters import OpportunityFilterConfig
 from funding_arbitrage.opportunity.models import StrategyName
+
+if TYPE_CHECKING:
+    from funding_arbitrage.config import Settings
 
 TRADABLE_STRATEGIES = frozenset({StrategyName.SPOT_PERP, StrategyName.CROSS_EXCHANGE_FUNDING})
 
@@ -85,10 +88,18 @@ class SeriesConfig(BaseModel):
     def minimum_notional(self) -> Decimal:
         return self.min_position_notional_usdt or self.position_notional_usdt / Decimal("2")
 
-    def config_hash(self, simulator_version: str) -> str:
+    def identity(self, simulator_version: str, context: dict[str, Any]) -> dict[str, Any]:
+        """Everything that shapes this series' simulated results."""
+
+        return {
+            "simulator_version": simulator_version,
+            "series": self.model_dump(mode="json"),
+            "context": context,
+        }
+
+    def config_hash(self, simulator_version: str, context: dict[str, Any] | None = None) -> str:
         payload = json.dumps(
-            {"simulator_version": simulator_version, "series": self.model_dump(mode="json")},
-            sort_keys=True,
+            self.identity(simulator_version, context or {}), sort_keys=True, default=str
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
@@ -142,3 +153,42 @@ class PaperSeriesFile(BaseModel):
 def load_series_file(path: str | Path) -> PaperSeriesFile:
     raw: Any = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     return PaperSeriesFile.model_validate(raw)
+
+
+def simulation_context(settings: Settings) -> dict[str, Any]:
+    """Global settings that change simulated results; part of every series identity.
+
+    Fees, venues, confirmation, and fill rules affect PnL as much as the series'
+    own thresholds, so changing any of them requires a new series label.
+    """
+
+    return {
+        "market_data_mode": settings.market_data_mode,
+        "enabled_venues": sorted(settings.enabled_venue_values),
+        "fees": {
+            venue: schedule.model_dump(mode="json")
+            for venue, schedule in sorted(settings.fee_schedules.items())
+        },
+        "confirmation_seconds": settings.paper_confirmation_seconds,
+        "expected_holding_hours": str(settings.scanner_expected_holding_hours),
+        "book_depth": settings.paper_book_depth,
+        "max_book_age_seconds": settings.paper_max_book_age_seconds,
+        "max_fill_slippage_percent": str(settings.paper_max_fill_slippage_percent),
+        "market_data_stale_seconds": settings.market_data_stale_seconds,
+        "funding_stale_seconds": settings.market_funding_stale_seconds,
+        "allow_short_spot": settings.scanner_allow_short_spot,
+        "max_cross_price_deviation": str(settings.scanner_max_cross_price_deviation),
+        "max_basis": str(settings.scanner_max_basis),
+        "equivalent_quotes": sorted(settings.equivalent_quote_values),
+    }
+
+
+def changed_keys(old: Any, new: Any, prefix: str = "") -> list[str]:
+    """Dotted paths whose values differ between two identity documents."""
+
+    if isinstance(old, dict) and isinstance(new, dict):
+        changes: list[str] = []
+        for key in sorted(set(old) | set(new)):
+            changes.extend(changed_keys(old.get(key), new.get(key), f"{prefix}{key}."))
+        return changes
+    return [] if old == new else [prefix.rstrip(".") or "<root>"]

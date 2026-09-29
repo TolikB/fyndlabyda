@@ -1,68 +1,93 @@
 <!doctype html>
-<html lang="en">
+<html lang="uk">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Funding Arbitrage Research</title>
+  <title>Funding Paper Bot</title>
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; }
     body { margin: 0; background: #111827; color: #e5e7eb; }
-    main { max-width: 1200px; margin: auto; padding: 24px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    main { max-width: 1200px; margin: auto; padding: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
     .card { background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 16px; }
     .label { color: #9ca3af; font-size: 12px; text-transform: uppercase; }
-    .value { font-size: 24px; margin-top: 6px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-    th, td { text-align: left; padding: 9px; border-bottom: 1px solid #374151; }
+    .value { font-size: 22px; margin: 4px 0 10px; }
+    .row { display: flex; justify-content: space-between; font-size: 14px; padding: 2px 0; }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #374151; white-space: nowrap; }
     th { color: #9ca3af; font-size: 12px; }
     .status { margin: 12px 0; color: #93c5fd; }
+    .ok { color: #34d399; } .bad { color: #f87171; } .warn { color: #fbbf24; }
   </style>
 </head>
 <body>
 <main>
-  <h1>Funding Arbitrage Research</h1>
-  <div id="status" class="status">Loading read-only state…</div>
-  <section class="grid">
-    <div class="card"><div class="label">Equity</div><div id="equity" class="value">—</div></div>
-    <div class="card"><div class="label">Cash</div><div id="cash" class="value">—</div></div>
-    <div class="card"><div class="label">Locked capital</div><div id="locked" class="value">—</div></div>
-    <div class="card"><div class="label">Opportunities</div><div id="count" class="value">—</div></div>
-    <div class="card"><div class="label">Paper funding PnL</div><div id="funding-pnl" class="value">—</div></div>
-    <div class="card"><div class="label">Paper fees</div><div id="fees" class="value">—</div></div>
-  </section>
-  <h2>Ranked opportunities</h2>
-  <table>
-    <thead><tr><th>Strategy</th><th>Asset</th><th>Venues</th><th>Net APR</th><th>Score</th><th>Status</th></tr></thead>
+  <h1>Funding paper bot</h1>
+  <div id="status" class="status">Завантаження…</div>
+  <section id="series" class="grid"></section>
+  <h2>Біржі</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Біржа</th><th>Статус</th><th>Останній цикл</th><th>Затримка, мс</th><th>Помилка</th></tr></thead>
+    <tbody id="venues"></tbody>
+  </table></div>
+  <h2>Можливості (підтверджені першими)</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Стратегія</th><th>Актив</th><th>Біржі</th><th>Funding / 8 год</th><th>Net APR</th><th>Score</th><th>Статус</th></tr></thead>
     <tbody id="opportunities"></tbody>
-  </table>
+  </table></div>
 </main>
 <script>
-  const money = value => Number(value || 0).toLocaleString(undefined, {maximumFractionDigits: 2});
+  const money = value => Number(value || 0).toLocaleString('uk-UA', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const pct = value => (Number(value || 0) * 100).toFixed(3) + '%';
+  const text = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  async function getJson(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${url}: ${response.status}`);
+    return response.json();
+  }
+  function seriesCard(item) {
+    const pnlClass = Number(item.total_pnl) >= 0 ? 'ok' : 'bad';
+    const invariantClass = Number(item.invariant_diff) <= 0.01 ? 'ok' : 'bad';
+    return `<div class="card">
+      <div class="label">${text(item.name)} · ${text(item.series_id)}</div>
+      <div class="value">${money(item.equity)} USDT</div>
+      <div class="row"><span>PnL за весь час</span><span class="${pnlClass}">${money(item.total_pnl)} (${Number(item.return_percent).toFixed(2)}%)</span></div>
+      <div class="row"><span>Вільно / у позиціях</span><span>${money(item.cash)} / ${money(item.locked_capital)}</span></div>
+      <div class="row"><span>Funding / комісії</span><span>${money(item.funding_pnl)} / ${money(item.fees)}</span></div>
+      <div class="row"><span>Позиції відкр. / закр.</span><span>${item.open_positions} / ${item.closed_positions}</span></div>
+      <div class="row"><span>Інваріант</span><span class="${invariantClass}">${Number(item.invariant_diff).toFixed(6)}</span></div>
+    </div>`;
+  }
   async function refresh() {
     try {
-      const [portfolio, opportunities, paper] = await Promise.all([
-        fetch('/portfolio').then(r => r.json()),
-        fetch('/opportunities').then(r => r.json()),
-        fetch('/analytics/paper').then(r => r.json())
+      const [series, venues, opportunities, health] = await Promise.all([
+        getJson('/analytics/series'),
+        getJson('/exchanges'),
+        getJson('/opportunities'),
+        fetch('/health/ready').then(r => r.json().then(body => ({ok: r.ok, body}))),
       ]);
-      document.querySelector('#equity').textContent = money(portfolio.equity);
-      document.querySelector('#cash').textContent = money(portfolio.cash);
-      document.querySelector('#locked').textContent = money(portfolio.locked_capital);
-      document.querySelector('#count').textContent = opportunities.length;
-      document.querySelector('#funding-pnl').textContent = money(paper.funding_pnl);
-      document.querySelector('#fees').textContent = money(paper.fees);
-      document.querySelector('#opportunities').innerHTML = opportunities.map(item => `
-        <tr><td>${item.strategy}</td><td>${item.asset}</td>
-        <td>${item.venue_a}${item.venue_b ? ' ↔ ' + item.venue_b : ''}</td>
-        <td>${(Number(item.net_apr) * 100).toFixed(2)}%</td>
-        <td>${Number(item.opportunity_score).toFixed(1)}</td><td>${item.status}</td></tr>`).join('');
-      document.querySelector('#status').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      document.querySelector('#series').innerHTML = series.map(seriesCard).join('') || '<div class="card">Серій ще немає</div>';
+      document.querySelector('#venues').innerHTML = venues.map(item => `
+        <tr><td>${text(item.name)}</td>
+        <td class="${item.status === 'ONLINE' ? 'ok' : 'warn'}">${text(item.status)}</td>
+        <td>${item.collected_last_cycle ? 'так' : 'ні'}</td>
+        <td>${text(item.latency_ms)}</td><td>${text(item.last_error)}</td></tr>`).join('');
+      const ranked = [...opportunities].sort((a, b) => (b.status === 'confirmed') - (a.status === 'confirmed')).slice(0, 50);
+      document.querySelector('#opportunities').innerHTML = ranked.map(item => `
+        <tr><td>${text(item.strategy)}</td><td>${text(item.asset)}</td>
+        <td>${text(item.venue_a)}${item.venue_b && item.venue_b !== item.venue_a ? ' ↔ ' + text(item.venue_b) : ''}</td>
+        <td>${pct(item.funding_rate_8h)}</td>
+        <td>${(Number(item.net_apr) * 100).toFixed(1)}%</td>
+        <td>${Number(item.opportunity_score).toFixed(1)}</td><td>${text(item.status)}</td></tr>`).join('');
+      const ready = health.ok ? '<span class="ok">runner працює</span>' : '<span class="bad">runner не готовий</span>';
+      document.querySelector('#status').innerHTML = `${ready} · режим PAPER, реальних ордерів немає · оновлено ${new Date().toLocaleTimeString('uk-UA')}`;
     } catch (error) {
-      document.querySelector('#status').textContent = `Read-only API unavailable: ${error}`;
+      document.querySelector('#status').textContent = `API недоступний: ${error}`;
     }
   }
   refresh();
-  setInterval(refresh, 5000);
+  setInterval(refresh, 10000);
 </script>
 </body>
 </html>
