@@ -85,7 +85,9 @@ class FundingSnapshot(BaseModel):
     exchange: str
     symbol: str
     funding_rate: Decimal
-    funding_interval_hours: Decimal = Field(gt=0)
+    # Public funding schedules are hourly; reject implausible intervals before
+    # forecasting can build an unbounded settlement sequence.
+    funding_interval_hours: Decimal = Field(ge=Decimal("1"), le=Decimal("168"))
     next_funding_time: datetime | None = None
     mark_price: Decimal | None = None
     index_price: Decimal | None = None

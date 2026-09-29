@@ -359,7 +359,13 @@ class MexcPublicAdapter(ExchangeAdapter):
                 },
             )
             return None
-        if interval_hours <= 0:
+        # MEXC documents collectCycle as an integer number of hours. Reject
+        # implausible cycles rather than fabricating settlement timestamps.
+        if (
+            interval_hours < 1
+            or interval_hours > 24
+            or interval_hours != interval_hours.to_integral_value()
+        ):
             logger.warning(
                 "funding_schedule_rejected",
                 extra={

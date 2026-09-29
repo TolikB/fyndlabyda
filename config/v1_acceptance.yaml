@@ -225,7 +225,7 @@ requirements:
       src/funding_arbitrage/exchanges/base/__init__.py: 8bc21fd253582c2fbc30103bcaa91e17345c44807582957f13ec35f758240683
       src/funding_arbitrage/exchanges/base/exceptions.py: ba8cb90442eb2d7b069821dc8f000f9411a2261c11df42e29f572e379ae4238a
       src/funding_arbitrage/exchanges/base/exchange.py: 9d44ca524147d5108912a3690bfc20043710582fe246ae79fa6e5d82233c4a34
-      src/funding_arbitrage/exchanges/base/models.py: 2c11d00a022a6c1608fcc662d2e1e1bfd9351ffa97a56b99395c0f60110edb45
+      src/funding_arbitrage/exchanges/base/models.py: d9877ea375d47f8e0447cd37bdda17a6bcd3eba094edbe5034f3a78513d786cd
       src/funding_arbitrage/exchanges/binance/__init__.py: b65a02eaa1903894f833102f627095ab54d4192ba7a01c9850d93b9730404cba
       src/funding_arbitrage/exchanges/binance/client.py: 08c98363b5e6d447b93376013cae5d032e2631caabbef94a761c29326a42d397
       src/funding_arbitrage/exchanges/binance/orderbook.py: f63ac0f5abff3efbf5acd330dd53b0d2e1898ddebc2db38d8a9e7fe62794abc4
@@ -247,7 +247,7 @@ requirements:
       src/funding_arbitrage/exchanges/kucoin/client.py: 3f915bbd7f6ea19fc2f3c77e94063545dece6ea48090c56ac864d0ae317407e9
       src/funding_arbitrage/exchanges/kucoin/trading.py: 9d4352c3e87c91785eca9986064618d3c2bace2517022ca55765a56c74959b3c
       src/funding_arbitrage/exchanges/mexc/__init__.py: fef32894e22054b6dd941b58fb7b8a1e5fc4fe26de9ff7f7a7ac7919ea899b08
-      src/funding_arbitrage/exchanges/mexc/client.py: f6908a4f88c8bc31f50fbc070590336340e48c30bb81a6dd73307ee57de047a4
+      src/funding_arbitrage/exchanges/mexc/client.py: a7b7d4190231b1193782d7049271706d60b4ff59e339d63e62526135552fe4a2
       src/funding_arbitrage/exchanges/mexc/orderbook.py: 1153cadb8f7484d91c85992c97626036ee71fb87cc0dd369fe43eb104f6e3b4e
       src/funding_arbitrage/exchanges/mexc/trading.py: d2220f8a2161522afbce77d2e232acb34b851e80167612d7b6d7440d100f158a
       src/funding_arbitrage/exchanges/mock.py: 1dc0fcd6b0fe7392485db6c96a4a2fb4366bd1547aec220b0e4c66545ce3a921
@@ -350,7 +350,7 @@ requirements:
       src/funding_arbitrage/exchanges/base/__init__.py: 8bc21fd253582c2fbc30103bcaa91e17345c44807582957f13ec35f758240683
       src/funding_arbitrage/exchanges/base/exceptions.py: ba8cb90442eb2d7b069821dc8f000f9411a2261c11df42e29f572e379ae4238a
       src/funding_arbitrage/exchanges/base/exchange.py: 9d44ca524147d5108912a3690bfc20043710582fe246ae79fa6e5d82233c4a34
-      src/funding_arbitrage/exchanges/base/models.py: 2c11d00a022a6c1608fcc662d2e1e1bfd9351ffa97a56b99395c0f60110edb45
+      src/funding_arbitrage/exchanges/base/models.py: d9877ea375d47f8e0447cd37bdda17a6bcd3eba094edbe5034f3a78513d786cd
       src/funding_arbitrage/exchanges/binance/__init__.py: b65a02eaa1903894f833102f627095ab54d4192ba7a01c9850d93b9730404cba
       src/funding_arbitrage/exchanges/binance/client.py: 08c98363b5e6d447b93376013cae5d032e2631caabbef94a761c29326a42d397
       src/funding_arbitrage/exchanges/binance/orderbook.py: f63ac0f5abff3efbf5acd330dd53b0d2e1898ddebc2db38d8a9e7fe62794abc4
@@ -372,7 +372,7 @@ requirements:
       src/funding_arbitrage/exchanges/kucoin/client.py: 3f915bbd7f6ea19fc2f3c77e94063545dece6ea48090c56ac864d0ae317407e9
       src/funding_arbitrage/exchanges/kucoin/trading.py: 9d4352c3e87c91785eca9986064618d3c2bace2517022ca55765a56c74959b3c
       src/funding_arbitrage/exchanges/mexc/__init__.py: fef32894e22054b6dd941b58fb7b8a1e5fc4fe26de9ff7f7a7ac7919ea899b08
-      src/funding_arbitrage/exchanges/mexc/client.py: f6908a4f88c8bc31f50fbc070590336340e48c30bb81a6dd73307ee57de047a4
+      src/funding_arbitrage/exchanges/mexc/client.py: a7b7d4190231b1193782d7049271706d60b4ff59e339d63e62526135552fe4a2
       src/funding_arbitrage/exchanges/mexc/orderbook.py: 1153cadb8f7484d91c85992c97626036ee71fb87cc0dd369fe43eb104f6e3b4e
       src/funding_arbitrage/exchanges/mexc/trading.py: d2220f8a2161522afbce77d2e232acb34b851e80167612d7b6d7440d100f158a
       src/funding_arbitrage/exchanges/mock.py: 1dc0fcd6b0fe7392485db6c96a4a2fb4366bd1547aec220b0e4c66545ce3a921
@@ -1648,11 +1648,11 @@ requirements:
       tests/test_market_risk_opportunity.py: 08c35f3b7783dcd8cd33ea78dd825e433c07b801fdd4a87d81729bbc84b61f84
       tests/test_meta_labeling.py: 3dff00c6b5614e3714d3690d7046a420e438f09a873c95f1e0574dd8513f48d3
       tests/test_mev_execution.py: 93ebbc6fd1a5fc285f00283324f9bb81b53a72327c1125d2a312bed9ec1fd19b
-      tests/test_mexc_adapter.py: 3eef47076d3d2f1e8c4070035b15e30303d2818bc506415563d914ba21368644
+      tests/test_mexc_adapter.py: 3f73e589dd2fc3cfd38421db0675cc61f2833ab4c00bb06a0375a8386a7b3657
       tests/test_mexc_canonical_orderbook.py: 79451ab9ecc9c647b3637d94e1a37deeab293cdf2928972175d4e9eb1df3e08c
       tests/test_mexc_trading.py: 21539c471da90e9596d5a8287056682cf4858c4fdfc75f877d246794293f11cd
       tests/test_migrations.py: 77c30f5daad1e1d78e4c00f2ce0287c3764bdf2e4680d4c20f8f8c35871f3740
-      tests/test_models.py: aa12d90bf56238097966a73e3136d169880d02e326c1873a3cdd2a2a052d177d
+      tests/test_models.py: 5e2da4020f0c02637cda62f226a24bd2ceae83a79f1d57c7f4da1bce6957a76c
       tests/test_multi_regime_api.py: 92f075d8ae843e26241d58d375d8d1719903918d9e64cd6d7c8dc9a7869854b3
       tests/test_multi_regime_paper_probe.py: 3bdec7f40f019c68a682946486c1443b50b8c1d6f8eb524ab744dedcb2f91d11
       tests/test_multi_regime_persistence.py: 268121bf598e4c45e14f8d9272d37179a73ccd463b330beb15dfa2f33ad2b3f9

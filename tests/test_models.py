@@ -238,12 +238,13 @@ def test_funding_rates_normalize_to_daily_and_annual() -> None:
     assert snapshot.funding_rate_annualized == Decimal("1.095")
 
 
-def test_invalid_interval_is_rejected() -> None:
+@pytest.mark.parametrize("interval", ("0", "1e-12", "169"))
+def test_invalid_interval_is_rejected(interval: str) -> None:
     with pytest.raises(ValueError):
         FundingSnapshot(
             exchange="bybit",
             symbol="BTCUSDT",
             funding_rate=Decimal("0.001"),
-            funding_interval_hours=Decimal("0"),
+            funding_interval_hours=Decimal(interval),
             timestamp=datetime.now(UTC),
         )
