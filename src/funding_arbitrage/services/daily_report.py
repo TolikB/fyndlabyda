@@ -201,6 +201,14 @@ class DailyReportService:
         if current < scheduled:
             return False
         report_date = current.date() - timedelta(days=1)
+        autotrade_start = self.settings.paper_autotrade_start_utc
+        if (
+            autotrade_start is not None
+            and report_date < autotrade_start.astimezone(self.timezone).date()
+        ):
+            # A fresh paper portfolio must not emit a zero report for a day
+            # before its evidence boundary when started after local midnight.
+            return False
         async with self.session_factory() as session:
             existing = await session.scalar(
                 select(TelegramDailyReportRecord).where(

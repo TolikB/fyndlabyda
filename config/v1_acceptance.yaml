@@ -1707,7 +1707,7 @@ requirements:
       tests/test_strategy_suite.py: ff65803e0a50b8b03360cd028e3950ca0b71d02edce19960cb83a6b778265d8e
       tests/test_structure_features.py: 00a1f57a749ffbdf050d0bb59210aaf77a9aaa22e920a9675537380d06fbf215
       tests/test_technical_features.py: 64db8a99986dbf75496c9316446c2f0c815169bf2c71415afa392e08f4fd125c
-      tests/test_telegram.py: 4321a0a226ba728d9b60db3196ee98e326e09fe7a861f207885ba89c1f0256ac
+      tests/test_telegram.py: 5d23d39568dd23b0ee5cb4d228016704ee5f5f5605c4fad84a03ad74ca3ca961
       tests/test_telegram_config_probe.py: 93d1207b82b04dfc06656013a7387523bc3f7165d4e173acdb522d3c1aad2306
       tests/test_trading_fee_cache.py: c317b4012f8e78a6fb6e30b6fccdad44e53a29b66827eb66dd633f2d2a55e85b
       tests/test_universe_selector.py: 64a718de4bdfe0eca09d5df99d85ba89bfce656faaf902062f07d6f5b93d9c5b
@@ -1835,7 +1835,7 @@ requirements:
       src/funding_arbitrage/execution/advanced_paper.py: 2f47ca96ccd95954045aca9bbdb360e9323b4f33177f62dcf4d513c60bac9577
       src/funding_arbitrage/execution/directional_paper.py: 6ead49266ee3be3b7faa187f3537b36c6e3e71add3faa9232da14a68fefd63df
       src/funding_arbitrage/qa/multi_regime_paper.py: 5c0ed37b6b7d8a527d1354eac3e6aa1711c40ad544e0b89bdd7b49a3e3a1a75f
-      src/funding_arbitrage/services/daily_report.py: a5c119efaf7702646ca3556f7d751d0f90318df304fe9003a060750fe9a63014
+      src/funding_arbitrage/services/daily_report.py: b77ea692755c62fe91c0b8aa9febe83295e3403537c2fcc01a19173962c5969f
       src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
       src/funding_arbitrage/services/multi_regime_runtime.py: f0240bba7f6f75f19a0918527c8b3e92d619efddb9ca029439fc8aab9a16b8ea
       src/funding_arbitrage/services/paper_runner.py: 0b1f8565aab069d05730c6f232589394eb80dc268bc37184120a7f71aa561f66
@@ -1851,7 +1851,7 @@ requirements:
       tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
       tests/test_runtime_strategy_contexts.py: 15b01f4ce6cc854dffe68698cdd8d5a991cb42b303b847690de35460b8c66d3f
       tests/test_strategy_execution.py: 94b05013cf5b682b15577724164ecc2998a3ec830d30b04706b1c339a72e696b
-      tests/test_telegram.py: 4321a0a226ba728d9b60db3196ee98e326e09fe7a861f207885ba89c1f0256ac
+      tests/test_telegram.py: 5d23d39568dd23b0ee5cb4d228016704ee5f5f5605c4fad84a03ad74ca3ca961
   - id: GATE-001
     category: delivery
     title: Shadow acceptance window completes without accounting, risk, or reconciliation violations

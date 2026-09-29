@@ -272,6 +272,40 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
 
 
 @pytest.mark.asyncio
+async def test_daily_report_does_not_send_for_day_before_paper_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        paper_initial_balance_usd=10000,
+        paper_autotrade_start_utc=datetime(2026, 9, 29, 14, 45, tzinfo=UTC),
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="Europe/Kyiv",
+    )
+    session = ReportSession()
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(session)),
+    )
+    sent: list[str] = []
+
+    async def send(message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(service.notifier, "send_message", send)
+
+    assert not await service.check_and_send(datetime(2026, 9, 29, 14, 50, tzinfo=UTC))
+    assert not session.added
+    assert not sent
+
+    assert await service.check_and_send(datetime(2026, 9, 29, 21, 1, tzinfo=UTC))
+    assert len(session.added) == 1
+    assert len(sent) == 1
+    assert "29.09.2026" in sent[0]
+
+
+@pytest.mark.asyncio
 async def test_daily_report_includes_all_multi_regime_costs_and_positions(
     database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
 ) -> None:
