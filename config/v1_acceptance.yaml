@@ -247,7 +247,7 @@ requirements:
       src/funding_arbitrage/exchanges/kucoin/client.py: 3f915bbd7f6ea19fc2f3c77e94063545dece6ea48090c56ac864d0ae317407e9
       src/funding_arbitrage/exchanges/kucoin/trading.py: 9d4352c3e87c91785eca9986064618d3c2bace2517022ca55765a56c74959b3c
       src/funding_arbitrage/exchanges/mexc/__init__.py: fef32894e22054b6dd941b58fb7b8a1e5fc4fe26de9ff7f7a7ac7919ea899b08
-      src/funding_arbitrage/exchanges/mexc/client.py: 711f20f5390ed06edc10843230d38c442b98d750e2fe6c1c0a3723ef9849a7b4
+      src/funding_arbitrage/exchanges/mexc/client.py: f6908a4f88c8bc31f50fbc070590336340e48c30bb81a6dd73307ee57de047a4
       src/funding_arbitrage/exchanges/mexc/orderbook.py: 1153cadb8f7484d91c85992c97626036ee71fb87cc0dd369fe43eb104f6e3b4e
       src/funding_arbitrage/exchanges/mexc/trading.py: d2220f8a2161522afbce77d2e232acb34b851e80167612d7b6d7440d100f158a
       src/funding_arbitrage/exchanges/mock.py: 1dc0fcd6b0fe7392485db6c96a4a2fb4366bd1547aec220b0e4c66545ce3a921
@@ -372,7 +372,7 @@ requirements:
       src/funding_arbitrage/exchanges/kucoin/client.py: 3f915bbd7f6ea19fc2f3c77e94063545dece6ea48090c56ac864d0ae317407e9
       src/funding_arbitrage/exchanges/kucoin/trading.py: 9d4352c3e87c91785eca9986064618d3c2bace2517022ca55765a56c74959b3c
       src/funding_arbitrage/exchanges/mexc/__init__.py: fef32894e22054b6dd941b58fb7b8a1e5fc4fe26de9ff7f7a7ac7919ea899b08
-      src/funding_arbitrage/exchanges/mexc/client.py: 711f20f5390ed06edc10843230d38c442b98d750e2fe6c1c0a3723ef9849a7b4
+      src/funding_arbitrage/exchanges/mexc/client.py: f6908a4f88c8bc31f50fbc070590336340e48c30bb81a6dd73307ee57de047a4
       src/funding_arbitrage/exchanges/mexc/orderbook.py: 1153cadb8f7484d91c85992c97626036ee71fb87cc0dd369fe43eb104f6e3b4e
       src/funding_arbitrage/exchanges/mexc/trading.py: d2220f8a2161522afbce77d2e232acb34b851e80167612d7b6d7440d100f158a
       src/funding_arbitrage/exchanges/mock.py: 1dc0fcd6b0fe7392485db6c96a4a2fb4366bd1547aec220b0e4c66545ce3a921
@@ -1648,7 +1648,7 @@ requirements:
       tests/test_market_risk_opportunity.py: 08c35f3b7783dcd8cd33ea78dd825e433c07b801fdd4a87d81729bbc84b61f84
       tests/test_meta_labeling.py: 3dff00c6b5614e3714d3690d7046a420e438f09a873c95f1e0574dd8513f48d3
       tests/test_mev_execution.py: 93ebbc6fd1a5fc285f00283324f9bb81b53a72327c1125d2a312bed9ec1fd19b
-      tests/test_mexc_adapter.py: dc253d90ef5e0589db1ff762faf492d83415002a4792c8aeb13c8aef9165c30d
+      tests/test_mexc_adapter.py: 3eef47076d3d2f1e8c4070035b15e30303d2818bc506415563d914ba21368644
       tests/test_mexc_canonical_orderbook.py: 79451ab9ecc9c647b3637d94e1a37deeab293cdf2928972175d4e9eb1df3e08c
       tests/test_mexc_trading.py: 21539c471da90e9596d5a8287056682cf4858c4fdfc75f877d246794293f11cd
       tests/test_migrations.py: 77c30f5daad1e1d78e4c00f2ce0287c3764bdf2e4680d4c20f8f8c35871f3740

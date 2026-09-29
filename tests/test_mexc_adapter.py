@@ -298,6 +298,17 @@ async def test_mexc_skips_a_market_without_a_positive_funding_schedule() -> None
                         "nextSettleTime": 1735689600000,
                     },
                     {
+                        "symbol": "MISSING_USDT",
+                        "fundingRate": "0.0009",
+                        "nextSettleTime": 1735689600000,
+                    },
+                    {
+                        "symbol": "MALFORMED_USDT",
+                        "fundingRate": "0.0009",
+                        "collectCycle": "unknown",
+                        "nextSettleTime": 1735689600000,
+                    },
+                    {
                         "symbol": "BTC_USDT",
                         "fundingRate": "0.0001",
                         "collectCycle": "8",

@@ -343,7 +343,22 @@ class MexcPublicAdapter(ExchangeAdapter):
     def _parse_funding(self, row: object) -> FundingSnapshot | None:
         if not isinstance(row, dict):
             raise InvalidResponseError("MEXC funding row is not an object")
-        interval_hours = decimal(row["collectCycle"], "collectCycle")
+        try:
+            interval_hours = decimal(row.get("collectCycle"), "collectCycle")
+        except InvalidResponseError:
+            # Some contracts omit their schedule intermittently. Without an
+            # exact interval this symbol is unsafe, but other contracts in the
+            # same venue can still be used.
+            logger.warning(
+                "funding_schedule_rejected",
+                extra={
+                    "exchange": self.name,
+                    "symbol": str(row.get("symbol", "")),
+                    "event": "market_data_validation",
+                    "error": "funding_interval_hours_missing_or_invalid",
+                },
+            )
+            return None
         if interval_hours <= 0:
             logger.warning(
                 "funding_schedule_rejected",
