@@ -100,6 +100,7 @@ logger = logging.getLogger(__name__)
 
 _RUNNER_LOCK_KEY = 0x46554E44494E47  # "FUNDING"
 _PRUNE_EVERY = timedelta(hours=24)
+_CAP_HEADROOM = Decimal("0.995")
 
 
 class RunnerAlreadyActive(RuntimeError):
@@ -644,7 +645,8 @@ class PaperTestRunner:
                 config.max_positions_per_asset
             ):
                 continue
-            target = min(config.position_notional_usdt, room)
+            # Leave room for the VWAP above mid so the fill stays under the hard cap.
+            target = min(config.position_notional_usdt, room * _CAP_HEADROOM)
             try:
                 position, fills = self.simulator.open(
                     opportunity,
