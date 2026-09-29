@@ -16,6 +16,7 @@ from funding_arbitrage.database.models import (
     PaperFundingPaymentRecord,
     PaperLedgerEntryRecord,
     PaperPositionRecord,
+    PaperSeriesRecord,
     PortfolioSnapshotRecord,
     TelegramDailyReportRecord,
 )
@@ -245,10 +246,19 @@ async def test_observe_mode_collects_without_positions(
     await run_cycles(runner, clock, 3)
     assert all(not item.account.positions for item in runner.series.values())
     assert await count(database, PaperLedgerEntryRecord) == 0
+    # Observation does not start the series: its statistic begins with trading.
+    assert await count(database, PaperSeriesRecord) == 0
+    assert await count(database, PortfolioSnapshotRecord) == 0
     async with database.session_factory() as session:
         cycles = (await session.execute(select(PaperCycleRecord))).scalars().all()
     assert len(cycles) == 3
     assert all(not cycle.autotrade and cycle.books_fetched > 0 for cycle in cycles)
+    async with database.session_factory() as session:
+        result = await analytics.readiness(
+            session, hours=1, loop_interval_seconds=20, primary_series=None, now=clock()
+        )
+    # Observation proves the feeds, not the paper-trading acceptance window.
+    assert "observe_mode_in_window" in result["reasons"]
     await runner.shutdown()
 
 
@@ -308,6 +318,7 @@ async def test_readiness_flags_gaps_and_missing_report(
     assert "snapshot_gap_exceeded" in result["reasons"]
     assert "window_not_fully_covered" in result["reasons"]
     assert "no_daily_report_sent" in result["reasons"]
+    assert "observe_mode_in_window" not in result["reasons"]
     assert result["live_orders"] == 0
     assert all(item["reconciliation_ok"] for item in result["series"].values())
     await runner.shutdown()

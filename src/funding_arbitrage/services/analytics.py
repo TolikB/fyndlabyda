@@ -322,6 +322,7 @@ async def readiness(
             select(
                 PaperCycleRecord.started_at,
                 PaperCycleRecord.status,
+                PaperCycleRecord.autotrade,
                 PaperCycleRecord.venues_ok,
                 PaperCycleRecord.venues_failed,
                 PaperCycleRecord.incidents,
@@ -363,8 +364,14 @@ async def readiness(
         reasons.append("snapshot_gap_exceeded")
     if statuses.get("error"):
         reasons.append("uncontrolled_cycle_errors")
+    observe_cycles = sum(1 for row in cycles if not row.autotrade)
+    if observe_cycles:
+        # Acceptance is about paper trading; observation-only cycles do not count.
+        reasons.append("observe_mode_in_window")
     if incidents.get("invariant_violation"):
         reasons.append("invariant_violation_incident")
+    if incidents.get("funding_event_unresolved"):
+        reasons.append("funding_event_unresolved")
     series_rows = await list_series(session)
     series_checks: dict[str, Any] = {}
     for series in series_rows:
@@ -408,6 +415,7 @@ async def readiness(
             "expected": int(expected),
             "coverage": round(len(cycles) / expected, 4) if expected else None,
             "by_status": dict(statuses),
+            "observe_only": observe_cycles,
             "first": first,
             "max_gap_seconds": round(max_gap, 1),
             "gap_threshold_seconds": max_gap_seconds,

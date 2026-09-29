@@ -211,6 +211,7 @@ class PaperTestRunner:
         self.last_success_at: datetime | None = None
         self.last_cycle: CycleRecord | None = None
         self._session_id: int | None = None
+        self._recorded: set[str] = set()
         self._last_snapshot_persist: datetime | None = None
         self._last_funding_persist: datetime | None = None
         self._persisted_instruments: dict[str, datetime] = {}
@@ -228,7 +229,8 @@ class PaperTestRunner:
         context = simulation_context(self.settings)
         async with self.session_factory() as session:
             for config in self.series_file.series:
-                await ensure_series(
+                # A series starts with its first paper trade window, not with observation.
+                if await ensure_series(
                     session,
                     series_id=config.label,
                     name=config.name,
@@ -237,7 +239,9 @@ class PaperTestRunner:
                     config=config.identity(SIMULATOR_VERSION, context),
                     initial_balance=config.initial_balance_usdt,
                     now=now,
-                )
+                    create=self.settings.paper_autotrade,
+                ):
+                    self._recorded.add(config.label)
             await session.commit()
             for config in self.series_file.series:
                 restored = await load_series_state(session, config.label)
@@ -328,7 +332,12 @@ class PaperTestRunner:
                 for item in self.series.values():
                     await persist_account_changes(session, item.account, now)
                 await insert_account_snapshots(
-                    session, [item.account.snapshot(now) for item in self.series.values()]
+                    session,
+                    [
+                        item.account.snapshot(now)
+                        for label, item in self.series.items()
+                        if label in self._recorded
+                    ],
                 )
                 if self._session_id is not None:
                     await stop_runner_session(session, self._session_id, now)
@@ -699,7 +708,14 @@ class PaperTestRunner:
                 for item in self.series.values():
                     await persist_account_changes(session, item.account, now)
                 if due:
-                    await insert_account_snapshots(session, snapshots.values())
+                    await insert_account_snapshots(
+                        session,
+                        [
+                            snapshot
+                            for label, snapshot in snapshots.items()
+                            if label in self._recorded
+                        ],
+                    )
                 await insert_cycle(session, cycle)
                 if self._session_id is not None:
                     await heartbeat_runner_session(session, self._session_id, now)

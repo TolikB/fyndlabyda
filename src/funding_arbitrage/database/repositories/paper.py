@@ -71,14 +71,18 @@ async def ensure_series(
     config: dict[str, Any],
     initial_balance: Decimal,
     now: datetime,
+    create: bool = True,
 ) -> bool:
     """Create the series row or verify it was started with the same settings.
 
-    Returns True when the series is new.
+    Returns whether the series is recorded in the database. With ``create=False``
+    (observation without trading) a missing series is validated but not started.
     """
 
     record = await session.get(PaperSeriesRecord, series_id)
     if record is None:
+        if not create:
+            return False
         session.add(
             PaperSeriesRecord(
                 series_id=series_id,
@@ -103,7 +107,7 @@ async def ensure_series(
             f"{', '.join(changes) or 'unknown'}). Give the series a new label to start a "
             "separate statistic instead of mixing results."
         )
-    return False
+    return True
 
 
 async def load_series_state(session: AsyncSession, series_id: str) -> RestoredSeries:
