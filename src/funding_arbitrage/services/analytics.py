@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 from typing import Any
@@ -312,10 +313,14 @@ async def readiness(
     primary_series: str | None,
     max_gap_seconds: float = 300.0,
     now: datetime | None = None,
+    expected_venues: Sequence[str] = ("bybit", "gate", "okx", "binance", "hyperliquid"),
+    minimum_venue_availability: float = 0.99,
 ) -> dict[str, Any]:
     """Acceptance check for the paper launch (default window: 72 hours)."""
 
     current = now or datetime.now(UTC)
+    if not 0 < minimum_venue_availability <= 1:
+        raise ValueError("minimum_venue_availability must be in (0, 1]")
     window_start = current - timedelta(hours=hours)
     cycles = (
         await session.execute(
@@ -364,6 +369,13 @@ async def readiness(
         reasons.append("snapshot_gap_exceeded")
     if statuses.get("error"):
         reasons.append("uncontrolled_cycle_errors")
+    availability = {
+        venue: venue_ok[venue] / len(cycles) if cycles else 0.0
+        for venue in sorted(set(expected_venues) | set(venue_seen))
+    }
+    for venue in expected_venues:
+        if availability[venue] < minimum_venue_availability:
+            reasons.append(f"venue_availability:{venue}")
     observe_cycles = sum(1 for row in cycles if not row.autotrade)
     if observe_cycles:
         # Acceptance is about paper trading; observation-only cycles do not count.
@@ -420,9 +432,8 @@ async def readiness(
             "max_gap_seconds": round(max_gap, 1),
             "gap_threshold_seconds": max_gap_seconds,
         },
-        "venue_availability": {
-            venue: round(venue_ok[venue] / count, 4) for venue, count in sorted(venue_seen.items())
-        },
+        "venue_availability": {venue: round(value, 4) for venue, value in availability.items()},
+        "minimum_venue_availability": minimum_venue_availability,
         "incidents": dict(incidents),
         "series": series_checks,
         "daily_reports_sent": int(report_sent or 0) if primary_series else None,

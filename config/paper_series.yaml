@@ -12,7 +12,7 @@ primary_series: candidate
 
 series:
   - name: candidate
-    label: candidate-sim2-2026q4
+    label: candidate-sim201-20261003
     initial_balance_usdt: "1000"
     position_notional_usdt: "50"
     max_total_notional_usdt: "100"
@@ -34,7 +34,7 @@ series:
       exit_confirmations: 3
 
   - name: baseline
-    label: baseline-sim2-2026q4
+    label: baseline-sim201-20261003
     initial_balance_usdt: "1000"
     position_notional_usdt: "50"
     max_total_notional_usdt: "400"

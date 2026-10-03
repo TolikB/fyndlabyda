@@ -78,6 +78,7 @@ from funding_arbitrage.opportunity.filters import (
     FilterStage,
     OpportunityFilterConfig,
     passes_filters,
+    rejection_reason,
 )
 from funding_arbitrage.opportunity.models import Opportunity, OpportunityStatus, StrategyName
 from funding_arbitrage.portfolio.portfolio import INVARIANT_TOLERANCE, AccountSnapshot, PaperAccount
@@ -656,9 +657,15 @@ class PaperTestRunner:
                     series_id=account.series_id,
                     perp_leverage=config.perp_leverage,
                 )
+                sized = self.simulator.price_entry(opportunity, position, fills, snapshot, now)
             except FillRejected as exc:
                 self._reject(item, exc.reason)
                 continue
+            reason = rejection_reason(sized, item.entry_filter)
+            if reason is not None:
+                self._reject(item, f"sized_{reason}")
+                continue
+            position.entry_net_apr = sized.net_apr
             if account.exposure + position.exposure > config.max_total_notional_usdt:
                 self._reject(item, "exposure_cap")
                 continue

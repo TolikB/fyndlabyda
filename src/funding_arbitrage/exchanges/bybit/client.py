@@ -120,6 +120,9 @@ class BybitPublicAdapter(ExchangeAdapter):
         result = payload.get("result")
         if not isinstance(result, dict):
             raise InvalidResponseError("Bybit result is not an object")
+        # REST tickers have no row timestamp: Bybit puts server time on the envelope.
+        if payload.get("time") is not None:
+            result = {**result, "time": payload["time"]}
         return result
 
     async def get_instruments(self) -> list[NormalizedInstrument]:

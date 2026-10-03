@@ -49,7 +49,8 @@ git push -u origin HEAD                # далі зміну перегляда�
 ```bash
 docker ps --format '{{.Names}}\t{{.Status}}' | grep -i funding
 ops/scripts/backup.sh --container <назва-старого-postgres-контейнера>
-scp -r <user>@<vm>:/opt/funding_arbitrage_paper/backups/<папка> ./   # копія поза VM
+scp <user>@<vm>:/opt/funding_arbitrage_paper/backups/<папка>/off-vm.tar.gz ./
+# Копіювати лише цей пакет. private/.env залишається на VM; усі значення env.redacted приховані.
 ```
 
 1.4 Журнали проваленого Shadow-вікна і «нездорових» контейнерів — зберегти до зупинки:
@@ -124,7 +125,8 @@ docker compose logs --since 30m app | grep -E "venue_collection_failed|orderbook
 ```
 
 Очікування: `cycles.by_status` без `error`, `max_gap_seconds` < 300, доступність бірж
-близька до 1.0. Єдина очікувана причина FAIL на цьому етапі — `no_daily_report_sent`.
+близька до 1.0. На цьому етапі FAIL із `observe_mode_in_window` очікуваний; також
+може бути `no_daily_report_sent`. Ці цикли не зараховуються до paper-приймання.
 
 ## 5. Увімкнення paper-торгівлі
 
@@ -151,13 +153,19 @@ docker compose exec app funding-arbitrage readiness --hours 72
 docker compose exec app funding-arbitrage reconcile
 ```
 
-`PASS` означає: цикли покривають усе вікно без прогалин > 5 хв, немає циклів зі
+`PASS` означає: доступність кожної увімкненої біржі не менше 99%, цикли покривають
+усе вікно без прогалин > 5 хв, немає циклів зі
 статусом `error`, інваріант `equity = cash + locked + PnL` тримається в межах $0,01 для
 всіх серій, звірка ledger ↔ fills ↔ funding ↔ позиції збігається, надіслано щонайменше
 один добовий звіт, у середовищі немає біржових ключів, реальних ордерів 0.
 Формальні V1 Shadow/Paper-gates проходяться окремо й цим кроком не підміняються.
 
 ## 8. Збір статистики (≥ 30 днів)
+
+Для дослідної серії оператор може обрати первинний огляд через 3–5 днів. Це не
+підміняє 30-денне приймання. Зберегти поточні результати перед змінами, а змінені
+параметри запускати під новими labels. Поточні labels: `candidate-sim201-20261003`
+і `baseline-sim201-20261003`.
 
 * Не змінювати параметри серій, комісії, біржі. Будь-яка зміна → новий `label`
   (нова серія, стара лишається в БД для порівняння).

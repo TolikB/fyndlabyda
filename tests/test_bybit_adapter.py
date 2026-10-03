@@ -14,6 +14,34 @@ def response(result: dict[str, object], time: str = "1735689600000") -> httpx.Re
     return httpx.Response(200, json={"retCode": 0, "retMsg": "OK", "time": time, "result": result})
 
 
+@pytest.mark.parametrize("category", ["linear", "spot"])
+async def test_rest_tickers_and_funding_use_envelope_server_time(category: str) -> None:
+    server_time = datetime(2025, 1, 1, tzinfo=UTC)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return response(
+            {
+                "list": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "lastPrice": "100",
+                        "fundingRate": "0.001",
+                        "nextFundingTime": "1735718400000",
+                    }
+                ]
+            }
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://test.invalid"
+    ) as client:
+        adapter = BybitPublicAdapter(categories=(category,), http_client=client)
+        tickers = await adapter.get_tickers()
+        funding = await adapter.get_funding_rates()
+    assert tickers[0].timestamp == server_time
+    assert funding[0].timestamp == server_time
+
+
 @pytest.mark.asyncio
 async def test_bybit_rest_payloads_are_normalized() -> None:
     def handler(request: httpx.Request) -> httpx.Response:

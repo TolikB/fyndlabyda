@@ -162,6 +162,7 @@ async def readiness(hours: int, max_gap_seconds: float, primary: str | None) -> 
                 loop_interval_seconds=settings.paper_loop_interval_seconds,
                 primary_series=primary,
                 max_gap_seconds=max_gap_seconds,
+                expected_venues=settings.enabled_venue_values,
             )
     finally:
         await engine.dispose()

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from funding_arbitrage.opportunity.filters import OpportunityFilterConfig
 from funding_arbitrage.opportunity.models import StrategyName
+from funding_arbitrage.services.preflight import EXPECTED_MARKETS
 
 if TYPE_CHECKING:
     from funding_arbitrage.config import Settings
@@ -165,6 +166,19 @@ def simulation_context(settings: Settings) -> dict[str, Any]:
     return {
         "market_data_mode": settings.market_data_mode,
         "enabled_venues": sorted(settings.enabled_venue_values),
+        "expected_markets": {
+            venue: sorted(market.value for market in EXPECTED_MARKETS[venue])
+            for venue in settings.enabled_venue_values
+        },
+        "loop_interval_seconds": settings.paper_loop_interval_seconds,
+        "funding_grace_seconds": settings.paper_funding_grace_seconds,
+        "funding_poll_seconds": settings.paper_funding_poll_seconds,
+        "book_candidates_per_cycle": settings.paper_book_candidates_per_cycle,
+        "history_requests_per_cycle": settings.paper_history_requests_per_cycle,
+        "okx_funding_symbol_limit": settings.okx_funding_symbol_limit,
+        "history_ttl_seconds": settings.market_history_ttl_seconds,
+        "instrument_refresh_seconds": settings.market_instrument_refresh_seconds,
+        "mock_funding_interval_seconds": settings.mock_funding_interval_seconds,
         "fees": {
             venue: schedule.model_dump(mode="json")
             for venue, schedule in sorted(settings.fee_schedules.items())

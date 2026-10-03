@@ -22,7 +22,7 @@ from funding_arbitrage.portfolio.position import PaperPosition, PositionLeg
 
 # Bump whenever fill, fee, funding, or accounting semantics change: a new
 # simulator version always starts a new paper series.
-SIMULATOR_VERSION = "2.0.0"
+SIMULATOR_VERSION = "2.0.1"
 
 # Tolerated venue clock skew when a book timestamp is slightly in the future.
 _MAX_CLOCK_SKEW_SECONDS = 5.0
@@ -73,6 +73,56 @@ class PaperExecutionSimulator:
 
     def taker_fee(self, exchange: str, instrument_type: InstrumentType) -> Decimal:
         return self.fees.get(exchange, self.default_fee).taker(instrument_type)
+
+    def price_entry(
+        self,
+        opportunity: Opportunity,
+        position: PaperPosition,
+        fills: list[PaperFill],
+        snapshot: MarketSnapshot,
+        now: datetime,
+    ) -> Opportunity:
+        """Evaluate the rounded hedge and a same-book exit before touching the account."""
+
+        exit_fills = self.close(position, snapshot, now)
+        notional = position.exposure
+        fees = sum((fill.fee for fill in [*fills, *exit_fills]), Decimal("0")) / notional
+        spread = Decimal("0")
+        impact = Decimal("0")
+        for fill in [*fills, *exit_fills]:
+            book = snapshot.orderbook(fill.exchange, fill.symbol, fill.instrument_type)
+            if book is None or not book.bids or not book.asks:
+                raise FillRejected("missing_book", f"{fill.exchange}:{fill.symbol}")
+            touch = book.asks[0].price if fill.side == "BUY" else book.bids[0].price
+            quoted_spread = abs(touch - fill.mid_price) * fill.quantity
+            spread += quoted_spread / notional
+            impact += max(fill.slippage - quoted_spread, Decimal("0")) / notional
+        gross_rate = Decimal("0")
+        for leg in position.legs:
+            if leg.is_perpetual:
+                funding = snapshot.funding_for(leg.exchange, leg.symbol)
+                if funding is None:
+                    raise FillRejected("missing_funding", f"{leg.exchange}:{leg.symbol}")
+                gross_rate -= (
+                    leg.direction * funding.funding_rate_8h * leg.entry_notional / notional
+                )
+        gross_edge = gross_rate * opportunity.expected_holding_hours / Decimal("8")
+        net_edge = (
+            gross_edge - fees - spread - impact - opportunity.borrow_cost - opportunity.other_costs
+        )
+        return opportunity.model_copy(
+            update={
+                "trading_fees": fees,
+                "estimated_slippage": impact,
+                "spread_percent": spread,
+                "gross_edge": gross_edge,
+                "net_edge": net_edge,
+                "net_apr": net_edge
+                * Decimal("365")
+                * Decimal("24")
+                / opportunity.expected_holding_hours,
+            }
+        )
 
     # ------------------------------------------------------------------ legs
     @staticmethod

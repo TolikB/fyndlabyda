@@ -172,6 +172,7 @@ async def readiness(
         loop_interval_seconds=runtime.settings.paper_loop_interval_seconds,
         primary_series=primary,
         max_gap_seconds=max_gap_seconds,
+        expected_venues=runtime.settings.enabled_venue_values,
     )
 
 

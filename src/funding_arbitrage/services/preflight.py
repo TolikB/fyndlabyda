@@ -26,6 +26,11 @@ from funding_arbitrage.exchanges.base.models import (
 
 Status = Literal["PASS", "WARN", "FAIL"]
 _RANK = {"PASS": 0, "WARN": 1, "FAIL": 2}
+EXPECTED_MARKETS: dict[str, frozenset[InstrumentType]] = {
+    venue: frozenset({InstrumentType.SPOT, InstrumentType.PERPETUAL})
+    for venue in ("bybit", "gate", "okx", "binance")
+}
+EXPECTED_MARKETS["hyperliquid"] = frozenset({InstrumentType.PERPETUAL})
 
 
 @dataclass
@@ -89,6 +94,12 @@ async def check_venue(
         {item.instrument_type for item in instruments if item.is_active},
         key=lambda value: value.value,
     )
+    for missing in sorted(
+        EXPECTED_MARKETS.get(venue, frozenset()) - set(markets), key=lambda value: value.value
+    ):
+        report = FeedReport(venue=venue, market=missing.value.lower())
+        report.flag("FAIL", "expected market has no active instruments")
+        reports.append(report)
     funding_index = {item.symbol: item for item in funding}
     for market in markets:
         if market is InstrumentType.FUTURE:
@@ -257,6 +268,8 @@ async def run_preflight(
 
 
 def overall_status(reports: list[FeedReport]) -> Status:
+    if not reports:
+        return "FAIL"
     worst: Status = "PASS"
     for report in reports:
         if _RANK[report.status] > _RANK[worst]:
