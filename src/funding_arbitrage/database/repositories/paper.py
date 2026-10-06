@@ -156,6 +156,23 @@ async def load_series_state(session: AsyncSession, series_id: str) -> RestoredSe
     )
 
 
+async def last_close_times(
+    session: AsyncSession, series_id: str, since: datetime
+) -> dict[str, datetime]:
+    """Latest close per asset since ``since``: restores re-entry cooldowns on restart."""
+
+    rows = await session.execute(
+        select(PaperPositionRecord.asset, func.max(PaperPositionRecord.closed_at))
+        .where(
+            PaperPositionRecord.series_id == series_id,
+            PaperPositionRecord.state == PositionState.CLOSED.value,
+            PaperPositionRecord.closed_at >= since,
+        )
+        .group_by(PaperPositionRecord.asset)
+    )
+    return {asset: closed_at for asset, closed_at in rows.all() if closed_at is not None}
+
+
 # ------------------------------------------------------------------ persistence
 def _position_row(position: PaperPosition, now: datetime) -> dict[str, Any]:
     return {

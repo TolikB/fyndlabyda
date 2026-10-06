@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import ROUND_DOWN, Decimal
 from uuid import uuid4
 
-from funding_arbitrage.exchanges.base.models import InstrumentType, NormalizedInstrument
+from funding_arbitrage.exchanges.base.models import InstrumentType, NormalizedInstrument, OrderBook
 from funding_arbitrage.execution.base import FillPurpose, PaperFill
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.market_data.orderbook import OrderSide, calculate_execution_price
@@ -73,6 +73,9 @@ class PaperExecutionSimulator:
 
     def taker_fee(self, exchange: str, instrument_type: InstrumentType) -> Decimal:
         return self.fees.get(exchange, self.default_fee).taker(instrument_type)
+
+    def maker_fee(self, exchange: str, instrument_type: InstrumentType) -> Decimal:
+        return self.fees.get(exchange, self.default_fee).maker(instrument_type)
 
     def price_entry(
         self,
@@ -152,15 +155,7 @@ class PaperExecutionSimulator:
         position_id: str,
         series_id: str,
     ) -> PaperFill:
-        book = snapshot.orderbook(plan.exchange, plan.symbol, plan.instrument_type)
-        if book is None:
-            raise FillRejected("missing_book", f"{plan.exchange}:{plan.symbol}")
-        age = book.age_seconds(now)
-        if age > self.max_book_age_seconds or age < -_MAX_CLOCK_SKEW_SECONDS:
-            raise FillRejected("stale_book", f"{plan.exchange}:{plan.symbol} age={age:.1f}s")
-        mid = book.mid_price
-        if mid is None or mid <= 0:
-            raise FillRejected("empty_book", f"{plan.exchange}:{plan.symbol}")
+        book, age, mid = self._fresh_book(plan, snapshot, now)
         if quantity <= 0:
             raise FillRejected("zero_quantity")
         estimate = calculate_execution_price(book, plan.side, quantity)
@@ -205,6 +200,93 @@ class PaperExecutionSimulator:
             fee=notional * fee_rate,
             slippage=slippage,
             levels_consumed=max(1, consumed),
+            book_timestamp=book.timestamp,
+            book_age_ms=int(age * 1000),
+            timestamp=now,
+        )
+
+    def _fresh_book(
+        self, plan: LegPlan, snapshot: MarketSnapshot, now: datetime
+    ) -> tuple[OrderBook, float, Decimal]:
+        book = snapshot.orderbook(plan.exchange, plan.symbol, plan.instrument_type)
+        if book is None:
+            raise FillRejected("missing_book", f"{plan.exchange}:{plan.symbol}")
+        age = book.age_seconds(now)
+        if age > self.max_book_age_seconds or age < -_MAX_CLOCK_SKEW_SECONDS:
+            raise FillRejected("stale_book", f"{plan.exchange}:{plan.symbol} age={age:.1f}s")
+        mid = book.mid_price
+        if mid is None or mid <= 0:
+            raise FillRejected("empty_book", f"{plan.exchange}:{plan.symbol}")
+        return book, age, mid
+
+    def passive_price(self, plan: LegPlan, snapshot: MarketSnapshot, now: datetime) -> Decimal:
+        """Price of a passive order joining the touch on its own side of a fresh book."""
+
+        book, _, _ = self._fresh_book(plan, snapshot, now)
+        levels = book.bids if plan.side is OrderSide.BUY else book.asks
+        if not levels:
+            raise FillRejected("empty_book", f"{plan.exchange}:{plan.symbol}")
+        return levels[0].price
+
+    def half_spread(self, plan: LegPlan, snapshot: MarketSnapshot, now: datetime) -> Decimal:
+        """Half the quoted spread relative to mid: what a passive order saves on the leg."""
+
+        book, _, mid = self._fresh_book(plan, snapshot, now)
+        if not book.bids or not book.asks:
+            raise FillRejected("empty_book", f"{plan.exchange}:{plan.symbol}")
+        return (book.asks[0].price - book.bids[0].price) / mid / Decimal("2")
+
+    def maker_fill(
+        self,
+        plan: LegPlan,
+        quantity: Decimal,
+        price: Decimal,
+        snapshot: MarketSnapshot,
+        now: datetime,
+        *,
+        purpose: FillPurpose,
+        position_id: str,
+        series_id: str,
+    ) -> PaperFill:
+        """Fill a resting passive order, but only once the book traded through it.
+
+        A bid at ``price`` is filled when the best ask is now strictly below it (and
+        an ask when the best bid is strictly above it): every order at that price,
+        ours included, must then have executed. Touching the price is not enough,
+        because queue position is unknown.
+        """
+
+        book, age, mid = self._fresh_book(plan, snapshot, now)
+        if quantity <= 0:
+            raise FillRejected("zero_quantity")
+        if plan.side is OrderSide.BUY:
+            crossed = bool(book.asks) and book.asks[0].price < price
+            slippage = (price - mid) * quantity
+        else:
+            crossed = bool(book.bids) and book.bids[0].price > price
+            slippage = (mid - price) * quantity
+        if not crossed:
+            raise FillRejected("maker_not_filled", f"{plan.exchange}:{plan.symbol}")
+        notional = price * quantity
+        fee_rate = self.maker_fee(plan.exchange, plan.instrument_type)
+        return PaperFill(
+            position_id=position_id,
+            series_id=series_id,
+            purpose=purpose,
+            exchange=plan.exchange,
+            symbol=plan.symbol,
+            instrument_type=plan.instrument_type,
+            side=plan.side.value,
+            quantity=quantity,
+            price=price,
+            mid_price=mid,
+            notional=notional,
+            fee_rate=fee_rate,
+            fee=notional * fee_rate,
+            # Measured against the book at fill time: a passive fill after the price
+            # moved through it is an adverse-selection cost, recorded as slippage.
+            slippage=max(slippage, Decimal("0")),
+            levels_consumed=1,
             book_timestamp=book.timestamp,
             book_age_ms=int(age * 1000),
             timestamp=now,
@@ -277,6 +359,36 @@ class PaperExecutionSimulator:
             )
             for plan in legs
         ]
+        opened = self.build_position(
+            opportunity,
+            legs,
+            quantity,
+            fills,
+            snapshot,
+            now,
+            position_id=position_id,
+            series_id=series_id,
+            perp_leverage=perp_leverage,
+        )
+        return opened, fills
+
+    def build_position(
+        self,
+        opportunity: Opportunity,
+        legs: tuple[LegPlan, LegPlan],
+        quantity: Decimal,
+        fills: list[PaperFill],
+        snapshot: MarketSnapshot,
+        now: datetime,
+        *,
+        position_id: str,
+        series_id: str,
+        perp_leverage: Decimal = Decimal("1"),
+    ) -> PaperPosition:
+        """Position for entry fills given in leg order (taker or passive)."""
+
+        if perp_leverage <= 0:
+            raise ValueError("perp leverage must be positive")
         position_legs = []
         for plan, fill in zip(legs, fills, strict=True):
             leverage = (
@@ -312,7 +424,7 @@ class PaperExecutionSimulator:
                     mark_time=now,
                 )
             )
-        opened = PaperPosition(
+        return PaperPosition(
             id=position_id,
             series_id=series_id,
             opportunity_id=opportunity.id,
@@ -325,7 +437,6 @@ class PaperExecutionSimulator:
             entry_net_apr=opportunity.net_apr,
             simulator_version=SIMULATOR_VERSION,
         )
-        return opened, fills
 
     def close(
         self, position: PaperPosition, snapshot: MarketSnapshot, now: datetime

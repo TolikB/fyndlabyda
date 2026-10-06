@@ -6,7 +6,7 @@ import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -46,6 +46,78 @@ class ExitRules(BaseModel):
         return self
 
 
+# The blocks below are optional. A series without them behaves exactly like a series
+# configured before they existed, and its identity (config hash) is unchanged.
+
+
+class EdgeForecast(BaseModel):
+    """Funding edge expected over the holding horizon, instead of the spot rate.
+
+    The current rate of a funding spike says little about the next day; the edge
+    the pair actually settled over the lookback says more. The forecast blends
+    both (per 8 hours), and an entry must cover its full round-trip cost with it.
+    """
+
+    current_weight: Decimal = Field(default=Decimal("0.1"), ge=0, le=1)
+    lookback_hours: Decimal = Field(default=Decimal("24"), gt=0)
+    # Minimum settlements per perpetual leg inside the lookback window.
+    min_history_points: int = Field(default=3, ge=1)
+    horizon_hours: Decimal = Field(default=Decimal("48"), gt=0)
+    # Forecast funding over the horizon minus round-trip costs, per unit of notional.
+    min_expected_net: Decimal = Decimal("0")
+
+
+class SelectionRules(BaseModel):
+    """Entry refinements on top of ``entry``; evaluated on the confirmed opportunity."""
+
+    min_stability_score: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    min_persistence_score: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    # Longest/shortest funding interval of the two legs (1h against 8h is 8).
+    max_interval_ratio: Decimal | None = Field(default=None, ge=1)
+    # No new position in an asset this soon after a position in it closed.
+    reentry_cooldown_hours: Decimal = Field(default=Decimal("0"), ge=0)
+    forecast: EdgeForecast | None = None
+    # "expected_net" needs a forecast; "score" keeps the scanner's ranking.
+    rank_by: Literal["score", "expected_net"] = "score"
+
+    @model_validator(mode="after")
+    def ranking_needs_forecast(self) -> SelectionRules:
+        if self.rank_by == "expected_net" and self.forecast is None:
+            raise ValueError("rank_by 'expected_net' requires a forecast")
+        return self
+
+
+class HoldingRules(BaseModel):
+    """Exit refinements on top of ``exit``."""
+
+    # The edge must stay below ``exit.exit_funding_rate_8h`` this long before an
+    # edge-decay exit (time, not cycles, so the loop interval does not matter).
+    exit_confirmation_minutes: Decimal = Field(gt=0)
+
+
+class ExecutionRules(BaseModel):
+    """Post one leg as a passive (maker) order and hedge the other when it fills.
+
+    A resting order counts as filled only once a later book trades through its
+    price, which ignores fills at the touch and so understates the fill rate.
+    """
+
+    maker_entry: bool = False
+    maker_exit: bool = False
+    maker_timeout_seconds: int = Field(default=180, ge=1)
+    # An unfilled exit always falls back to taker fills; an entry only if this is set.
+    entry_fallback_taker: bool = False
+
+    @model_validator(mode="after")
+    def something_enabled(self) -> ExecutionRules:
+        if not (self.maker_entry or self.maker_exit):
+            raise ValueError("execution needs maker_entry or maker_exit")
+        return self
+
+
+_OPTIONAL_BLOCKS = ("selection", "holding", "execution")
+
+
 class SeriesConfig(BaseModel):
     name: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,31}$")
     # Durable identity; change it to start a fresh, separately accounted series.
@@ -64,6 +136,9 @@ class SeriesConfig(BaseModel):
     )
     entry: EntryRules = Field(default_factory=EntryRules)
     exit: ExitRules = Field(default_factory=ExitRules)
+    selection: SelectionRules | None = None
+    holding: HoldingRules | None = None
+    execution: ExecutionRules | None = None
 
     @field_validator("strategies")
     @classmethod
@@ -92,9 +167,14 @@ class SeriesConfig(BaseModel):
     def identity(self, simulator_version: str, context: dict[str, Any]) -> dict[str, Any]:
         """Everything that shapes this series' simulated results."""
 
+        series = self.model_dump(mode="json")
+        for block in _OPTIONAL_BLOCKS:
+            # Absent blocks stay out, so older series keep their recorded hash.
+            if series.get(block) is None:
+                series.pop(block, None)
         return {
             "simulator_version": simulator_version,
-            "series": self.model_dump(mode="json"),
+            "series": series,
             "context": context,
         }
 

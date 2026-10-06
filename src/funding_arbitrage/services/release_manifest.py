@@ -18,7 +18,13 @@ from typing import Any
 
 MANIFEST_PATH = Path("ops/release-manifest.json")
 RUNTIME_PATHS = ("src", "migrations", "config", "dashboard", "alembic.ini", "pyproject.toml")
-DEPLOYMENT_PATHS = ("Dockerfile", "docker-compose.yml", "constraints.txt", "ops/scripts")
+DEPLOYMENT_PATHS = (
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.paper-v2.yml",
+    "constraints.txt",
+    "ops/scripts",
+)
 _SKIPPED_PARTS = {"__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 _SKIPPED_SUFFIXES = {".pyc", ".pyo"}
 

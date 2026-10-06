@@ -28,7 +28,7 @@ from funding_arbitrage.portfolio.portfolio import INVARIANT_TOLERANCE
 from funding_arbitrage.services import analytics
 from funding_arbitrage.services.paper_runner import PaperTestRunner, RunnerLock
 from funding_arbitrage.services.runtime import RuntimeState
-from funding_arbitrage.services.series import PaperSeriesFile
+from funding_arbitrage.services.series import PaperSeriesFile, SeriesConfig
 from tests.conftest import Database, FakeClock
 
 VENUES = ("bybit", "gate", "okx", "binance", "hyperliquid")
@@ -322,3 +322,55 @@ async def test_readiness_flags_gaps_and_missing_report(
     assert result["live_orders"] == 0
     assert all(item["reconciliation_ok"] for item in result["series"].values())
     await runner.shutdown()
+
+
+async def test_refined_series_trade_beside_legacy_series_and_restore_cooldowns(
+    database: Database, clock: FakeClock
+) -> None:
+    legacy = series_file()
+    refined = SeriesConfig.model_validate(
+        {
+            "name": "quality",
+            "label": "quality-test",
+            "initial_balance_usdt": "1000",
+            "position_notional_usdt": "50",
+            "max_total_notional_usdt": "400",
+            "max_open_positions": 8,
+            "entry": {"min_funding_rate_8h": "0"},
+            "exit": {"min_hold_hours": "0", "max_hold_hours": "0.05", "exit_confirmations": 1},
+            "selection": {"reentry_cooldown_hours": "8", "max_interval_ratio": "4"},
+            "holding": {"exit_confirmation_minutes": "1"},
+            "execution": {
+                "maker_entry": True,
+                "maker_exit": True,
+                "maker_timeout_seconds": 40,
+                "entry_fallback_taker": True,
+            },
+        }
+    )
+    series = PaperSeriesFile(primary_series="candidate", series=[*legacy.series, refined])
+    runner = make_runner(database, clock, series)
+    await runner.start()
+    await run_cycles(runner, clock, 20)
+    async with database.session_factory() as session:
+        for label in ("candidate-test", "baseline-test", "quality-test"):
+            result = await analytics.reconciliation(session, label)
+            assert result["ok"], result
+        record = await session.get(PaperSeriesRecord, "quality-test")
+        assert record is not None
+        assert record.config["series"]["execution"]["maker_entry"] is True
+    quality = runner.series["quality-test"]
+    assert quality.account.invariant_diff() <= INVARIANT_TOLERANCE
+    closed = await count(database, PaperPositionRecord, series_id="quality-test", state="CLOSED")
+    assert closed > 0
+    # Every close and open is still exactly one fill per leg, maker or taker.
+    fills = await count(database, PaperFillRecord, series_id="quality-test")
+    positions = await count(database, PaperPositionRecord, series_id="quality-test")
+    assert fills == positions * 2 + closed * 2
+    await runner.shutdown()
+
+    restarted = make_runner(database, clock, series)
+    await restarted.start()
+    assert restarted.series["quality-test"].last_closed_at
+    assert not restarted.series["candidate-test"].last_closed_at
+    await restarted.shutdown()

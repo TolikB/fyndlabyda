@@ -196,3 +196,54 @@ docker compose exec app funding-arbitrage reconcile
 | біржа OFFLINE | `/exchanges` (`last_error`, `retry_at`) | breaker сам повторює спробу з наростаючою паузою |
 | `close_deferred` | логи `paper_close_deferred` | нема свіжої книги: закриття відкладається, fill не вигадується |
 | `funding_settled_from_snapshot` | атрибуція `funding_sources` | історія funding запізнилася >15 хв; подія позначена як `snapshot` |
+
+## 11. Стек v2: експеримент стратегії поруч із живими серіями
+
+Чотири серії з `config/paper_series.v2.yaml` (control, patient, quality, quality-maker)
+працюють в окремому compose-проєкті `funding_arbitrage_paper_v2` зі своєю БД
+`funding_arbitrage_paper_v2_pgdata` і портом 8001. Живий стек (`funding_arbitrage_paper`,
+порт 8000) не зупиняється і не перезбирається. Пояснення змін: `docs/STRATEGY_V2.md`.
+
+**Головне правило.** У каталозі v2 `.env` має містити `COMPOSE_PROJECT_NAME` і
+`COMPOSE_FILE` з `.env.paper-v2.example`. Без них `docker compose` у цьому каталозі
+адресує живий проєкт і його том. Перед кожною командою перевіряйте:
+
+```bash
+cd /opt/funding_arbitrage_paper_v2/current
+docker compose config | head -1        # name: funding_arbitrage_paper_v2
+```
+
+Розгортання:
+
+```bash
+mkdir -p /opt/funding_arbitrage_paper_v2/releases && cd /opt/funding_arbitrage_paper_v2
+tar -xzf <архів-релізу>.tar.gz -C releases/<реліз>
+ln -sfn /opt/funding_arbitrage_paper_v2/releases/<реліз> current && cd current
+cp /opt/funding_arbitrage_paper/current/.env .env && chmod 600 .env
+# Перенести з .env.paper-v2.example: COMPOSE_PROJECT_NAME, COMPOSE_FILE, APP_PORT=8001,
+# PAPER_SERIES_FILE, PAPER_BOOK_CANDIDATES_PER_CYCLE=8, PAPER_HISTORY_REQUESTS_PER_CYCLE=8,
+# MARKET_HISTORY_TTL_SECONDS=3600, maker-комісії, TELEGRAM_ENABLED=false, PAPER_AUTOTRADE=false.
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env
+docker compose config | head -1        # має бути funding_arbitrage_paper_v2
+docker compose build app
+docker run --rm -v "$PWD":/src -w /src --entrypoint funding-arbitrage \
+  funding-arbitrage-paper-v2:local release-manifest check
+docker compose up -d
+curl -s 127.0.0.1:8001/health
+docker compose exec app funding-arbitrage preflight
+```
+
+Далі як у розділах 4–5: спостереження з `PAPER_AUTOTRADE=false`, потім `true` і
+`docker compose up -d app`. Після старту живого стека перевірте, що він не почав
+ловити rate limit: `docker logs --since 30m funding_arbitrage_paper-app-1 | grep -c rate`.
+
+Оцінка (не раніше ніж через 7 днів і ≥ 50 закритих угод на серію):
+
+```bash
+curl -s "127.0.0.1:8001/analytics/series" | python3 -m json.tool
+curl -s "127.0.0.1:8001/analytics/compare?a=quality&b=control" | python3 -m json.tool
+docker compose exec app funding-arbitrage replay-rules --days 7
+```
+
+Зупинити експеримент без втрати даних: `docker compose stop` у каталозі v2. Бекап —
+`PROJECT_DIR=/opt/funding_arbitrage_paper_v2/current PROJECT_NAME=funding_arbitrage_paper_v2 ops/scripts/backup.sh`.

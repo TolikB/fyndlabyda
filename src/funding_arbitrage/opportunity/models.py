@@ -38,6 +38,11 @@ class FeeSchedule(BaseModel):
             return self.spot_taker_fee
         return self.taker_fee
 
+    def maker(self, instrument_type: InstrumentType) -> Decimal:
+        if instrument_type is InstrumentType.SPOT and self.spot_maker_fee is not None:
+            return self.spot_maker_fee
+        return self.maker_fee
+
 
 class CostBreakdown(BaseModel):
     """Round-trip costs as a fraction of the per-leg notional (or USD when sized)."""

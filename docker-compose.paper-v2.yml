@@ -1,0 +1,19 @@
+# Strategy v2 experiment stack, beside the live paper stack on the same VM.
+#
+# Use it only together with docker-compose.yml, from the v2 release directory whose
+# .env sets (see .env.paper-v2.example):
+#
+#   COMPOSE_PROJECT_NAME=funding_arbitrage_paper_v2
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.paper-v2.yml
+#
+# so that every plain `docker compose ...` there addresses this project. Without
+# them, docker-compose.yml alone names the live project and its database volume.
+name: funding_arbitrage_paper_v2
+
+services:
+  app:
+    image: funding-arbitrage-paper-v2:${RELEASE_TAG:-local}
+
+volumes:
+  pgdata:
+    name: funding_arbitrage_paper_v2_pgdata

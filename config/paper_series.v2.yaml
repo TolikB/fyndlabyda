@@ -1,0 +1,144 @@
+# Strategy v2 experiment: four series side by side on the same market snapshots.
+#
+# Runs in its own stack (docker-compose.paper-v2.yml) so the 30-day candidate/baseline
+# series in config/paper_series.yaml keep their book slots, history budget and code.
+#
+# Each series adds one change to the previous one, so the comparison says which
+# change earned (or lost) money:
+#
+#   control        candidate's entry and exit rules (the reference)
+#   patient        + hold at least 24h, leave only on a clearly negative edge
+#   quality        + persistent funding only, forecast must pay the round trip
+#   quality-maker  + one leg of every entry and exit rests as a passive order
+#
+# Why: on the first 2.7 days of the live series a round trip cost ~0.33% of the
+# per-leg notional, the funding rate shown at entry did not predict the next day's
+# edge, positions left right after the 8h minimum hold, and persistence >= 90
+# was the only predictive signal. See docs/STRATEGY_V2.md.
+#
+# Same capital and capacity everywhere: 1000 USDT, 50 USDT per position, 8 positions.
+primary_series: quality
+
+series:
+  - name: control
+    label: control-v2-20261006
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0.0002"
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "8"
+      max_hold_hours: "72"
+      exit_funding_rate_8h: "0.00005"
+      exit_confirmations: 3
+
+  - name: patient
+    label: patient-v2-20261006
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0.0002"
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "24"
+      max_hold_hours: "96"
+      # Leaving costs ~0.17%; a small positive edge is free to hold.
+      exit_funding_rate_8h: "-0.0005"
+    selection:
+      reentry_cooldown_hours: "8"
+    holding:
+      exit_confirmation_minutes: "60"
+
+  - name: quality
+    label: quality-v2-20261006
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      # The current rate is not a predictor; the forecast below decides.
+      min_funding_rate_8h: "0"
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "24"
+      max_hold_hours: "96"
+      exit_funding_rate_8h: "-0.0005"
+    selection:
+      min_persistence_score: "90"
+      max_interval_ratio: "4"
+      reentry_cooldown_hours: "8"
+      forecast:
+        current_weight: "0.1"
+        lookback_hours: "24"
+        min_history_points: 3
+        horizon_hours: "48"
+        # 0.1% of the per-leg notional above the full round-trip cost.
+        min_expected_net: "0.001"
+      rank_by: expected_net
+    holding:
+      exit_confirmation_minutes: "60"
+
+  - name: quality-maker
+    label: quality-maker-v2-20261006
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0"
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "24"
+      max_hold_hours: "96"
+      exit_funding_rate_8h: "-0.0005"
+    selection:
+      min_persistence_score: "90"
+      max_interval_ratio: "4"
+      reentry_cooldown_hours: "8"
+      forecast:
+        current_weight: "0.1"
+        lookback_hours: "24"
+        min_history_points: 3
+        horizon_hours: "48"
+        min_expected_net: "0.001"
+      rank_by: expected_net
+    holding:
+      exit_confirmation_minutes: "60"
+    execution:
+      maker_entry: true
+      maker_exit: true
+      maker_timeout_seconds: 180
+      entry_fallback_taker: false

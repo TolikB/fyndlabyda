@@ -7,13 +7,14 @@ import asyncio
 import json
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 
+from funding_arbitrage.backtest import funding_rules
 from funding_arbitrage.backtest.engine import BacktestEngine
 from funding_arbitrage.backtest.events import BacktestEvent, PositionEvent
 from funding_arbitrage.config import assert_public_data_only, get_settings
@@ -189,6 +190,47 @@ async def reconcile(series: str | None) -> int:
     return 0 if ok else 1
 
 
+async def replay_rules(series_path: str, days: float, cost: Decimal, maker_saving: Decimal) -> int:
+    settings = get_settings()
+    series = load_series_file(series_path)
+    end = datetime.now(UTC)
+    start = end - timedelta(days=days)
+    lookback = max(
+        (
+            Decimal(item.selection.forecast.lookback_hours)
+            for item in series.series
+            if item.selection is not None and item.selection.forecast is not None
+        ),
+        default=Decimal("24"),
+    )
+    engine, session_factory = create_database(settings)
+    try:
+        async with session_factory() as session:
+            signals, tape = await funding_rules.load_inputs(
+                session, start, end, timedelta(hours=float(lookback))
+            )
+    finally:
+        await engine.dispose()
+    _print(
+        {
+            "period": {"start": start, "end": end},
+            "signals": len(signals),
+            "assumptions": {
+                "round_trip_cost_percent": str(cost * 100),
+                "maker_saving_percent": str(maker_saving * 100),
+                "note": "ranks rule sets; fixed costs, no capital limit, no fill model",
+            },
+            "series": [
+                funding_rules.replay_series(
+                    config, signals, tape, end=end, cost=cost, maker_saving=maker_saving
+                ).summary(config.position_notional_usdt)
+                for config in series.series
+            ],
+        }
+    )
+    return 0
+
+
 def release_manifest(action: str, verification_path: str | None) -> int:
     root = Path(".")
     if action == "write":
@@ -233,6 +275,13 @@ def main() -> None:
     manifest = commands.add_parser("release-manifest", help="write or check release evidence")
     manifest.add_argument("action", choices=("write", "check"))
     manifest.add_argument("--verification", default=None)
+    replay = commands.add_parser(
+        "replay-rules", help="replay series rules over recorded opportunities and funding"
+    )
+    replay.add_argument("--series-file", default=None)
+    replay.add_argument("--days", type=float, default=7.0)
+    replay.add_argument("--cost", default=str(funding_rules.DEFAULT_ROUND_TRIP_COST))
+    replay.add_argument("--maker-saving", default=str(funding_rules.DEFAULT_MAKER_SAVING))
     args = parser.parse_args()
 
     exit_code = 0
@@ -260,6 +309,15 @@ def main() -> None:
         exit_code = asyncio.run(reconcile(args.series))
     elif args.command == "release-manifest":
         exit_code = release_manifest(args.action, args.verification)
+    elif args.command == "replay-rules":
+        exit_code = asyncio.run(
+            replay_rules(
+                args.series_file or get_settings().paper_series_file,
+                args.days,
+                Decimal(args.cost),
+                Decimal(args.maker_saving),
+            )
+        )
     else:
         uvicorn.run("funding_arbitrage.main:app", host="0.0.0.0", port=8000, reload=False)
     sys.exit(exit_code)
