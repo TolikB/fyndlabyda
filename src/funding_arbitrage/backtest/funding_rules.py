@@ -415,11 +415,11 @@ async def load_inputs(
         )
         .order_by(OpportunityRecord.created_at)
     )
-    signals = [
-        signal
-        for created_at, payload in rows.all()
-        if (signal := signal_from_payload(created_at, payload)) is not None
-    ]
+    signals: list[Signal] = []
+    for created_at, payload in rows.tuples().all():
+        signal = signal_from_payload(created_at, payload)
+        if signal is not None:
+            signals.append(signal)
     legs = sorted({leg.key for signal in signals for leg in signal.legs})
     tape = FundingTape()
     if not legs:
@@ -442,7 +442,7 @@ async def load_inputs(
             )
             .order_by(FundingSnapshotRecord.timestamp)
         )
-        for exchange, symbol, at, rate, interval, next_time in snapshots.all():
+        for exchange, symbol, at, rate, interval, next_time in snapshots.tuples().all():
             tape.add_snapshot(
                 (exchange, symbol),
                 at,
@@ -461,6 +461,6 @@ async def load_inputs(
                 FundingHistoryRecord.funding_timestamp >= since,
             )
         )
-        for exchange, symbol, at, rate in history.all():
+        for exchange, symbol, at, rate in history.tuples().all():
             tape.add_settlement((exchange, symbol), at, Decimal(str(rate)))
     return signals, tape.freeze()
