@@ -10,11 +10,18 @@ from funding_arbitrage.backtest.funding_rules import (
     FundingTape,
     ReplayLeg,
     Signal,
+    load_inputs,
     replay_series,
     settled_edge,
     signal_from_payload,
 )
+from funding_arbitrage.database.models import (
+    FundingHistoryRecord,
+    FundingSnapshotRecord,
+    OpportunityRecord,
+)
 from funding_arbitrage.services.series import SeriesConfig
+from tests.conftest import Database
 
 D = Decimal
 T0 = datetime(2026, 10, 1, tzinfo=UTC)
@@ -163,3 +170,67 @@ def test_signal_from_recorded_payload() -> None:
     )
     assert parsed.key.startswith("cross_exchange_funding:X:bybit:XUSDT:PERPETUAL:SELL")
     assert signal_from_payload(T0, {**payload, "symbol_b": None}) is None
+
+
+async def test_inputs_load_from_the_recorded_tables(database: Database) -> None:
+    payload = {
+        "strategy": "cross_exchange_funding",
+        "asset": "X",
+        "venue_a": "bybit",
+        "symbol_a": "XUSDT",
+        "leg_a_type": "PERPETUAL",
+        "leg_a_side": "SELL",
+        "venue_b": "binance",
+        "symbol_b": "XUSDT",
+        "leg_b_type": "PERPETUAL",
+        "leg_b_side": "BUY",
+        "funding_interval_hours_a": "8",
+        "funding_interval_hours_b": "8",
+        "funding_rate_8h": "0.001",
+        "net_apr": "1",
+        "funding_stability_score": "95",
+        "persistence_score": "100",
+    }
+    settle = T0 + timedelta(hours=8)
+    async with database.session_factory() as session:
+        session.add(
+            OpportunityRecord(
+                opportunity_id="o1",
+                strategy="cross_exchange_funding",
+                asset="X",
+                venue_a="bybit",
+                venue_b="binance",
+                gross_edge=D("0"),
+                net_edge=D("0"),
+                net_apr=D("1"),
+                opportunity_score=D("0"),
+                status="confirmed",
+                created_at=T0 + timedelta(hours=1),
+                payload=payload,
+            )
+        )
+        for venue, rate in (("bybit", "0.0009"), ("binance", "0.0001")):
+            session.add(
+                FundingSnapshotRecord(
+                    exchange=venue,
+                    symbol="XUSDT",
+                    funding_rate=D(rate),
+                    funding_interval_hours=D("8"),
+                    next_funding_time=settle,
+                    timestamp=T0 + timedelta(hours=7),
+                )
+            )
+        session.add(
+            FundingHistoryRecord(
+                exchange="bybit", symbol="XUSDT", funding_rate=D("0.001"), funding_timestamp=settle
+            )
+        )
+        await session.commit()
+        signals, recorded = await load_inputs(
+            session, T0, T0 + timedelta(hours=10), timedelta(hours=24)
+        )
+    (loaded,) = signals
+    assert loaded.persistence == D("100")
+    # History wins for bybit; binance falls back to its last snapshot before settlement.
+    assert settled_edge(recorded, loaded, T0, T0 + timedelta(hours=9)) == D("0.001") - D("0.0001")
+    assert recorded.shown_at(("bybit", "XUSDT"), T0 + timedelta(hours=8)) == D("0.0009")

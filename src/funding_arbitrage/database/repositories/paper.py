@@ -170,7 +170,7 @@ async def last_close_times(
         )
         .group_by(PaperPositionRecord.asset)
     )
-    return {asset: closed_at for asset, closed_at in rows.tuples().all() if closed_at is not None}
+    return {asset: closed_at for asset, closed_at in rows.all() if closed_at is not None}
 
 
 # ------------------------------------------------------------------ persistence

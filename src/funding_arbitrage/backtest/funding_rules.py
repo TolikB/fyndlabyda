@@ -27,7 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -416,8 +416,8 @@ async def load_inputs(
         .order_by(OpportunityRecord.created_at)
     )
     signals: list[Signal] = []
-    for created_at, payload in rows.tuples().all():
-        signal = signal_from_payload(created_at, payload)
+    for row in rows.all():
+        signal = signal_from_payload(cast(datetime, row[0]), cast(dict[str, Any], row[1]))
         if signal is not None:
             signals.append(signal)
     legs = sorted({leg.key for signal in signals for leg in signal.legs})
@@ -442,7 +442,7 @@ async def load_inputs(
             )
             .order_by(FundingSnapshotRecord.timestamp)
         )
-        for exchange, symbol, at, rate, interval, next_time in snapshots.tuples().all():
+        for exchange, symbol, at, rate, interval, next_time in snapshots.all():
             tape.add_snapshot(
                 (exchange, symbol),
                 at,
@@ -461,6 +461,6 @@ async def load_inputs(
                 FundingHistoryRecord.funding_timestamp >= since,
             )
         )
-        for exchange, symbol, at, rate in history.tuples().all():
+        for exchange, symbol, at, rate in history.all():
             tape.add_settlement((exchange, symbol), at, Decimal(str(rate)))
     return signals, tape.freeze()
