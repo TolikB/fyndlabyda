@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-06T09:19:20.183030+00:00",
+  "generated_at": "2026-10-09T08:27:56.612323+00:00",
   "git_commit": null,
   "simulator_version": "2.0.1",
-  "runtime_sha256": "08a13130399468a8407687c460be6a67706d96114a87a58b3ae3eaf5fd37b287",
+  "runtime_sha256": "418af76d613bb1fb428c0dc61794bccbdfefc90f43b132d63e72544bb24a223a",
   "deployment_sha256": "6fc6d960cff8a0f8b8ca8e085a63706b43022a3eaacf0222d08a0a6f34b12809",
   "verification": {
-    "checked_at": "2026-10-06T09:19:18.835632+00:00",
+    "checked_at": "2026-10-09T08:27:55.464621+00:00",
     "python": "3.12.14",
-    "pytest": "119 passed in 84.22s (0:01:24)",
+    "pytest": "119 passed in 64.35s (0:01:04)",
     "ruff": "ruff 0.16.10",
     "mypy": "mypy 1.20.2 (compiled: yes)",
     "postgres_integration": true
@@ -17,7 +17,7 @@
     "alembic.ini": "167a48a1d8c3033d1b7c2184f3fe970de3ecdd8bca07b1824846d27f7e164d29",
     "config/default.yaml": "9cad9986062a4e0ffae9d2e1aba612fd6828f6237f57cba6ca203f2f7723237b",
     "config/paper_series.mock.yaml": "98a63920b61391cc53edb254aaa4c2bcd549aace91f3eafc3030a8a4946f697c",
-    "config/paper_series.v2.yaml": "3806b6c54c0613a6a34ac2be27fc5f3746149c310e279f77c9b306f0d5ba3d74",
+    "config/paper_series.v2.yaml": "ebb654c8f4fded6222f193f45396b0c5f6f77f52397bfdd956496c9c0b03b567",
     "config/paper_series.yaml": "7a2a693b199e988c0591a3178f99cc1f49b8c67179b29498987ac76ab1d52851",
     "dashboard/index.html": "47834f4de12fb50e453c5a9abdf8756fd2e26bf72e8d117793efc1d4f234fa89",
     "migrations/env.py": "02778fa702409696c7b467efe8c6f1059281ada40f8faf9bda4286289d1295fe",
