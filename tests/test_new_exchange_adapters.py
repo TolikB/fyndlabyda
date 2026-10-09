@@ -61,7 +61,10 @@ async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode(
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="https://test.invalid"
     )
-    adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
+    # The per-instrument path is the fallback when the bulk request fails.
+    adapter = OkxPublicAdapter(
+        base_url="https://test.invalid", http_client=client, bulk_funding=False
+    )
     funding = await adapter.get_funding_rates()
     returned_symbol = "BTC-USDT-SWAP"
     mismatched = await adapter.get_funding_rates()
@@ -495,3 +498,86 @@ async def test_hyperliquid_funding_is_hourly_with_next_utc_boundary() -> None:
     assert funding[0].next_funding_time.minute == 0
     assert funding[0].next_funding_time.second == 0
     assert funding[0].next_funding_time > funding[0].timestamp
+
+
+def _okx_bulk_handler(requested: list[str], *, bulk_status: int = 200) -> httpx.MockTransport:
+    now_ms = str(int(datetime.now(UTC).timestamp() * 1000))
+
+    def funding_row(symbol: str, rate: str) -> dict[str, str]:
+        return {
+            "instId": symbol,
+            "fundingRate": rate,
+            "fundingTime": "1735704000000",
+            "nextFundingTime": "1735732800000",
+            "ts": now_ms,
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/public/instruments"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": [
+                        {"instId": "ETH-USDT-SWAP", "state": "live"},
+                        {"instId": "ZZZ-USDT-SWAP", "state": "live"},
+                        {"instId": "OLD-USDT-SWAP", "state": "suspend"},
+                    ],
+                },
+            )
+        if request.url.path.endswith("/public/funding-rate"):
+            symbol = request.url.params["instId"]
+            requested.append(symbol)
+            if symbol == "ANY":
+                if bulk_status != 200:
+                    return httpx.Response(bulk_status)
+                rows = [
+                    funding_row("ETH-USDT-SWAP", "0.0001"),
+                    funding_row("ZZZ-USDT-SWAP", "0.0003"),
+                    funding_row("OLD-USDT-SWAP", "0.0009"),
+                ]
+            else:
+                rows = [funding_row(symbol, "0.0002")]
+            return httpx.Response(200, json={"code": "0", "data": rows})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_okx_funding_reads_every_live_swap_in_one_request() -> None:
+    requested: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_okx_bulk_handler(requested), base_url="https://test.invalid"
+    )
+    # A limit of one would have hidden ZZZ on the per-instrument path.
+    adapter = OkxPublicAdapter(
+        base_url="https://test.invalid", http_client=client, funding_symbol_limit=1
+    )
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert requested == ["ANY"]
+    assert {item.symbol: item.funding_rate for item in funding} == {
+        "ETH-USDT-SWAP": Decimal("0.0001"),
+        "ZZZ-USDT-SWAP": Decimal("0.0003"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_okx_funding_falls_back_to_capped_per_instrument_requests() -> None:
+    requested: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_okx_bulk_handler(requested, bulk_status=500),
+        base_url="https://test.invalid",
+    )
+    adapter = OkxPublicAdapter(
+        base_url="https://test.invalid", http_client=client, funding_symbol_limit=1
+    )
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert requested == ["ANY", "ETH-USDT-SWAP"]
+    assert [(item.symbol, item.funding_rate) for item in funding] == [
+        ("ETH-USDT-SWAP", Decimal("0.0002"))
+    ]

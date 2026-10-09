@@ -60,6 +60,8 @@ class LocalOrderBook:
         self._asks: dict[Decimal, Decimal] = {}
         self.sequence: int | None = None
         self.exchange_timestamp: datetime | None = None
+        # Built on demand and dropped on every commit; see snapshot().
+        self._snapshot: BookSnapshot | None = None
         self.quality = DataQuality.RECOVERING
         self.recovery_reason: str | None = "snapshot_required"
         self._delta_fingerprints: OrderedDict[
@@ -197,16 +199,26 @@ class LocalOrderBook:
                 levels.pop(update.price, None)
             else:
                 levels[update.price] = update.quantity
-        candidate = self._candidate_snapshot(
-            bids=self._trim(bids, reverse=True),
-            asks=self._trim(asks, reverse=False),
+        trimmed_bids = self._trim(bids, reverse=True)
+        trimmed_asks = self._trim(asks, reverse=False)
+        if delta.checksum is not None:
+            # Only a venue checksum needs the candidate as a snapshot; without one
+            # the levels commit directly (Binance diff depth sends none).
+            candidate = self._candidate_snapshot(
+                bids=trimmed_bids,
+                asks=trimmed_asks,
+                sequence=delta.last_sequence,
+                exchange_timestamp=delta.exchange_timestamp,
+                checksum=delta.checksum,
+            )
+            if not self._checksum_valid(candidate, delta.checksum):
+                return self._gap("delta_checksum_mismatch")
+        self._commit_levels(
+            trimmed_bids,
+            trimmed_asks,
             sequence=delta.last_sequence,
             exchange_timestamp=delta.exchange_timestamp,
-            checksum=delta.checksum,
         )
-        if not self._checksum_valid(candidate, delta.checksum):
-            return self._gap("delta_checksum_mismatch")
-        self._commit(candidate)
         self._remember_delta(identity, fingerprint)
         return BookApplyResult(
             status=BookApplyStatus.APPLIED,
@@ -234,19 +246,15 @@ class LocalOrderBook:
     def snapshot(self) -> BookSnapshot:
         if self.sequence is None or self.exchange_timestamp is None:
             raise RuntimeError("book has no authoritative snapshot")
-        return BookSnapshot(
-            instrument=self.instrument,
-            bids=tuple(
-                BookLevel(price=price, quantity=quantity)
-                for price, quantity in sorted(self._bids.items(), reverse=True)
-            ),
-            asks=tuple(
-                BookLevel(price=price, quantity=quantity)
-                for price, quantity in sorted(self._asks.items())
-            ),
-            sequence=self.sequence,
-            exchange_timestamp=self.exchange_timestamp,
-        )
+        if self._snapshot is None:
+            self._snapshot = self._candidate_snapshot(
+                bids=self._bids,
+                asks=self._asks,
+                sequence=self.sequence,
+                exchange_timestamp=self.exchange_timestamp,
+                checksum=None,
+            )
+        return self._snapshot
 
     def _candidate_snapshot(
         self,
@@ -257,14 +265,23 @@ class LocalOrderBook:
         exchange_timestamp: datetime,
         checksum: str | None,
     ) -> BookSnapshot:
-        return BookSnapshot(
+        """A snapshot of levels this book already validated, without re-validating.
+
+        Every level comes from a validated snapshot or delta (positive price and
+        size, one entry per price) and is sorted here, and the sequence and
+        timestamp come from validated models too, so the BookSnapshot validators
+        cannot fail. Running them anyway was a third of the canonical runtime's
+        CPU on Binance diff-depth streams.
+        """
+
+        return BookSnapshot.model_construct(
             instrument=self.instrument,
             bids=tuple(
-                BookLevel(price=price, quantity=quantity)
+                BookLevel.model_construct(price=price, quantity=quantity)
                 for price, quantity in sorted(bids.items(), reverse=True)
             ),
             asks=tuple(
-                BookLevel(price=price, quantity=quantity)
+                BookLevel.model_construct(price=price, quantity=quantity)
                 for price, quantity in sorted(asks.items())
             ),
             sequence=sequence,
@@ -273,10 +290,26 @@ class LocalOrderBook:
         )
 
     def _commit(self, snapshot: BookSnapshot) -> None:
-        self._bids = {level.price: level.quantity for level in snapshot.bids}
-        self._asks = {level.price: level.quantity for level in snapshot.asks}
-        self.sequence = snapshot.sequence
-        self.exchange_timestamp = snapshot.exchange_timestamp
+        self._commit_levels(
+            {level.price: level.quantity for level in snapshot.bids},
+            {level.price: level.quantity for level in snapshot.asks},
+            sequence=snapshot.sequence,
+            exchange_timestamp=snapshot.exchange_timestamp,
+        )
+
+    def _commit_levels(
+        self,
+        bids: dict[Decimal, Decimal],
+        asks: dict[Decimal, Decimal],
+        *,
+        sequence: int,
+        exchange_timestamp: datetime,
+    ) -> None:
+        self._bids = bids
+        self._asks = asks
+        self.sequence = sequence
+        self.exchange_timestamp = exchange_timestamp
+        self._snapshot = None
         self._refresh_quality()
 
     @staticmethod
