@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -24,6 +25,7 @@ from funding_arbitrage.exchanges.base.models import (
     Ticker,
 )
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
+from funding_arbitrage.exchanges.binance import client as binance_client
 from funding_arbitrage.exchanges.gate import GatePublicAdapter
 from funding_arbitrage.exchanges.hyperliquid import HyperliquidPublicAdapter
 from funding_arbitrage.exchanges.mock import MockExchangeAdapter
@@ -224,7 +226,13 @@ async def test_okx_swap_book_uses_ct_val_and_funding_time_is_next_settlement() -
     assert funding[0].funding_interval_hours == D("4")
 
 
-async def test_binance_skips_delivery_contracts_and_uses_funding_info() -> None:
+@pytest.mark.parametrize("uptime", [30.0, 86400.0])
+async def test_binance_skips_delivery_contracts_and_uses_funding_info(
+    monkeypatch: pytest.MonkeyPatch, uptime: float
+) -> None:
+    # The cache clock counts from boot; a host up for under an hour must still fetch.
+    monkeypatch.setattr(binance_client, "time", SimpleNamespace(monotonic=lambda: uptime))
+
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path.endswith("/fapi/v1/fundingInfo"):

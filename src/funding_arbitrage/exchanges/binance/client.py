@@ -71,7 +71,7 @@ class BinancePublicAdapter(ExchangeAdapter):
         # USDⓈ-M symbols cover perpetuals and quarterly delivery contracts.
         self._futures_types: dict[str, InstrumentType] = {}
         self._funding_intervals: dict[str, Decimal] = {}
-        self._funding_info_at = 0.0
+        self._funding_info_at: float | None = None
         self._premium: tuple[float, list[Any]] | None = None
 
     async def _ensure_http(self) -> httpx.AsyncClient:
@@ -250,7 +250,12 @@ class BinancePublicAdapter(ExchangeAdapter):
         )
 
     async def _refresh_funding_intervals(self) -> None:
-        if time.monotonic() - self._funding_info_at < _FUNDING_INFO_CACHE_SECONDS:
+        # monotonic() counts from boot: a 0.0 sentinel skipped every fetch during the
+        # host's first hour and priced 4h symbols as 8h.
+        if (
+            self._funding_info_at is not None
+            and time.monotonic() - self._funding_info_at < _FUNDING_INFO_CACHE_SECONDS
+        ):
             return
         payload = await self._request(self.futures_base_url, "/fapi/v1/fundingInfo", {})
         if not isinstance(payload, list):
