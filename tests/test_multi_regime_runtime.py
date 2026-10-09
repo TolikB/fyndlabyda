@@ -1089,6 +1089,45 @@ def test_future_book_is_unavailable_and_cannot_leak_into_decision_time() -> None
     assert batches[-1].orderflow.data_quality is DataQuality.UNAVAILABLE
 
 
+def _received_after(event: EventEnvelope, delay: timedelta) -> EventEnvelope:
+    return event.model_copy(
+        update={
+            "metadata": event.metadata.model_copy(
+                update={"receive_timestamp": event.metadata.exchange_timestamp + delay}
+            )
+        }
+    )
+
+
+def test_book_streamed_before_a_polled_candle_arrives_is_valid_orderflow() -> None:
+    # A polled candle reaches the runtime after its bar closed; the book that kept
+    # streaming meanwhile is the market at decision time, not look-ahead.
+    events = _events()
+    final_book = events[-2]
+    assert isinstance(final_book.payload, BookSnapshot)
+    streamed = final_book.payload.model_copy(
+        update={
+            "exchange_timestamp": final_book.payload.exchange_timestamp
+            + timedelta(seconds=10)
+        }
+    )
+    events[-2] = _envelope(EventKind.BOOK_SNAPSHOT, streamed, 100_000)
+    events[-1] = _received_after(events[-1], timedelta(seconds=20))
+
+    batches = _replay(_engine(), events)
+
+    assert batches[-1].orderflow.data_quality is DataQuality.VALID
+
+
+def test_candle_received_after_the_freshness_window_leaves_orderflow_stale() -> None:
+    events = _events()
+    events[-1] = _received_after(events[-1], timedelta(minutes=10))
+
+    batches = _replay(_engine(), events)
+
+    assert batches[-1].orderflow.data_quality is DataQuality.STALE
+
+
 def test_canonical_book_delta_updates_runtime_l2_and_gap_blocks_quality() -> None:
     engine = _engine()
     snapshot = BookSnapshot(

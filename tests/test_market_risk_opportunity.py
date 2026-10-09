@@ -12,6 +12,7 @@ from funding_arbitrage.exchanges.base.models import (
 )
 from funding_arbitrage.market_data.collector import (
     MarketSnapshot,
+    _asset_perpetual_books,
     _limit_venue_universe,
     _rank_funding_symbols,
     _rank_orderbook_requests,
@@ -645,3 +646,32 @@ def test_orderbook_discovery_prioritizes_funding_potential_over_volume() -> None
         "TUTUSDT",
         InstrumentType.PERPETUAL,
     )
+
+
+def test_pinned_assets_get_one_stablecoin_perpetual_book_per_venue() -> None:
+    def perp(symbol: str, base: str, quote: str, active: bool = True) -> NormalizedInstrument:
+        return NormalizedInstrument(
+            exchange="okx",
+            exchange_symbol=symbol,
+            base_asset=base,
+            quote_asset=quote,
+            instrument_type=InstrumentType.PERPETUAL,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_order_size=Decimal("0.001"),
+            is_active=active,
+        )
+
+    instruments = [
+        perp("BTC-USD-SWAP", "BTC", "USD"),
+        perp("BTC-USDT-SWAP", "BTC", "USDT"),
+        perp("ETH-USDC-SWAP", "ETH", "USDC"),
+        perp("SOL-USDT-SWAP", "SOL", "USDT"),
+        perp("DOGE-USDT-SWAP", "DOGE", "USDT", active=False),
+    ]
+
+    assert _asset_perpetual_books(instruments, frozenset({"BTC", "ETH", "DOGE"})) == [
+        ("BTC-USDT-SWAP", InstrumentType.PERPETUAL),
+        ("ETH-USDC-SWAP", InstrumentType.PERPETUAL),
+    ]
+    assert _asset_perpetual_books(instruments, frozenset()) == []

@@ -820,7 +820,11 @@ class MultiRegimeEngine:
         if regime_candle is not None:
             state.regime_technical = state.regime_technical_engine.on_candle(regime_candle)
             state.regime_structure = state.regime_structure_engine.on_candle(regime_candle)
-            self._update_regime(state, event.metadata.exchange_timestamp)
+            self._update_regime(
+                state,
+                event.metadata.exchange_timestamp,
+                event.metadata.receive_timestamp,
+            )
         if strategy_candle is None:
             return None
         state.technical = state.strategy_technical_engine.on_candle(strategy_candle)
@@ -865,12 +869,14 @@ class MultiRegimeEngine:
             return None
         return self._decide(state, event, include_directional=False)
 
-    def _update_regime(self, state: _InstrumentState, timestamp: datetime) -> None:
+    def _update_regime(
+        self, state: _InstrumentState, timestamp: datetime, received_at: datetime
+    ) -> None:
         technical = state.regime_technical
         structure = state.regime_structure
         if technical is None or structure is None or state.latest_book is None:
             return
-        orderflow = self._orderflow_snapshot(state, timestamp)
+        orderflow = self._orderflow_snapshot(state, timestamp, received_at)
         derivatives = state.derivatives_engine.snapshot(
             timestamp,
             stale_after=timedelta(seconds=self.config.stale_after_seconds),
@@ -914,7 +920,9 @@ class MultiRegimeEngine:
         if last_orchestrated is not None and decision_time < last_orchestrated:
             self.skipped_out_of_order_events += 1
             return None
-        orderflow = self._orderflow_snapshot(state, decision_time)
+        orderflow = self._orderflow_snapshot(
+            state, decision_time, event.metadata.receive_timestamp
+        )
         context = DirectionalStrategyContext(
             instrument=technical.instrument,
             mode=self.config.mode,
@@ -1131,17 +1139,22 @@ class MultiRegimeEngine:
         )
 
     def _orderflow_snapshot(
-        self, state: _InstrumentState, timestamp: datetime
+        self, state: _InstrumentState, timestamp: datetime, received_at: datetime
     ) -> OrderFlowFeatureSnapshot:
         snapshot = state.orderflow_engine.snapshot(timestamp)
         book = state.latest_book
         if book is None:
             return snapshot
-        age = _utc(timestamp) - book.exchange_timestamp
+        # A polled candle reaches the runtime well after its bar closes, while the
+        # book keeps streaming; judged at the close, every live book was "future".
+        # The book is judged when the trigger arrived, and a late trigger is stale.
+        stale_after = timedelta(seconds=self.config.stale_after_seconds)
+        arrival = _utc(received_at)
+        age = arrival - book.exchange_timestamp
         quality = state.latest_book_quality
         if age < timedelta(0):
             quality = DataQuality.UNAVAILABLE
-        elif age > timedelta(seconds=self.config.stale_after_seconds):
+        elif age > stale_after or arrival - _utc(timestamp) > stale_after:
             quality = DataQuality.STALE
         return snapshot.model_copy(update={"data_quality": quality})
 

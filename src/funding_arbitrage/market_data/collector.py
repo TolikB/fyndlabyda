@@ -191,6 +191,7 @@ class MarketDataCollector:
         funding_stale_after_seconds: int | None = None,
         book_stale_after_seconds: int | None = None,
         option_assets: Iterable[str] = (),
+        pinned_book_assets: Iterable[str] = (),
         option_refresh_seconds: float = 5.0,
         option_maximum_expiries: int = 2,
         option_strikes_per_expiry: int = 3,
@@ -257,6 +258,11 @@ class MarketDataCollector:
             dict.fromkeys(
                 asset.strip().upper() for asset in option_assets if asset.strip()
             )
+        )
+        # The multi-regime runtime trades these assets' perpetuals and judges
+        # orderflow by their books, which funding ranking alone never selected.
+        self.pinned_book_assets = frozenset(
+            asset.strip().upper() for asset in pinned_book_assets if asset.strip()
         )
         self.option_refresh_seconds = option_refresh_seconds
         self.option_maximum_expiries = option_maximum_expiries
@@ -835,7 +841,15 @@ class MarketDataCollector:
                 valid_tickers, venue_funding, venue_instruments
             )
             discovery_book_requests = list(
-                dict.fromkeys([*pinned_discovery_books, *ranked_discovery_books])
+                dict.fromkeys(
+                    [
+                        *_asset_perpetual_books(
+                            venue_instruments, self.pinned_book_assets
+                        ),
+                        *pinned_discovery_books,
+                        *ranked_discovery_books,
+                    ]
+                )
             )[: self.orderbook_symbol_limit]
             book_requests = list(
                 dict.fromkeys(
@@ -1518,6 +1532,28 @@ def _required_tickers_are_fresh(
         and (now - ticker.timestamp).total_seconds() <= stale_after_seconds
         for symbol, instrument_type in required_markets or ()
     )
+
+
+def _asset_perpetual_books(
+    instruments: list[NormalizedInstrument], assets: frozenset[str]
+) -> list[tuple[str, InstrumentType]]:
+    """One stablecoin-margined perpetual per pinned asset, USDT first."""
+
+    preference = {"USDT": 0, "USDC": 1, "USD": 2}
+    chosen: dict[str, tuple[int, str]] = {}
+    for item in instruments:
+        if (
+            item.is_active
+            and item.instrument_type is InstrumentType.PERPETUAL
+            and item.base_asset in assets
+            and item.quote_asset in preference
+        ):
+            rank = (preference[item.quote_asset], item.exchange_symbol)
+            if item.base_asset not in chosen or rank < chosen[item.base_asset]:
+                chosen[item.base_asset] = rank
+    return [
+        (chosen[asset][1], InstrumentType.PERPETUAL) for asset in sorted(chosen)
+    ]
 
 
 def _limit_venue_universe(

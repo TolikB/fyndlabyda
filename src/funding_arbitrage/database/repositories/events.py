@@ -134,13 +134,15 @@ async def append_events(session: AsyncSession, events: Sequence[EventEnvelope[An
         raise EventJournalIntegrityError("stored event ID has a different payload hash")
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
-        statement = (
+        # Parameter rows reuse one compiled INSERT; a multi-row VALUES statement was
+        # compiled again for every new batch length on the journal writer's path.
+        inserted_ids = await session.execute(
             pg_insert(CanonicalEventRecord)
-            .values(rows)
             .on_conflict_do_nothing(constraint="uq_canonical_event_id")
+            .returning(CanonicalEventRecord.id),
+            rows,
         )
-        result = cast(CursorResult[Any], await session.execute(statement))
-        inserted = result.rowcount
+        inserted = len(inserted_ids.all())
     elif dialect == "sqlite":
         sqlite_statement = (
             sqlite_insert(CanonicalEventRecord)
