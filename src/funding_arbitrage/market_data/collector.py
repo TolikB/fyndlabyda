@@ -79,6 +79,9 @@ class MarketSnapshot:
     incomplete_venues: tuple[str, ...] = ()
     funding_history_refreshed: dict[tuple[str, str], datetime] = field(default_factory=dict)
     option_quotes: tuple[OptionQuoteSnapshot, ...] = ()
+    # Funding follows the collector's own, longer budget; None holds it to
+    # stale_after_seconds, as snapshots built outside the collector always did.
+    funding_stale_after_seconds: int | None = None
     _ticker_index: dict[tuple[str, str, InstrumentType], Ticker] = field(
         init=False, repr=False, compare=False
     )
@@ -424,6 +427,7 @@ class MarketDataCollector:
             incomplete_venues=incomplete_venues,
             funding_history_refreshed=funding_history_refreshed,
             option_quotes=option_quotes,
+            funding_stale_after_seconds=self.funding_stale_after_seconds,
         )
 
     async def _refresh_funding_aged_during_collection(

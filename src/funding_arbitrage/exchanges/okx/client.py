@@ -17,6 +17,7 @@ from funding_arbitrage.domain.events import BookEvent, OptionQuoteSnapshot, Opti
 from funding_arbitrage.domain.events import InstrumentKey as DomainInstrumentKey
 from funding_arbitrage.domain.events import InstrumentType as DomainInstrumentType
 from funding_arbitrage.exchanges.base.exceptions import (
+    ExchangeError,
     InvalidResponseError,
     NetworkError,
     RateLimitError,
@@ -111,6 +112,7 @@ class OkxPublicAdapter(ExchangeAdapter):
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_reconnects: int | None = None,
         funding_symbol_limit: int = 30,
+        bulk_funding: bool = True,
         reference_price_stale_seconds: float = 30.0,
         funding_timestamp_stale_seconds: float = 180.0,
         canonical_book_event_sink: Callable[[BookEvent], Awaitable[None]] | None = None,
@@ -124,6 +126,9 @@ class OkxPublicAdapter(ExchangeAdapter):
         self._sleep = sleep
         self.max_reconnects = max_reconnects
         self.funding_symbol_limit = funding_symbol_limit
+        # OKX answers instId=ANY with every swap's funding in one response. The
+        # per-instrument path (capped at funding_symbol_limit) is the fallback.
+        self.bulk_funding = bulk_funding
         if reference_price_stale_seconds <= 0:
             raise ValueError("reference_price_stale_seconds must be positive")
         self.reference_price_stale_seconds = reference_price_stale_seconds
@@ -479,7 +484,10 @@ class OkxPublicAdapter(ExchangeAdapter):
         instruments = sorted(
             instruments,
             key=lambda item: (0 if item.get("instId") in popular else 1, str(item.get("instId"))),
-        )[: self.funding_symbol_limit]
+        )
+        bulk_rows = await self._bulk_funding_rows() if self.bulk_funding else None
+        if bulk_rows is None:
+            instruments = instruments[: self.funding_symbol_limit]
         symbols = [str(item.get("instId", "")) for item in instruments if item.get("instId")]
         index_id_by_symbol = {
             symbol: _okx_index_id(item, symbol)
@@ -535,13 +543,17 @@ class OkxPublicAdapter(ExchangeAdapter):
                     stale_after_seconds=self.reference_price_stale_seconds,
                 )
             )
-        responses = await asyncio.gather(
-            *(
-                self._request("/api/v5/public/funding-rate", {"instId": symbol})
-                for symbol in symbols
-            ),
-            return_exceptions=True,
-        )
+        responses: list[list[dict[str, Any]] | BaseException]
+        if bulk_rows is not None:
+            responses = [bulk_rows.get(symbol, []) for symbol in symbols]
+        else:
+            responses = await asyncio.gather(
+                *(
+                    self._request("/api/v5/public/funding-rate", {"instId": symbol})
+                    for symbol in symbols
+                ),
+                return_exceptions=True,
+            )
         funding_observed_at = datetime.now(UTC)
         for symbol, rows in zip(symbols, responses, strict=True):
             if isinstance(rows, BaseException):
@@ -630,6 +642,26 @@ class OkxPublicAdapter(ExchangeAdapter):
                     )
                 )
         return result
+
+    async def _bulk_funding_rows(self) -> dict[str, list[dict[str, Any]]] | None:
+        """Every swap's current funding, keyed by instId; None to fall back.
+
+        One request replaces one per instrument: the per-instrument path covered
+        only the first funding_symbol_limit swaps and took ~9s a pass.
+        """
+
+        try:
+            rows = await self._request("/api/v5/public/funding-rate", {"instId": "ANY"})
+        except ExchangeError as exc:
+            logger.warning(
+                "okx_bulk_funding_failed",
+                extra={"exchange": self.name, "error": str(exc)},
+            )
+            return None
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_symbol.setdefault(str(row.get("instId", "")), []).append(row)
+        return by_symbol
 
     async def get_funding_history(
         self, symbol: str, start: datetime, end: datetime

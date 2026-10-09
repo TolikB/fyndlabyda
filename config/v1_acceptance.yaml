@@ -252,7 +252,7 @@ requirements:
       src/funding_arbitrage/exchanges/mexc/trading.py: d2220f8a2161522afbce77d2e232acb34b851e80167612d7b6d7440d100f158a
       src/funding_arbitrage/exchanges/mock.py: 1dc0fcd6b0fe7392485db6c96a4a2fb4366bd1547aec220b0e4c66545ce3a921
       src/funding_arbitrage/exchanges/okx/__init__.py: 009bd7ca1e0af60b795bf692b3c4c792126dd7a2b125f4e45adaf3500c4281be
-      src/funding_arbitrage/exchanges/okx/client.py: 0ebdb62c7c0bb2c00fb45e98499e9d74952b208cb9aea57c13bfccd18ea583f8
+      src/funding_arbitrage/exchanges/okx/client.py: 14f7b4f570000cb3d97db329c48b45c72cc2e7cb9f5ce35d410795e0d0208d9a
       src/funding_arbitrage/exchanges/okx/orderbook.py: f3c2ec0a224335a6b452f6b85d60279c5dbd5387b3304cad292487e5ba48173a
       src/funding_arbitrage/exchanges/private_streams.py: 29160eebf95126d962dace67d422ffd26341c89d9b4b6af26f6cf9519441fe1b
       src/funding_arbitrage/exchanges/public_events.py: 9c83d0ce4bfcbcb3b76354752e042e7e7b004fce615c9f3f2317d7d112135791
@@ -377,12 +377,12 @@ requirements:
       src/funding_arbitrage/exchanges/mexc/trading.py: d2220f8a2161522afbce77d2e232acb34b851e80167612d7b6d7440d100f158a
       src/funding_arbitrage/exchanges/mock.py: 1dc0fcd6b0fe7392485db6c96a4a2fb4366bd1547aec220b0e4c66545ce3a921
       src/funding_arbitrage/exchanges/okx/__init__.py: 009bd7ca1e0af60b795bf692b3c4c792126dd7a2b125f4e45adaf3500c4281be
-      src/funding_arbitrage/exchanges/okx/client.py: 0ebdb62c7c0bb2c00fb45e98499e9d74952b208cb9aea57c13bfccd18ea583f8
+      src/funding_arbitrage/exchanges/okx/client.py: 14f7b4f570000cb3d97db329c48b45c72cc2e7cb9f5ce35d410795e0d0208d9a
       src/funding_arbitrage/exchanges/okx/orderbook.py: f3c2ec0a224335a6b452f6b85d60279c5dbd5387b3304cad292487e5ba48173a
       src/funding_arbitrage/exchanges/private_streams.py: 29160eebf95126d962dace67d422ffd26341c89d9b4b6af26f6cf9519441fe1b
       src/funding_arbitrage/exchanges/public_events.py: 9c83d0ce4bfcbcb3b76354752e042e7e7b004fce615c9f3f2317d7d112135791
       src/funding_arbitrage/exchanges/trading.py: d4a83d80d1b9494a701ea93d36a8b53b3fa2d27e13769e46521ae733a52e2015
-      src/funding_arbitrage/market_data/l2_book.py: 902aa1a7b0597ced162d85f634cabf12520de5effabb63154e106d47e1129ab3
+      src/funding_arbitrage/market_data/l2_book.py: 8824159607e32f28a3add353e24f6def019f41053e2de32dd376d9b945ed1577
       src/funding_arbitrage/market_data/orderbook_protocols.py: 62f26ebdebd91cb2113d9cc89d97e92a97ab98fdff407d69ca6fc2b0ad3c7a37
       tests/test_binance_canonical_orderbook.py: 1d210d47257b4616531b59cca7088e0facecef7520873b5c8f3c5982de4fe0b4
       tests/test_bybit_canonical_orderbook.py: e24d409be9c44c2e31f252b1b6a82bd4afbd74f1b19a3f2fc560f772db5a79dd
@@ -651,7 +651,7 @@ requirements:
       scripts/option_chain_probe.py: 24ae9f26b8b63f300f0f6f5ef7465f1525598f056a202191b99c4e32b7f241d3
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/exchanges/bybit/client.py: 16a84a9b7684ae168a341be6086bdeae645f72e1939e991aeb874633bb823257
-      src/funding_arbitrage/exchanges/okx/client.py: 0ebdb62c7c0bb2c00fb45e98499e9d74952b208cb9aea57c13bfccd18ea583f8
+      src/funding_arbitrage/exchanges/okx/client.py: 14f7b4f570000cb3d97db329c48b45c72cc2e7cb9f5ce35d410795e0d0208d9a
       src/funding_arbitrage/execution/advanced_paper.py: 2f47ca96ccd95954045aca9bbdb360e9323b4f33177f62dcf4d513c60bac9577
       src/funding_arbitrage/execution/option_fees.py: 71235b57eb2ecc48f6f71afdb58ad0160b435a727e1dbd25a6159e2bb7a7a49b
       src/funding_arbitrage/market_data/option_quotes.py: 3df318053d6da3b616fb786fe611aeec918eee8477cd5536077f232bdb865dc7
@@ -1645,7 +1645,7 @@ requirements:
       tests/test_market_data_repository.py: 9418fae2d6f5281effa20d9ca71a83c22edc9bad202d2696dbb313d362fdce9b
       tests/test_market_data_repository_postgres.py: f633eb48ebbba3fc9a5ea43f3fcb6ee675594594e1956257fa0da4b7445058f9
       tests/test_market_making_strategy.py: 6f37f8a263cffbe2d815f3da5fc38ec4678bc903d63249f71957420eb8bcb6bc
-      tests/test_market_risk_opportunity.py: 08c35f3b7783dcd8cd33ea78dd825e433c07b801fdd4a87d81729bbc84b61f84
+      tests/test_market_risk_opportunity.py: 6a77076cba9d210e13d2cdee9cc669ea9d3f9e5965a6915e76ce95a263a34932
       tests/test_meta_labeling.py: 3dff00c6b5614e3714d3690d7046a420e438f09a873c95f1e0574dd8513f48d3
       tests/test_mev_execution.py: 93ebbc6fd1a5fc285f00283324f9bb81b53a72327c1125d2a312bed9ec1fd19b
       tests/test_mexc_adapter.py: 3f73e589dd2fc3cfd38421db0675cc61f2833ab4c00bb06a0375a8386a7b3657
@@ -1661,7 +1661,7 @@ requirements:
       tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
       tests/test_native_low_latency.py: 4f2fab04e325221a627a054568eb246e5f143f29d28a03759327fd617fff430d
       tests/test_native_market_data_coverage.py: 778dbc0569927e19627db9edbd97758c9d5f084d8e644236dfc957ff5b193fb9
-      tests/test_new_exchange_adapters.py: 205d18209df7f2019fd614878e58e03aa51552833148f7480ee96b8fe73fed95
+      tests/test_new_exchange_adapters.py: 76c7f7c847908f968bb1e647026e21a1ec4ef5d80af22a0fa17ee0bce3add4ac
       tests/test_observability_alerts.py: f518d4508605bfb941ea9d1204f16154605dd8da794d515067f79a87b60b0069
       tests/test_okx_canonical_orderbook.py: eee38fbb285be9a7d01fa9e3b331995ce2ad605db89a6bdca0591e90d337daae
       tests/test_option_market_data.py: 94ab4ccfa9b467227f1ad42a3ecd7f48ba3854f46ff829aadd5e791db15b07c8

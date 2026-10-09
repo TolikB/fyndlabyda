@@ -376,6 +376,14 @@ A cron guard (`/etc/cron.d/funding_arbitrage_v1paper_diskguard`, every 5 minutes
 stops `funding_arbitrage_v1paper-app-1` once less than 15 GiB remain on `/`, so the
 journal cannot fill the disk the funding paper stacks write to. Its actions are
 logged to `/opt/funding_arbitrage_v1paper/diskguard.log`; restart the app by hand
-after freeing space. With the template's limits (4 book symbols and assets per
-venue, 4 dynamic-universe assets) the journal stays in the September run's range;
-the defaults (10/12/20) measured 15 GB/day on this host.
+after freeing space. With the template's limits the journal grows 11.5–12.6 GB/day
+on this host, mostly trades and book deltas of the multi-regime universe, so 100 GB
+free lasts about a week before the guard stops the app; the defaults (10/12/20,
+eight venues) measured 15 GB/day.
+
+`PAPER_MARKET_ASSET_LIMIT` ranks assets per venue, and a funding pair needs its
+asset retained on both venues. At 4 the scanner found no pair; at 400 the ticker
+streams saturated the event loop, Bybit dropped on keepalive timeouts and every
+candidate was priced without a book (slippage 2.0–4.0, net APR below −700%).
+Check `GET /opportunities/funnel` after a change: candidates should carry real
+`slippage_percent` values.

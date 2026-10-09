@@ -170,9 +170,14 @@ def _funding(snapshot: MarketSnapshot, exchange: str, symbol: str) -> FundingSna
 
 
 def _fresh_funding(snapshot: MarketSnapshot, funding: FundingSnapshot) -> bool:
-    return (
-        snapshot.captured_at - funding.timestamp
-    ).total_seconds() <= snapshot.stale_after_seconds
+    # The collector refreshes funding at half its own budget, so the ticker budget
+    # dropped every rate between refreshes and left the scanner empty most passes.
+    budget = (
+        snapshot.stale_after_seconds
+        if snapshot.funding_stale_after_seconds is None
+        else snapshot.funding_stale_after_seconds
+    )
+    return (snapshot.captured_at - funding.timestamp).total_seconds() <= budget
 
 
 def _funding_estimate(

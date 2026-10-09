@@ -140,6 +140,79 @@ def test_opportunity_engine_finds_cross_exchange_funding_spread() -> None:
     assert opportunities[0].size_quotes
 
 
+def test_funding_is_fresh_within_its_own_budget_not_the_ticker_budget() -> None:
+    # The collector refetches funding every half funding budget (90s by default) and
+    # OKX serves it from a ~60s cache, so a 30s ticker budget emptied the scanner.
+    timestamp = datetime.now(UTC)
+    venues = ("bybit", "gate")
+    instruments = [
+        NormalizedInstrument(
+            exchange=venue,
+            exchange_symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_order_size=Decimal("0.001"),
+        )
+        for venue in venues
+    ]
+    tickers = [
+        Ticker(
+            exchange=venue,
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            last_price=Decimal("100"),
+            volume_24h=Decimal("100000"),
+            timestamp=timestamp,
+        )
+        for venue in venues
+    ]
+    funding = [
+        FundingSnapshot(
+            exchange=venue,
+            symbol="BTCUSDT",
+            funding_rate=rate,
+            funding_interval_hours=Decimal("8"),
+            timestamp=timestamp - timedelta(seconds=90),
+        )
+        for venue, rate in zip(venues, (Decimal("0.001"), Decimal("-0.001")), strict=True)
+    ]
+    books = {
+        (venue, "BTCUSDT", InstrumentType.PERPETUAL): OrderBook(
+            exchange=venue,
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            bids=(OrderBookLevel(price=Decimal("99.99"), quantity=Decimal("100")),),
+            asks=(OrderBookLevel(price=Decimal("100.01"), quantity=Decimal("100")),),
+            timestamp=timestamp,
+        )
+        for venue in venues
+    }
+
+    def scan(funding_budget: int | None) -> list[Opportunity]:
+        return OpportunityEngine(
+            filter_config=OpportunityFilterConfig(
+                minimum_funding_samples=0, minimum_liquidity_score=0
+            )
+        ).scan(
+            MarketSnapshot(
+                instruments,
+                tickers,
+                funding,
+                books,
+                timestamp,
+                stale_after_seconds=30,
+                funding_stale_after_seconds=funding_budget,
+            )
+        )
+
+    assert scan(None) == []
+    assert [item.strategy for item in scan(180)] == ["cross_exchange_funding"]
+    assert scan(60) == []
+
+
 def test_opportunity_engine_reuses_funding_estimates_across_strategies(monkeypatch) -> None:
     timestamp = datetime.now(UTC)
     instruments = [
