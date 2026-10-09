@@ -260,6 +260,7 @@ class Settings(BaseSettings):
     public_event_enrichment_enabled: bool = Field(
         default=True, alias="PUBLIC_EVENT_ENRICHMENT_ENABLED"
     )
+    public_event_accounts: str = Field(default="spot,linear", alias="PUBLIC_EVENT_ACCOUNTS")
     public_event_rest_interval_seconds: float = Field(
         default=60.0, alias="PUBLIC_EVENT_REST_INTERVAL_SECONDS"
     )
@@ -551,6 +552,11 @@ class Settings(BaseSettings):
     )
     paper_history_refresh_seconds: int = Field(default=3600, alias="PAPER_HISTORY_REFRESH_SECONDS")
     paper_orderbook_symbol_limit: int = Field(default=10, alias="PAPER_ORDERBOOK_SYMBOL_LIMIT")
+    # False streams only open-position and multi-regime books; discovery books are
+    # fetched over REST each pass instead of streaming every candidate's deltas.
+    paper_stream_discovery_books: bool = Field(
+        default=True, alias="PAPER_STREAM_DISCOVERY_BOOKS"
+    )
     paper_market_asset_limit: int = Field(default=12, alias="PAPER_MARKET_ASSET_LIMIT")
     paper_history_symbol_limit: int = Field(default=5, alias="PAPER_HISTORY_SYMBOL_LIMIT")
     paper_market_persist_interval_seconds: int = Field(
@@ -928,6 +934,18 @@ class Settings(BaseSettings):
     @property
     def bybit_category_values(self) -> tuple[str, ...]:
         return tuple(value.strip() for value in self.bybit_categories.split(",") if value.strip())
+
+    @property
+    def public_event_account_values(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    value.strip().lower()
+                    for value in self.public_event_accounts.split(",")
+                    if value.strip()
+                }
+            )
+        )
 
     @property
     def paper_venue_values(self) -> tuple[str, ...]:
@@ -1549,6 +1567,9 @@ def _validate_safe_values(settings: Settings) -> None:
                 raise ValueError("option fee configuration is outside safe bounds")
     if settings.public_event_symbol_limit_per_profile <= 0:
         raise ValueError("PUBLIC_EVENT_SYMBOL_LIMIT_PER_PROFILE must be positive")
+    accounts = settings.public_event_account_values
+    if not accounts or not set(accounts) <= {"spot", "linear"}:
+        raise ValueError("PUBLIC_EVENT_ACCOUNTS must list spot and/or linear")
     if settings.public_event_rest_interval_seconds <= 0:
         raise ValueError("PUBLIC_EVENT_REST_INTERVAL_SECONDS must be positive")
     if settings.public_metadata_refresh_seconds <= 0:

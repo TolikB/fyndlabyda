@@ -695,9 +695,10 @@ class BinancePublicAdapter(ExchangeAdapter):
                         json.dumps(
                             {
                                 "method": "SUBSCRIBE",
+                                # The default 250 ms diff stream; @100ms sent 2.5x the
+                                # messages to journal for the same reconstructed book.
                                 "params": [
-                                    f"{symbol.lower()}@depth@100ms"
-                                    for symbol in symbols
+                                    f"{symbol.lower()}@depth" for symbol in symbols
                                 ],
                                 "id": 2,
                             }

@@ -1470,3 +1470,24 @@ async def test_supervisor_rest_recovery_publishes_candle_and_open_interest() -> 
     assert EventKind.OPEN_INTEREST_SNAPSHOT in {
         event.kind for event in collector.events
     }
+
+
+async def test_public_event_accounts_choose_which_ccxt_profiles_run() -> None:
+    settings = Settings(
+        _env_file=None,
+        RUN_MODE="paper_test",
+        TRADING_MODE="PAPER",
+        PAPER_VENUES="bybit,okx",
+        CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED=False,
+        MULTI_REGIME_ENABLED=False,
+        MARKET_DATA_STREAMS_ENABLED=False,
+        PUBLIC_EVENT_ACCOUNTS="linear",
+    )
+    supervisor = create_public_event_supervisor(settings, EventCollector())
+    try:
+        assert [
+            (account.profile.venue, account.profile.account)
+            for account in supervisor.accounts
+        ] == [("bybit", "linear"), ("okx", "linear")]
+    finally:
+        await supervisor.close()
