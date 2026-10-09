@@ -907,6 +907,13 @@ class MultiRegimeEngine:
             structure.timestamp,
             regime.timestamp,
         )
+        # The orchestrator clock is shared by every instrument. A late candle or
+        # option quote from one venue used to raise there and fail the runtime,
+        # which then rejected every canonical publication on the stack.
+        last_orchestrated = self.orchestrator.last_timestamp
+        if last_orchestrated is not None and decision_time < last_orchestrated:
+            self.skipped_out_of_order_events += 1
+            return None
         orderflow = self._orderflow_snapshot(state, decision_time)
         context = DirectionalStrategyContext(
             instrument=technical.instrument,
