@@ -64,6 +64,7 @@ from funding_arbitrage.opportunity.debounce import (
     canonical_exposure_key,
 )
 from funding_arbitrage.opportunity.models import Opportunity
+from funding_arbitrage.opportunity.patient_exit import PatientExit, funding_edge_8h
 from funding_arbitrage.opportunity.settlement import (
     is_funding_strategy,
     next_settlement_rate,
@@ -253,6 +254,15 @@ class PaperTestRunner:
         self._candidate_orderbook_symbols: dict[
             str, set[tuple[str, InstrumentType]]
         ] = {}
+        self._patient_exit = (
+            PatientExit(
+                settings.paper_patient_exit_edge_8h,
+                settings.paper_patient_exit_confirmation_seconds,
+                settings.paper_min_hold_seconds,
+            )
+            if settings.paper_exit_policy == "patient"
+            else None
+        )
         self.daily_report = DailyReportService(settings, session_factory)
         self._restore_lock = asyncio.Lock()
         self._restored = False
@@ -1551,6 +1561,26 @@ class PaperTestRunner:
             exit_reason: str | None = None
             if max_hold:
                 exit_reason = "max_hold"
+            elif (
+                self.settings.paper_strategy_profile == "candidate"
+                and self._patient_exit is not None
+            ):
+                # Hold through scanner churn, settlements and brief feed gaps; only
+                # an adverse basis (a risk exit) or a confirmed negative edge leaves.
+                edge = funding_edge_8h(
+                    (
+                        (leg.exchange, leg.symbol, leg.side)
+                        for leg in self._funding_legs(position)
+                    ),
+                    snapshot.funding,
+                )
+                exit_reason = (
+                    "adverse_basis"
+                    if adverse_basis
+                    else self._patient_exit.reason(
+                        position.id, position.opened_at, now, edge
+                    )
+                )
             elif self.settings.paper_strategy_profile == "candidate":
                 exit_reason = next(
                     (
@@ -1581,6 +1611,8 @@ class PaperTestRunner:
             self.runtime.portfolio.close_position(position.id)
             self._schedule_funding_reconciliation(position, now)
             self._unregister_open_position(position)
+            if self._patient_exit is not None:
+                self._patient_exit.forget(position.id)
 
     @staticmethod
     def _pending_target_funding(

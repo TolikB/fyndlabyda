@@ -590,6 +590,19 @@ class Settings(BaseSettings):
     paper_max_adverse_basis_percent: Decimal = Field(
         default=Decimal("0.005"), alias="PAPER_MAX_ADVERSE_BASIS_PERCENT"
     )
+    # "settlement" leaves after the targeted settlement or once the scanner stops
+    # listing the opportunity; "patient" holds for PAPER_MIN_HOLD_SECONDS and then
+    # leaves only on a confirmed negative edge (see opportunity/patient_exit.py).
+    paper_exit_policy: Literal["settlement", "patient"] = Field(
+        default="settlement", alias="PAPER_EXIT_POLICY"
+    )
+    paper_min_hold_seconds: int = Field(default=0, ge=0, alias="PAPER_MIN_HOLD_SECONDS")
+    paper_patient_exit_edge_8h: Decimal = Field(
+        default=Decimal("-0.0005"), alias="PAPER_PATIENT_EXIT_EDGE_8H"
+    )
+    paper_patient_exit_confirmation_seconds: int = Field(
+        default=3600, gt=0, alias="PAPER_PATIENT_EXIT_CONFIRMATION_SECONDS"
+    )
     backtest_fill_model_enabled: bool = Field(default=True, alias="BACKTEST_FILL_MODEL_ENABLED")
     backtest_order_latency_ms: int = Field(
         default=50, ge=0, le=60_000, alias="BACKTEST_ORDER_LATENCY_MS"
@@ -1280,6 +1293,10 @@ def get_settings() -> Settings:
             "entry_window_hours": "paper_entry_window_hours",
             "min_settlement_cost_coverage": "paper_min_settlement_cost_coverage",
             "max_adverse_basis_percent": "paper_max_adverse_basis_percent",
+            "exit_policy": "paper_exit_policy",
+            "min_hold_seconds": "paper_min_hold_seconds",
+            "patient_exit_edge_8h": "paper_patient_exit_edge_8h",
+            "patient_exit_confirmation_seconds": "paper_patient_exit_confirmation_seconds",
         }.items():
             if field_name not in settings.model_fields_set and yaml_key in paper:
                 yaml_defaults[field_name] = paper[yaml_key]
@@ -1969,6 +1986,11 @@ def _validate_safe_values(settings: Settings) -> None:
             raise ValueError(f"{field_name.upper()} must be between 0 and 100")
     if settings.paper_exit_edge_miss_cycles <= 0:
         raise ValueError("PAPER_EXIT_EDGE_MISS_CYCLES must be positive")
+    if (
+        settings.paper_exit_policy == "patient"
+        and settings.paper_min_hold_seconds >= settings.paper_max_hold_seconds
+    ):
+        raise ValueError("PAPER_MIN_HOLD_SECONDS must be below PAPER_MAX_HOLD_SECONDS")
     if not Decimal("0") <= settings.paper_legging_move_percent <= Decimal("0.01"):
         raise ValueError("PAPER_LEGGING_MOVE_PERCENT must be between 0 and 0.01")
     if (

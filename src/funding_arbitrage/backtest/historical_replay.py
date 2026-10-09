@@ -82,6 +82,11 @@ from funding_arbitrage.opportunity.debounce import OpportunityDebouncer
 from funding_arbitrage.opportunity.engine import OpportunityEngine
 from funding_arbitrage.opportunity.filters import OpportunityFilterConfig
 from funding_arbitrage.opportunity.models import FeeSchedule, Opportunity, SizeQuote
+from funding_arbitrage.opportunity.patient_exit import (
+    PatientExit,
+    funding_edge_8h,
+    opportunity_perpetual_legs,
+)
 from funding_arbitrage.opportunity.settlement import (
     is_funding_strategy,
     next_settlement_rate,
@@ -345,6 +350,15 @@ class HistoricalMarketReplay:
             "asset": {},
         }
         positions: dict[str, _ReplayPosition] = {}
+        patient = (
+            PatientExit(
+                settings.paper_patient_exit_edge_8h,
+                settings.paper_patient_exit_confirmation_seconds,
+                settings.paper_min_hold_seconds,
+            )
+            if settings.paper_exit_policy == "patient"
+            else None
+        )
         last_prices: dict[tuple[str, str, str], Decimal] = {}
         realized = Decimal("0")
         snapshot_pnl_curve: list[tuple[datetime, Decimal]] = []
@@ -457,17 +471,27 @@ class HistoricalMarketReplay:
                         )
                 target_exit = target_received and not continue_after_target
                 max_hold = age >= timedelta(seconds=settings.paper_max_hold_seconds)
-                should_close = max_hold if profile == "baseline" else (
-                    max_hold
-                    or edge_gone
-                    or adverse_basis
-                    or target_exit
-                    or _replay_execution_degraded(current, position.capital)
-                    or (
-                        current is not None
-                        and _funding_sign_changed(position.opportunity, current)
+                if profile != "baseline" and patient is not None:
+                    # Same decision as the runtime's patient policy.
+                    edge = funding_edge_8h(
+                        opportunity_perpetual_legs(position.opportunity), snapshot.funding
                     )
-                )
+                    patient_exit = patient.reason(
+                        position.position_id, position.opened_at, timestamp, edge
+                    )
+                    should_close = max_hold or adverse_basis or patient_exit is not None
+                else:
+                    should_close = max_hold if profile == "baseline" else (
+                        max_hold
+                        or edge_gone
+                        or adverse_basis
+                        or target_exit
+                        or _replay_execution_degraded(current, position.capital)
+                        or (
+                            current is not None
+                            and _funding_sign_changed(position.opportunity, current)
+                        )
+                    )
                 if should_close:
                     realized += _close_position(
                         position,
@@ -479,6 +503,8 @@ class HistoricalMarketReplay:
                         settings,
                     )
                     positions.pop(key)
+                    if patient is not None:
+                        patient.forget(position.position_id)
             locked = sum(
                 position.capital * Decimal(_venue_count(position.opportunity))
                 for position in positions.values()
