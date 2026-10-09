@@ -334,3 +334,40 @@ not enable real funding or real trading. It is used only by the deterministic
 symbol-scoped historical funding events reported by each venue, preserving the
 venue event timestamp and variable schedule across Bybit, Gate, OKX, Binance,
 and Hyperliquid.
+
+## All-strategy PAPER stack on the shared Contabo host
+
+`docker-compose.v1paper.yml` runs the complete multi-regime runtime (directional,
+lead-lag, dated basis, options volatility, passive market making, dynamic universe)
+plus the funding pipeline with `PAPER_EXIT_POLICY=patient`, as the isolated Compose
+project `funding_arbitrage_v1paper` on `127.0.0.1:8002`. It never shares a database,
+volume, network or port with the funding paper stacks (`funding_arbitrage_paper`,
+`funding_arbitrage_paper_v2`). Martingale, grid and loss averaging stay disabled.
+
+Layout under `/opt/funding_arbitrage_v1paper`:
+
+| Path | Content |
+| --- | --- |
+| `releases/<sha7>` | immutable source tree of the deployed commit |
+| `current` | symlink to the active release |
+| `secrets/internal` | this stack's own internal PKI (CA, postgres/redis/app certs, redis password) |
+| `secrets/empty` | empty directory mounted as the exchange-secret path |
+| `app.env` (0600) | `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `DATABASE_URL`, `REDIS_URL`, TLS paths, compose paths |
+| `runtime.env` (0600) | copy of `ops/v1paper-runtime.env.example` with release values |
+
+Always pass the project name and both env files:
+
+```bash
+cd /opt/funding_arbitrage_v1paper/current
+docker compose -p funding_arbitrage_v1paper --env-file ../app.env --env-file ../runtime.env \
+  -f docker-compose.yml -f docker-compose.v1paper.yml config --quiet
+docker compose -p funding_arbitrage_v1paper --env-file ../app.env --env-file ../runtime.env \
+  -f docker-compose.yml -f docker-compose.v1paper.yml up -d
+curl -s 127.0.0.1:8002/health
+```
+
+The canonical journal is authoritative and never pruned, and the multi-regime
+runtime needs it complete. Measure its growth in the first hour
+(`pg_total_relation_size('canonical_events')`) and keep enough free disk for the
+planned run; lower `MULTI_REGIME_UNIVERSE_MAXIMUM_ASSETS` or the venue list if it
+does not fit.
