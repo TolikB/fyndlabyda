@@ -13,6 +13,8 @@ class RiskLimits(BaseModel):
     max_single_opportunity_percent: Decimal = Decimal("20")
     max_single_asset_percent: Decimal = Decimal("30")
     max_single_exchange_percent: Decimal = Decimal("40")
+    max_single_strategy_percent: Decimal = Decimal("60")
+    max_correlated_group_percent: Decimal = Decimal("50")
     minimum_cash_reserve_percent: Decimal = Decimal("20")
 
 
@@ -33,7 +35,11 @@ class RiskEngine:
         portfolio_value: Decimal,
         asset_exposure: Decimal = Decimal("0"),
         exchange_exposure: Decimal = Decimal("0"),
+        exchange_increment: Decimal | None = None,
+        strategy_exposure: Decimal = Decimal("0"),
+        correlated_exposure: Decimal = Decimal("0"),
         cash: Decimal | None = None,
+        cash_required: Decimal | None = None,
     ) -> RiskAssessment:
         reasons: list[str] = []
         if capital > portfolio_value * self.limits.max_single_opportunity_percent / Decimal("100"):
@@ -44,13 +50,23 @@ class RiskEngine:
         ):
             reasons.append("asset_concentration_limit")
         if (
-            exchange_exposure + capital
+            exchange_exposure + (exchange_increment or capital)
             > portfolio_value * self.limits.max_single_exchange_percent / Decimal("100")
         ):
             reasons.append("exchange_concentration_limit")
         if (
+            strategy_exposure + capital
+            > portfolio_value * self.limits.max_single_strategy_percent / Decimal("100")
+        ):
+            reasons.append("strategy_concentration_limit")
+        if (
+            correlated_exposure + capital
+            > portfolio_value * self.limits.max_correlated_group_percent / Decimal("100")
+        ):
+            reasons.append("correlated_group_limit")
+        if (
             cash is not None
-            and cash - capital
+            and cash - (cash_required or capital)
             < portfolio_value * self.limits.minimum_cash_reserve_percent / Decimal("100")
         ):
             reasons.append("cash_reserve_limit")

@@ -1,0 +1,44 @@
+# Paper-only Contabo overlay. Use it only with a dedicated, non-secret
+# PAPER_RUNTIME_ENV_FILE and an APP_ENV_FILE containing datastore/Telegram secrets.
+services:
+  app:
+    restart: unless-stopped
+    env_file: !override
+      - path: ${APP_ENV_FILE:?point to the existing paper project env file}
+        required: true
+      - path: ${PAPER_RUNTIME_ENV_FILE:?point to a release-specific paper runtime env file}
+        required: true
+    environment:
+      RUN_MODE: paper_test
+      TRADING_MODE: PAPER
+      MARKET_DATA_MODE: live_public
+      EXECUTION_MODE: paper
+      LIVE_AUTOTRADE: "false"
+      LIVE_TRADING_CONFIRM: ""
+      DANGEROUS_CAPABILITY_AUTHORIZATION: ""
+      BYBIT_API_KEY: ""
+      BYBIT_API_SECRET: ""
+      GATE_API_KEY: ""
+      GATE_API_SECRET: ""
+      OKX_API_KEY: ""
+      OKX_API_SECRET: ""
+      OKX_API_PASSPHRASE: ""
+      BINANCE_API_KEY: ""
+      BINANCE_API_SECRET: ""
+      HYPERLIQUID_PRIVATE_KEY: ""
+      MEXC_API_KEY: ""
+      MEXC_API_SECRET: ""
+      KUCOIN_API_KEY: ""
+      KUCOIN_API_SECRET: ""
+      KUCOIN_API_PASSPHRASE: ""
+      HTX_API_KEY: ""
+      HTX_API_SECRET: ""
+    volumes: !override
+      - runtime_state:/app/.runtime
+      - ${PAPER_EMPTY_EXCHANGE_SECRETS_DIR:?point to an empty directory}:/run/secrets/exchange:ro
+      - ${INTERNAL_TLS_SECRETS_DIR:?point to the paper project internal TLS directory}:/run/secrets/internal:ro
+    networks: !override
+      - default
+      - data_plane
+    ports:
+      - "127.0.0.1:8000:8000"

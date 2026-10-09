@@ -1,19 +1,52 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from funding_arbitrage.config import Settings
+from funding_arbitrage.database.models import (
+    ExecutionFillRecord,
+    PortfolioSnapshotRecord,
+    PositionStateRecord,
+    TelegramDailyReportRecord,
+)
 from funding_arbitrage.notifications.telegram import (
     TelegramNotificationError,
     TelegramNotifier,
+    _telegram_chunks,
 )
-from funding_arbitrage.services.daily_report import DailyReportService
+from funding_arbitrage.services.daily_report import (
+    DailyReportService,
+    _local_day_utc_bounds,
+    _no_fill_note,
+)
+
+
+@pytest.mark.parametrize(
+    ("report_date", "expected_hours"),
+    (
+        (date(2026, 3, 29), 23),
+        (date(2026, 10, 25), 25),
+    ),
+)
+def test_daily_report_uses_exact_kyiv_calendar_day_across_dst(
+    report_date: date, expected_hours: int
+) -> None:
+    timezone = ZoneInfo("Europe/Kyiv")
+
+    start, end = _local_day_utc_bounds(report_date, timezone)
+
+    assert end - start == timedelta(hours=expected_hours)
+    assert start.astimezone(timezone).date() == report_date
+    assert end.astimezone(timezone).date() == report_date + timedelta(days=1)
 
 
 @pytest.mark.asyncio
@@ -33,6 +66,16 @@ async def test_telegram_notifier_uses_bot_api_without_logging_secret() -> None:
     await client.aclose()
 
 
+def test_telegram_chunks_preserve_long_report_without_truncation() -> None:
+    report = "\n".join(f"venue-{index}: stats" for index in range(500))
+
+    chunks = _telegram_chunks(report)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 4096 for chunk in chunks)
+    assert "".join(chunks) == report
+
+
 @pytest.mark.asyncio
 async def test_telegram_notifier_requires_configuration() -> None:
     notifier = TelegramNotifier("", "")
@@ -40,19 +83,101 @@ async def test_telegram_notifier_requires_configuration() -> None:
         await notifier.send_message("paper report")
 
 
+@pytest.mark.asyncio
+async def test_paper_lifecycle_notifications_are_human_readable_and_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+    )
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(ReportSession())),
+    )
+    sent: list[str] = []
+
+    async def send(message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(service.notifier, "send_message", send)
+
+    assert await service.notify_stopped() is False
+    assert await service.notify_started() is True
+    assert await service.notify_started() is False
+    assert await service.notify_stopped() is True
+    assert await service.notify_stopped() is False
+    assert sent == ["✅ Бот запущено", "⏹ Бот зупинено"]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_does_not_retry_ambiguous_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+    )
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(ReportSession())),
+    )
+    attempts = 0
+
+    async def timeout(_message: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("response lost after request")
+
+    monkeypatch.setattr(service.notifier, "send_message", timeout)
+
+    assert await service.notify_started() is False
+    assert await service.notify_started() is False
+    assert await service.notify_stopped() is False
+    assert attempts == 1
+
+
 class ReportSession:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
+        timestamp = datetime(2026, 8, 1, tzinfo=UTC)
+        self.events = events
         self.values = [
             None,
             type("Snapshot", (), {"equity": Decimal("10000"), "total_pnl": Decimal("12")})(),
-            type("Snapshot", (), {"equity": Decimal("10012"), "total_pnl": Decimal("12")})(),
+            type(
+                "Snapshot",
+                (),
+                {
+                    "equity": Decimal("10012"),
+                    "total_pnl": Decimal("12"),
+                    "funding_pnl": Decimal("8"),
+                    "fees": Decimal("1"),
+                    "timestamp": timestamp,
+                },
+            )(),
+            type("Snapshot", (), {"timestamp": timestamp})(),
             Decimal("8"),
             Decimal("1"),
             Decimal("0.2"),
+            Decimal("0.5"),
             4,
             1,
             1,
+            1,
+            Decimal("0.25"),
+            Decimal("0.15"),
+            Decimal("0.40"),
+            2,
+            1,
+            1,
+            1,
             10,
+            2,
+            96,
+            0,
+            0,
         ]
         self.added: list[object] = []
 
@@ -65,10 +190,17 @@ class ReportSession:
     async def scalar(self, _statement: object) -> object:
         return self.values.pop(0)
 
+    async def execute(self, _statement: object) -> object:
+        return type("EmptyRows", (), {"all": lambda self: []})()
+
     def add(self, value: object) -> None:
         self.added.append(value)
 
     async def commit(self) -> None:
+        if self.events is not None:
+            self.events.append("commit")
+
+    async def rollback(self) -> None:
         return None
 
 
@@ -85,10 +217,71 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(
+        paper_initial_balance_usd=10000,
         telegram_enabled=True,
         telegram_bot_token="test-token",
         telegram_chat_id="123",
         telegram_timezone="UTC",
+    )
+    events: list[str] = []
+    session = ReportSession(events)
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(session)),
+    )
+    sent: list[str] = []
+
+    async def send(message: str) -> None:
+        events.append("send")
+        sent.append(message)
+
+    monkeypatch.setattr(service.notifier, "send_message", send)
+    result = await service.check_and_send(datetime(2026, 8, 10, 0, 1, tzinfo=UTC))
+
+    assert result
+    assert len(sent) == 1
+    assert "📊 Результати торгівлі за 09.08.2026" in sent[0]
+    assert "ЗА ДЕНЬ" in sent[0]
+    assert "Прибуток / збиток: +$12.00" in sent[0]
+    assert "Фандінг: +$8.00" in sent[0]
+    assert "Витрати: $1.60" in sent[0]
+    assert "Угоди: 2 відкрито, 2 закрито" in sent[0]
+    assert sent[0].count("Відкриті позиції: 2") == 1
+    assert "ЗА ВЕСЬ ЧАС" in sent[0]
+    assert "Баланс: $10012.00" in sent[0]
+    assert "Прибуток / збиток: +$12.00 (+0.1200%)" in sent[0]
+    assert "Витрати: $1.90" in sent[0]
+    assert "🧪 Тестовий рахунок — реальні ордери не виконуються" in sent[0]
+    assert "Статус:" not in sent[0]
+    assert "BYBIT" not in sent[0]
+    assert "simulator" not in sent[0]
+    assert "snapshots:" not in sent[0]
+    for system_term in ("сигнал", "цикл", "reconciliation", "simulation_version"):
+        assert system_term not in sent[0].lower()
+    assert len(session.added) == 1
+    assert events == ["commit", "send", "commit"]
+
+    session.values.append(session.added[0])
+    repeated = await service.check_and_send(
+        datetime(2026, 8, 10, 0, 2, tzinfo=UTC)
+    )
+
+    assert repeated is False
+    assert len(sent) == 1
+    assert len(session.added) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_report_does_not_send_for_day_before_paper_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        paper_initial_balance_usd=10000,
+        paper_autotrade_start_utc=datetime(2026, 9, 29, 14, 45, tzinfo=UTC),
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="Europe/Kyiv",
     )
     session = ReportSession()
     service = DailyReportService(
@@ -101,10 +294,521 @@ async def test_daily_report_is_sent_once_for_previous_local_day(
         sent.append(message)
 
     monkeypatch.setattr(service.notifier, "send_message", send)
-    result = await service.check_and_send(datetime(2026, 8, 10, 0, 1, tzinfo=UTC))
 
-    assert result
-    assert len(sent) == 1
-    assert "2026-08-09" in sent[0]
-    assert "Funding PnL: $8.00" in sent[0]
+    assert not await service.check_and_send(datetime(2026, 9, 29, 14, 50, tzinfo=UTC))
+    assert not session.added
+    assert not sent
+
+    assert await service.check_and_send(datetime(2026, 9, 29, 21, 1, tzinfo=UTC))
     assert len(session.added) == 1
+    assert len(sent) == 1
+    assert "29.09.2026" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_daily_report_includes_all_multi_regime_costs_and_positions(
+    database: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+) -> None:
+    _, factory = database
+    version = "directional-cost-report"
+    start = datetime(2026, 8, 9, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    settings = Settings(
+        paper_simulation_version=version,
+        multi_regime_enabled=True,
+        multi_regime_paper_execution_enabled=True,
+    )
+    async with factory() as session:
+        session.add(
+            PortfolioSnapshotRecord(
+                timestamp=start + timedelta(hours=1),
+                simulation_version=version,
+                snapshot_scope="combined",
+                equity=Decimal("1000"),
+                cash=Decimal("1000"),
+                locked_capital=Decimal("0"),
+                total_pnl=Decimal("0"),
+                funding_pnl=Decimal("0"),
+                fees=Decimal("0.25"),
+                balances={},
+            )
+        )
+        session.add(
+            ExecutionFillRecord(
+                fill_id="directional-cost-fill",
+                simulation_version=version,
+                client_order_id="mro_directional_cost",
+                exchange_order_id="paper:mro_directional_cost",
+                venue="bybit",
+                instrument_id="BYBIT:PERP:BTC/USDT",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("1"),
+                fee_amount=Decimal("0.25"),
+                fee_asset="USDT",
+                liquidity_role="TAKER",
+                exchange_timestamp=start + timedelta(hours=2),
+                receive_timestamp=start + timedelta(hours=2),
+                payload={"spread_cost": "0.40", "impact_cost": "0.10"},
+            )
+        )
+        session.add(
+            ExecutionFillRecord(
+                fill_id="advanced-cost-fill",
+                simulation_version=version,
+                client_order_id="mao_advanced_cost",
+                exchange_order_id="paper:mao_advanced_cost",
+                venue="gate",
+                instrument_id="GATE:PERP:BTC/USDT",
+                side="SELL",
+                price=Decimal("101"),
+                quantity=Decimal("1"),
+                fee_amount=Decimal("0.15"),
+                fee_asset="USDT",
+                liquidity_role="TAKER",
+                exchange_timestamp=start + timedelta(hours=2),
+                receive_timestamp=start + timedelta(hours=2),
+                payload={
+                    "fill": {
+                        "spread_cost": "0.30",
+                        "impact_cost": "0.20",
+                    }
+                },
+            )
+        )
+        session.add(
+            ExecutionFillRecord(
+                fill_id="non-directional-prefix-fill",
+                simulation_version=version,
+                client_order_id="mroX_not_directional",
+                exchange_order_id="paper:mroX_not_directional",
+                venue="bybit",
+                instrument_id="BYBIT:PERP:BTC/USDT",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("1"),
+                fee_amount=Decimal("99"),
+                fee_asset="USDT",
+                liquidity_role="TAKER",
+                exchange_timestamp=start + timedelta(hours=2),
+                receive_timestamp=start + timedelta(hours=2),
+                payload={"spread_cost": "99", "impact_cost": "99"},
+            )
+        )
+        session.add_all(
+            [
+                PositionStateRecord(
+                    position_id="mrp_open",
+                    simulation_version=version,
+                    strategy_id="directional",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:BTC/USDT",
+                    status="OPEN",
+                    signed_quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("101"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("1"),
+                    collateral=Decimal("20"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=None,
+                    updated_at=start + timedelta(hours=3),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="mrp_closed",
+                    simulation_version=version,
+                    strategy_id="directional",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:ETH/USDT",
+                    status="CLOSED",
+                    signed_quantity=Decimal("0"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("101"),
+                    realized_pnl=Decimal("1"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("0"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=start + timedelta(hours=4),
+                    updated_at=start + timedelta(hours=4),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="mrpX_not_directional_open",
+                    simulation_version=version,
+                    strategy_id="other",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:SOL/USDT",
+                    status="OPEN",
+                    signed_quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("100"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("20"),
+                    opened_at=start + timedelta(hours=5),
+                    closed_at=None,
+                    updated_at=start + timedelta(hours=5),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="mrpX_not_directional_closed",
+                    simulation_version=version,
+                    strategy_id="other",
+                    venue="BYBIT",
+                    instrument_id="BYBIT:PERP:XRP/USDT",
+                    status="CLOSED",
+                    signed_quantity=Decimal("0"),
+                    entry_price=Decimal("100"),
+                    mark_price=Decimal("100"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("0"),
+                    opened_at=start + timedelta(hours=5),
+                    closed_at=start + timedelta(hours=6),
+                    updated_at=start + timedelta(hours=6),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="map_open",
+                    simulation_version=version,
+                    strategy_id="cross-exchange-stat-arb",
+                    venue="GATE",
+                    instrument_id="GATE:PERP:BTC/USDT",
+                    status="OPEN",
+                    signed_quantity=Decimal("-1"),
+                    entry_price=Decimal("101"),
+                    mark_price=Decimal("100"),
+                    realized_pnl=Decimal("0"),
+                    unrealized_pnl=Decimal("1"),
+                    collateral=Decimal("20"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=None,
+                    updated_at=start + timedelta(hours=3),
+                    payload={},
+                ),
+                PositionStateRecord(
+                    position_id="map_compensated",
+                    simulation_version=version,
+                    strategy_id="cross-exchange-stat-arb",
+                    venue="GATE",
+                    instrument_id="GATE:PERP:ETH/USDT",
+                    status="COMPENSATED",
+                    signed_quantity=Decimal("0"),
+                    entry_price=Decimal("101"),
+                    mark_price=Decimal("101"),
+                    realized_pnl=Decimal("-0.15"),
+                    unrealized_pnl=Decimal("0"),
+                    collateral=Decimal("0"),
+                    opened_at=start + timedelta(hours=3),
+                    closed_at=start + timedelta(hours=4),
+                    updated_at=start + timedelta(hours=4),
+                    payload={},
+                ),
+            ]
+        )
+        await session.commit()
+
+    service = DailyReportService(settings, factory)
+    async with factory() as session:
+        report = await service._load_portfolio_report(
+            session,
+            label="candidate",
+            simulation_version=version,
+            start=start,
+            end=end,
+            signal_start=start,
+            signal_counts=(0, 0),
+        )
+    await service.close()
+
+    cents = Decimal("0.01")
+    assert report.day_fees.quantize(cents) == Decimal("0.40")
+    assert report.day_slippage.quantize(cents) == Decimal("1.00")
+    assert report.total_slippage.quantize(cents) == Decimal("1.00")
+    assert report.opened == 4
+    assert report.closed == 2
+    assert report.open_positions == 2
+
+
+@pytest.mark.asyncio
+async def test_daily_report_claim_prevents_retry_after_ambiguous_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        paper_initial_balance_usd=10000,
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="UTC",
+    )
+    session = ReportSession()
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(session)),
+    )
+    attempts = 0
+
+    async def timeout(_message: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("response lost after request")
+
+    monkeypatch.setattr(service.notifier, "send_message", timeout)
+
+    assert not await service.check_and_send(datetime(2026, 8, 10, 0, 1, tzinfo=UTC))
+    assert len(session.added) == 1
+    record = session.added[0]
+    assert isinstance(record, TelegramDailyReportRecord)
+    assert record.status == "delivery_unknown"
+    assert record.error == "TimeoutError"
+
+    session.values.append(record)
+    assert not await service.check_and_send(datetime(2026, 8, 10, 0, 2, tzinfo=UTC))
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_daily_report_claim_sends_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="UTC",
+    )
+
+    class RaceState:
+        def __init__(self) -> None:
+            self.waiting = 0
+            self.release = asyncio.Event()
+            self.claimed = False
+
+    class RaceSession:
+        def __init__(self, state: RaceState) -> None:
+            self.state = state
+            self.commit_count = 0
+
+        async def __aenter__(self) -> RaceSession:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def scalar(self, _statement: object) -> None:
+            return None
+
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            self.commit_count += 1
+            if self.commit_count > 1:
+                return
+            self.state.waiting += 1
+            if self.state.waiting == 2:
+                self.state.release.set()
+            await self.state.release.wait()
+            if not self.state.claimed:
+                self.state.claimed = True
+                return
+            raise IntegrityError(
+                "INSERT telegram_daily_reports",
+                {},
+                RuntimeError("duplicate report date"),
+            )
+
+        async def rollback(self) -> None:
+            return None
+
+    state = RaceState()
+
+    def session_factory() -> RaceSession:
+        return RaceSession(state)
+
+    factory = cast(async_sessionmaker[AsyncSession], session_factory)
+    services = [DailyReportService(settings, factory), DailyReportService(settings, factory)]
+    sent: list[str] = []
+
+    async def build_message(_session: AsyncSession, _report_date: date) -> str:
+        return "daily trading report"
+
+    async def send(message: str) -> None:
+        sent.append(message)
+
+    for service in services:
+        monkeypatch.setattr(service, "_build_message", build_message)
+        monkeypatch.setattr(service.notifier, "send_message", send)
+
+    results = await asyncio.gather(
+        *(service.check_and_send(datetime(2026, 8, 10, 0, 1, tzinfo=UTC)) for service in services)
+    )
+
+    assert sorted(results) == [False, True]
+    assert sent == ["daily trading report"]
+    await asyncio.gather(*(service.close() for service in services))
+
+
+@pytest.mark.asyncio
+async def test_daily_report_explains_unchanged_equity_when_no_trades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        paper_initial_balance_usd=6250,
+        paper_simulation_version="v26-oos-candidate",
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="UTC",
+    )
+    timestamp = datetime(2026, 8, 1, tzinfo=UTC)
+    unchanged = type(
+        "Snapshot",
+        (),
+        {
+            "equity": Decimal("6250"),
+            "total_pnl": Decimal("0"),
+            "funding_pnl": Decimal("0"),
+            "fees": Decimal("0"),
+            "timestamp": timestamp,
+        },
+    )()
+    session = ReportSession()
+    session.values = [
+        None,
+        unchanged,
+        unchanged,
+        unchanged,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        96,
+        0,
+        0,
+    ]
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(session)),
+    )
+    sent: list[str] = []
+
+    async def send(message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(service.notifier, "send_message", send)
+
+    assert await service.check_and_send(datetime(2026, 8, 11, 0, 1, tzinfo=UTC))
+    assert "Прибуток / збиток: +$0.00" in sent[0]
+    assert "Сьогодні угод не було." in sent[0]
+    assert "Статус:" not in sent[0]
+    assert "Відкриті позиції: 0" in sent[0]
+    assert "v26-oos-candidate" not in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_daily_report_omits_background_baseline_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        paper_initial_balance_usd=6250,
+        paper_simulation_version="v29-oos-candidate",
+        paper_comparison_enabled=True,
+        paper_baseline_simulation_version="v29-oos-baseline",
+        telegram_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_chat_id="123",
+        telegram_timezone="UTC",
+    )
+    timestamp = datetime(2026, 8, 14, 4, 14, tzinfo=UTC)
+    candidate = type(
+        "Snapshot",
+        (),
+        {
+            "equity": Decimal("6250"),
+            "total_pnl": Decimal("0"),
+            "funding_pnl": Decimal("0"),
+            "fees": Decimal("0"),
+            "timestamp": timestamp,
+        },
+    )()
+    session = ReportSession()
+    session.values = [
+        None,
+        None,
+        candidate,
+        candidate,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        33,
+        0,
+        100,
+        0,
+        1,
+    ]
+    service = DailyReportService(
+        settings,
+        cast(async_sessionmaker[AsyncSession], ReportSessionFactory(session)),
+    )
+    sent: list[str] = []
+
+    async def send(message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(service.notifier, "send_message", send)
+
+    assert await service.check_and_send(datetime(2026, 8, 15, 0, 1, tzinfo=UTC))
+    assert sent[0].count("ЗА ДЕНЬ") == 1
+    assert sent[0].count("ЗА ВЕСЬ ЧАС") == 1
+    assert "ОСНОВНА СТРАТЕГІЯ" not in sent[0]
+    assert "СТРАТЕГІЯ ДЛЯ ПОРІВНЯННЯ" not in sent[0]
+    assert "Баланс: $6250.00" in sent[0]
+    assert "Баланс: $6249.64" not in sent[0]
+    assert "Портфелі незалежні" not in sent[0]
+    assert "v29-oos-" not in sent[0]
+
+
+def test_daily_report_uses_plain_language_when_no_trades_occurred() -> None:
+    note = _no_fill_note(
+        fills=0,
+    )
+
+    assert note == "Сьогодні угод не було."
+
+
+def test_daily_report_does_not_expose_system_diagnostics() -> None:
+    note = _no_fill_note(
+        fills=0,
+    )
+
+    assert note is not None
+    assert note == "Сьогодні угод не було."
+    assert "цикл" not in note
+    assert "помил" not in note

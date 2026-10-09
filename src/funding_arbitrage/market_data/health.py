@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -26,6 +26,8 @@ class CircuitBreaker(BaseModel):
     consecutive_failures: int = 0
     consecutive_successes: int = 0
     status: VenueStatus = VenueStatus.ONLINE
+    recovery_timeout_seconds: int = Field(default=30, gt=0)
+    offline_until: datetime | None = None
 
     def record_success(self) -> None:
         self.consecutive_failures = 0
@@ -35,11 +37,25 @@ class CircuitBreaker(BaseModel):
             and self.consecutive_successes >= self.recovery_successes
         ):
             self.status = VenueStatus.ONLINE
+            self.offline_until = None
 
     def record_failure(self) -> None:
         self.consecutive_successes = 0
         self.consecutive_failures += 1
         if self.consecutive_failures >= self.failure_threshold:
             self.status = VenueStatus.OFFLINE
+            self.offline_until = datetime.now(UTC) + timedelta(
+                seconds=self.recovery_timeout_seconds
+            )
         elif self.consecutive_failures > 0:
             self.status = VenueStatus.DEGRADED
+
+    def can_attempt(self, now: datetime | None = None) -> bool:
+        if self.status is not VenueStatus.OFFLINE:
+            return True
+        current = now or datetime.now(UTC)
+        if self.offline_until is not None and current < self.offline_until:
+            return False
+        self.status = VenueStatus.DEGRADED
+        self.consecutive_failures = 0
+        return True

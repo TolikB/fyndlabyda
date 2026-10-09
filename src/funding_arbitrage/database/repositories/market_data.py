@@ -7,10 +7,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funding_arbitrage.exchanges.base.models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     NormalizedInstrument,
@@ -29,46 +32,129 @@ from ..models import (
     FundingHistoryRecord,
     FundingSnapshotRecord,
     InstrumentRecord,
+    MarketCandleRecord,
     OpportunityRecord,
     OrderBookSnapshotRecord,
     PaperFillRecord,
     PaperFundingPaymentRecord,
     PaperPositionRecord,
+    PaperRuntimeIncidentRecord,
     PortfolioSnapshotRecord,
     TickerSnapshotRecord,
 )
+from .ledger import append_funding_cashflow
+
+
+async def load_portfolio_equity_high_water(
+    session: AsyncSession,
+    *,
+    simulation_version: str,
+    preferred_scope: str,
+) -> Decimal | None:
+    """Load the durable peak equity, preferring the authoritative scope."""
+
+    if preferred_scope not in {"legacy", "combined"}:
+        raise ValueError("portfolio snapshot scope must be legacy or combined")
+
+    async def maximum_for(scope: str) -> Decimal | None:
+        value = await session.scalar(
+            select(func.max(PortfolioSnapshotRecord.equity)).where(
+                PortfolioSnapshotRecord.simulation_version == simulation_version,
+                PortfolioSnapshotRecord.snapshot_scope == scope,
+            )
+        )
+        return Decimal(str(value)) if value is not None else None
+
+    preferred = await maximum_for(preferred_scope)
+    if preferred is not None or preferred_scope == "legacy":
+        return preferred
+    return await maximum_for("legacy")
 
 
 async def save_instruments(session: AsyncSession, instruments: list[NormalizedInstrument]) -> None:
-    for item in instruments:
-        record = await session.scalar(
-            select(InstrumentRecord).where(
-                InstrumentRecord.exchange == item.exchange,
-                InstrumentRecord.exchange_symbol == item.exchange_symbol,
-                InstrumentRecord.instrument_type == item.instrument_type.value,
+    rows = list(
+        {
+            (item.exchange, item.exchange_symbol, item.instrument_type.value): {
+                "exchange": item.exchange,
+                "exchange_symbol": item.exchange_symbol,
+                "canonical_id": item.canonical_id,
+                "base_asset": item.base_asset,
+                "quote_asset": item.quote_asset,
+                "instrument_type": item.instrument_type.value,
+                "settlement_asset": item.settlement_asset,
+                "contract_size": item.contract_size,
+                "tick_size": item.tick_size,
+                "step_size": item.step_size,
+                "min_order_size": item.min_order_size,
+                "funding_interval": item.funding_interval,
+                "expiry": item.expiry,
+                "is_active": item.is_active,
+            }
+            for item in instruments
+        }.values()
+    )
+    if not rows:
+        await session.commit()
+        return
+    bind = session.get_bind()
+    update_fields = (
+        "canonical_id",
+        "base_asset",
+        "quote_asset",
+        "settlement_asset",
+        "contract_size",
+        "tick_size",
+        "step_size",
+        "min_order_size",
+        "funding_interval",
+        "expiry",
+        "is_active",
+    )
+    if bind.dialect.name == "postgresql":
+        for index in range(0, len(rows), 1000):
+            pg_statement = pg_insert(InstrumentRecord).values(rows[index : index + 1000])
+            pg_upsert = pg_statement.on_conflict_do_update(
+                constraint="uq_instrument_exchange_symbol_type",
+                set_={field: getattr(pg_statement.excluded, field) for field in update_fields},
             )
-        )
-        values = {
-            "exchange": item.exchange,
-            "exchange_symbol": item.exchange_symbol,
-            "canonical_id": item.canonical_id,
-            "base_asset": item.base_asset,
-            "quote_asset": item.quote_asset,
-            "instrument_type": item.instrument_type.value,
-            "settlement_asset": item.settlement_asset,
-            "contract_size": item.contract_size,
-            "tick_size": item.tick_size,
-            "step_size": item.step_size,
-            "min_order_size": item.min_order_size,
-            "funding_interval": item.funding_interval,
-            "expiry": item.expiry,
-            "is_active": item.is_active,
-        }
-        if record is None:
-            session.add(InstrumentRecord(**values))
-        else:
-            for field, value in values.items():
-                setattr(record, field, value)
+            pg_returning = pg_upsert.returning(InstrumentRecord)
+            result = await session.execute(
+                pg_returning,
+                execution_options={"populate_existing": True},
+            )
+            result.scalars().all()
+    elif bind.dialect.name == "sqlite":
+        for index in range(0, len(rows), 1000):
+            sqlite_statement = sqlite_insert(InstrumentRecord).values(
+                rows[index : index + 1000]
+            )
+            sqlite_upsert = sqlite_statement.on_conflict_do_update(
+                index_elements=["exchange", "exchange_symbol", "instrument_type"],
+                set_={
+                    field: getattr(sqlite_statement.excluded, field)
+                    for field in update_fields
+                },
+            )
+            sqlite_returning = sqlite_upsert.returning(InstrumentRecord)
+            result = await session.execute(
+                sqlite_returning,
+                execution_options={"populate_existing": True},
+            )
+            result.scalars().all()
+    else:
+        for values in rows:
+            record = await session.scalar(
+                select(InstrumentRecord).where(
+                    InstrumentRecord.exchange == values["exchange"],
+                    InstrumentRecord.exchange_symbol == values["exchange_symbol"],
+                    InstrumentRecord.instrument_type == values["instrument_type"],
+                )
+            )
+            if record is None:
+                session.add(InstrumentRecord(**values))
+            else:
+                for field, value in values.items():
+                    setattr(record, field, value)
     await session.commit()
 
 
@@ -113,32 +199,120 @@ async def save_funding_snapshots(session: AsyncSession, snapshots: list[FundingS
     await session.commit()
 
 
-async def save_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
-    for item in points:
-        record = await session.scalar(
-            select(FundingHistoryRecord).where(
-                FundingHistoryRecord.exchange == item.exchange,
-                FundingHistoryRecord.symbol == item.symbol,
-                FundingHistoryRecord.funding_timestamp == item.funding_timestamp,
+async def _upsert_funding_history(
+    session: AsyncSession, points: list[FundingHistoryPoint]
+) -> None:
+    deduplicated = {
+        (item.exchange, item.symbol, item.funding_timestamp): item for item in points
+    }
+    rows: list[dict[str, Any]] = [
+        {
+            "exchange": item.exchange,
+            "symbol": item.symbol,
+            "funding_rate": item.funding_rate,
+            "funding_timestamp": item.funding_timestamp,
+            "mark_price": item.mark_price,
+        }
+        for item in deduplicated.values()
+    ]
+    if not rows:
+        return
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        for index in range(0, len(rows), 1000):
+            pg_statement = pg_insert(FundingHistoryRecord).values(
+                rows[index : index + 1000]
             )
+            pg_statement = pg_statement.on_conflict_do_nothing(
+                constraint="uq_funding_history_event"
+            )
+            await session.execute(pg_statement)
+    elif bind.dialect.name == "sqlite":
+        sqlite_statement = sqlite_insert(FundingHistoryRecord).values(rows)
+        sqlite_statement = sqlite_statement.on_conflict_do_nothing(
+            index_elements=["exchange", "symbol", "funding_timestamp"]
         )
-        if record is None:
-            session.add(
-                FundingHistoryRecord(
-                    exchange=item.exchange,
-                    symbol=item.symbol,
-                    funding_rate=item.funding_rate,
-                    funding_timestamp=item.funding_timestamp,
-                    mark_price=item.mark_price,
+        await session.execute(sqlite_statement)
+    else:
+        for row in rows:
+            record = await session.scalar(
+                select(FundingHistoryRecord).where(
+                    FundingHistoryRecord.exchange == row["exchange"],
+                    FundingHistoryRecord.symbol == row["symbol"],
+                    FundingHistoryRecord.funding_timestamp == row["funding_timestamp"],
                 )
             )
-        else:
-            record.funding_rate = item.funding_rate
-            record.mark_price = item.mark_price
+            if record is None:
+                session.add(FundingHistoryRecord(**row))
+
+
+async def save_funding_history(session: AsyncSession, points: list[FundingHistoryPoint]) -> None:
+    await _upsert_funding_history(session, points)
     await session.commit()
 
 
-async def save_market_snapshot(session: AsyncSession, snapshot: MarketSnapshot) -> None:
+async def save_candles(session: AsyncSession, candles: list[Candle]) -> None:
+    if not candles:
+        return
+    rows = [
+        {
+            "exchange": item.exchange,
+            "symbol": item.symbol,
+            "instrument_type": item.instrument_type.value,
+            "interval_minutes": item.interval_minutes,
+            "open_time": item.open_time,
+            "close_time": item.close_time,
+            "open": item.open,
+            "high": item.high,
+            "low": item.low,
+            "close": item.close,
+            "volume": item.volume,
+            "is_closed": item.is_closed,
+        }
+        for item in candles
+    ]
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        for index in range(0, len(rows), 1000):
+            statement = pg_insert(MarketCandleRecord).values(rows[index : index + 1000])
+            statement = statement.on_conflict_do_update(
+                constraint="uq_market_candle_identity",
+                set_={
+                    "close_time": statement.excluded.close_time,
+                    "open": statement.excluded.open,
+                    "high": statement.excluded.high,
+                    "low": statement.excluded.low,
+                    "close": statement.excluded.close,
+                    "volume": statement.excluded.volume,
+                    "is_closed": statement.excluded.is_closed,
+                },
+            )
+            await session.execute(statement)
+    else:
+        for row in rows:
+            record = await session.scalar(
+                select(MarketCandleRecord).where(
+                    MarketCandleRecord.exchange == row["exchange"],
+                    MarketCandleRecord.symbol == row["symbol"],
+                    MarketCandleRecord.instrument_type == row["instrument_type"],
+                    MarketCandleRecord.interval_minutes == row["interval_minutes"],
+                    MarketCandleRecord.open_time == row["open_time"],
+                )
+            )
+            if record is None:
+                session.add(MarketCandleRecord(**row))
+            else:
+                for field, value in row.items():
+                    setattr(record, field, value)
+    await session.commit()
+
+
+async def save_market_snapshot(
+    session: AsyncSession,
+    snapshot: MarketSnapshot,
+    *,
+    include_history: bool = True,
+) -> None:
     """Persist one normalized snapshot, including depth used for cost estimates."""
 
     await save_instruments(session, snapshot.instruments)
@@ -163,7 +337,7 @@ async def save_market_snapshot(session: AsyncSession, snapshot: MarketSnapshot) 
         else:
             record.status = "ONLINE"
             record.last_seen_at = snapshot.captured_at
-    if snapshot.funding_history:
+    if include_history and snapshot.funding_history:
         await save_funding_history(
             session,
             [point for points in snapshot.funding_history.values() for point in points],
@@ -173,6 +347,7 @@ async def save_market_snapshot(session: AsyncSession, snapshot: MarketSnapshot) 
             OrderBookSnapshotRecord(
                 exchange=book.exchange,
                 symbol=book.symbol,
+                instrument_type=book.instrument_type.value,
                 timestamp=book.timestamp,
                 sequence=book.sequence,
                 bids=[[str(level.price), str(level.quantity)] for level in book.bids],
@@ -216,10 +391,20 @@ async def save_opportunities(
     await session.commit()
 
 
-async def save_portfolio_snapshot(session: AsyncSession, snapshot: PortfolioSnapshot) -> None:
+async def save_portfolio_snapshot(
+    session: AsyncSession,
+    snapshot: PortfolioSnapshot,
+    *,
+    snapshot_scope: str = "legacy",
+    commit: bool = True,
+) -> None:
+    if snapshot_scope not in {"legacy", "combined"}:
+        raise ValueError("portfolio snapshot scope must be legacy or combined")
     session.add(
         PortfolioSnapshotRecord(
             timestamp=snapshot.timestamp,
+            simulation_version=snapshot.simulation_version,
+            snapshot_scope=snapshot_scope,
             equity=snapshot.equity,
             cash=snapshot.cash,
             locked_capital=snapshot.locked_capital,
@@ -229,7 +414,36 @@ async def save_portfolio_snapshot(session: AsyncSession, snapshot: PortfolioSnap
             balances={key: str(value) for key, value in snapshot.balances.items()},
         )
     )
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+
+
+async def save_paper_runtime_incident(
+    session: AsyncSession,
+    simulation_versions: Iterable[str],
+    category: str,
+    error_type: str,
+    occurred_at: datetime,
+    *,
+    commit: bool = True,
+) -> None:
+    """Persist one redacted runtime event for every affected paper ledger."""
+
+    for simulation_version in dict.fromkeys(simulation_versions):
+        session.add(
+            PaperRuntimeIncidentRecord(
+                occurred_at=occurred_at,
+                simulation_version=simulation_version,
+                category=category,
+                error_type=error_type[:128],
+            )
+        )
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
 
 
 async def save_backtest_result(
@@ -242,32 +456,61 @@ async def save_backtest_result(
     """Persist reproducibility metadata and metrics for an event-driven run."""
 
     finished_at = datetime.now(UTC)
-    session.add(
-        BacktestRunRecord(
-            run_id=run_id,
-            config_hash=result.config_hash,
-            dataset_version=result.dataset_version,
-            git_commit=result.git_commit,
-            started_at=started_at,
-            finished_at=finished_at,
-            status="completed",
-            config_json=config if isinstance(config, dict) else None,
-        )
+    metrics = result.metrics.model_dump(mode="json")
+    monthly_distribution = {"monthly_returns": metrics["monthly_returns"]}
+    run = await session.scalar(
+        select(BacktestRunRecord)
+        .where(BacktestRunRecord.run_id == run_id)
+        .with_for_update()
     )
-    session.add(
-        BacktestResultRecord(
-            run_id=run_id,
-            metrics=result.metrics.model_dump(mode="json"),
-            monthly_distribution={
-                "monthly_returns": result.metrics.monthly_returns,
-            },
-            created_at=finished_at,
+    if run is None:
+        session.add(
+            BacktestRunRecord(
+                run_id=run_id,
+                config_hash=result.config_hash,
+                dataset_version=result.dataset_version,
+                git_commit=result.git_commit,
+                started_at=started_at,
+                finished_at=finished_at,
+                status="completed",
+                config_json=config if isinstance(config, dict) else None,
+            )
         )
+    elif (
+        run.config_hash != result.config_hash
+        or run.dataset_version != result.dataset_version
+        or run.git_commit != result.git_commit
+    ):
+        raise ValueError("backtest run ID conflicts with persisted reproducibility data")
+
+    stored_result = await session.scalar(
+        select(BacktestResultRecord)
+        .where(BacktestResultRecord.run_id == run_id)
+        .with_for_update()
     )
+    if stored_result is None:
+        session.add(
+            BacktestResultRecord(
+                run_id=run_id,
+                metrics=metrics,
+                monthly_distribution=monthly_distribution,
+                created_at=finished_at,
+            )
+        )
+    elif (
+        stored_result.metrics != metrics
+        or stored_result.monthly_distribution != monthly_distribution
+    ):
+        raise ValueError("backtest run ID conflicts with persisted result data")
     await session.commit()
 
 
-async def save_paper_position(session: AsyncSession, position: PaperPosition) -> None:
+async def save_paper_position(
+    session: AsyncSession,
+    position: PaperPosition,
+    *,
+    commit: bool = True,
+) -> None:
     """Upsert paper position state and its complete PnL payload."""
 
     values: dict[str, Any] = {
@@ -276,6 +519,7 @@ async def save_paper_position(session: AsyncSession, position: PaperPosition) ->
         "state": str(position.state),
         "asset": position.asset,
         "capital": position.capital,
+        "simulation_version": position.simulation_version,
         "opened_at": position.opened_at,
         "closed_at": position.closed_at,
         "payload": position.model_dump(mode="json"),
@@ -296,7 +540,10 @@ async def save_paper_position(session: AsyncSession, position: PaperPosition) ->
     ):
         if fill is not None:
             await save_paper_fill(session, fill, position.id)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
 
 
 async def save_paper_fill(
@@ -307,6 +554,7 @@ async def save_paper_fill(
         "position_id": position_id,
         "exchange": fill.exchange,
         "symbol": fill.symbol,
+        "instrument_type": fill.instrument_type.value if fill.instrument_type else None,
         "side": fill.side,
         "filled_quantity": fill.filled_quantity,
         "price": fill.price,
@@ -332,16 +580,112 @@ async def save_paper_funding_payment(
     funding: FundingSnapshot,
     notional: Decimal,
     pnl: Decimal,
-) -> None:
-    session.add(
-        PaperFundingPaymentRecord(
-            position_id=position_id,
-            exchange=funding.exchange,
-            symbol=funding.symbol,
-            funding_timestamp=funding.timestamp,
-            funding_rate=funding.funding_rate,
-            notional=notional,
-            pnl=pnl,
+    *,
+    history_event: FundingHistoryPoint | None = None,
+    ledger_asset: str | None = None,
+    ledger_strategy_id: str | None = None,
+    commit: bool = True,
+) -> PaperFundingPaymentRecord:
+    if (ledger_asset is None) != (ledger_strategy_id is None):
+        raise ValueError(
+            "paper funding ledger asset and strategy must be provided together"
+        )
+    if history_event is not None and (
+        history_event.exchange != funding.exchange
+        or history_event.symbol != funding.symbol
+        or _normalize_utc(history_event.funding_timestamp)
+        != _normalize_utc(funding.timestamp)
+        or history_event.funding_rate != funding.funding_rate
+    ):
+        raise ValueError("funding history event does not match the paper payment")
+
+    # A live paper payment must never exist without its authoritative raw
+    # exchange event. Insert both in one transaction. Funding settlement events
+    # are immutable: a duplicate may confirm an event but may never rewrite it.
+    if history_event is not None:
+        await _upsert_funding_history(session, [history_event])
+    values = {
+        "position_id": position_id,
+        "exchange": funding.exchange,
+        "symbol": funding.symbol,
+        "funding_timestamp": funding.timestamp,
+        "funding_rate": funding.funding_rate,
+        "notional": notional,
+        "pnl": pnl,
+    }
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        pg_statement = pg_insert(PaperFundingPaymentRecord).values(**values)
+        pg_statement = pg_statement.on_conflict_do_nothing(
+            constraint="uq_paper_funding_position_exchange_symbol_event"
+        )
+        await session.execute(pg_statement)
+    elif bind.dialect.name == "sqlite":
+        sqlite_statement = sqlite_insert(PaperFundingPaymentRecord).values(**values)
+        sqlite_statement = sqlite_statement.on_conflict_do_nothing(
+            index_elements=[
+                "position_id",
+                "exchange",
+                "symbol",
+                "funding_timestamp",
+            ]
+        )
+        await session.execute(sqlite_statement)
+    else:
+        raise RuntimeError(
+            f"atomic paper funding payment insert is unsupported for {bind.dialect.name}"
+        )
+
+    record = await session.scalar(
+        select(PaperFundingPaymentRecord).where(
+            PaperFundingPaymentRecord.position_id == position_id,
+            PaperFundingPaymentRecord.exchange == funding.exchange,
+            PaperFundingPaymentRecord.symbol == funding.symbol,
+            PaperFundingPaymentRecord.funding_timestamp == funding.timestamp,
         )
     )
-    await session.commit()
+    if record is None:
+        await session.rollback()
+        raise RuntimeError("paper funding payment insert did not produce a durable record")
+    if history_event is not None:
+        history_record = await session.scalar(
+            select(FundingHistoryRecord).where(
+                FundingHistoryRecord.exchange == funding.exchange,
+                FundingHistoryRecord.symbol == funding.symbol,
+                FundingHistoryRecord.funding_timestamp == funding.timestamp,
+            )
+        )
+        if history_record is None or (
+            _normalize_utc(history_record.funding_timestamp)
+            != _normalize_utc(record.funding_timestamp)
+            or Decimal(str(history_record.funding_rate))
+            != Decimal(str(record.funding_rate))
+        ):
+            await session.rollback()
+            raise RuntimeError(
+                "raw funding history conflicts with the durable paper payment"
+            )
+    if ledger_asset is not None and ledger_strategy_id is not None:
+        await append_funding_cashflow(
+            session,
+            position_id=record.position_id,
+            venue=record.exchange,
+            symbol=record.symbol,
+            strategy_id=ledger_strategy_id,
+            settlement_asset=ledger_asset,
+            amount=Decimal(str(record.pnl)),
+            timestamp=record.funding_timestamp,
+        )
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    return record
+
+
+def _normalize_utc(value: datetime) -> datetime:
+    return (
+        value.replace(tzinfo=UTC)
+        if value.tzinfo is None
+        else value.astimezone(UTC)
+    )

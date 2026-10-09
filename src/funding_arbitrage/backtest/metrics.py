@@ -13,6 +13,7 @@ class BacktestMetrics(BaseModel):
     total_return: Decimal = Decimal("0")
     annualized_return: Decimal = Decimal("0")
     monthly_returns: dict[str, Decimal] = Field(default_factory=dict)
+    median_monthly_pnl: Decimal = Decimal("0")
     median_monthly_return: Decimal = Decimal("0")
     p10_monthly_return: Decimal = Decimal("0")
     p25_monthly_return: Decimal = Decimal("0")
@@ -43,6 +44,8 @@ def calculate_metrics(
     funding_income: Decimal = Decimal("0"),
     opportunities: int = 0,
     average_position_duration_hours: Decimal = Decimal("0"),
+    capital_utilization: Decimal = Decimal("0"),
+    pnl_curve: list[Decimal] | None = None,
 ) -> BacktestMetrics:
     if initial_capital <= 0:
         raise ValueError("initial capital must be positive")
@@ -56,7 +59,7 @@ def calculate_metrics(
     peak = initial_capital
     drawdown = Decimal("0")
     running = initial_capital
-    for value in values:
+    for value in pnl_curve if pnl_curve is not None else values:
         running += value
         peak = max(peak, running)
         drawdown = max(drawdown, (peak - running) / peak if peak else Decimal("0"))
@@ -75,6 +78,7 @@ def calculate_metrics(
         * Decimal("12")
         / Decimal(max(1, len(values))),
         monthly_returns=dict(monthly),
+        median_monthly_pnl=Decimal(str(median(values))) if values else Decimal("0"),
         median_monthly_return=Decimal(str(median(returns))) if returns else Decimal("0"),
         p10_monthly_return=percentile(returns, 10),
         p25_monthly_return=percentile(returns, 25),
@@ -91,6 +95,7 @@ def calculate_metrics(
         else Decimal("0"),
         profit_factor=gross_positive / gross_negative if gross_negative else Decimal("0"),
         number_of_opportunities=opportunities,
+        capital_utilization=capital_utilization,
         fee_drag=fees / initial_capital,
         slippage_drag=slippage / initial_capital,
         funding_income=funding_income,

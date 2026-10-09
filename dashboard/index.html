@@ -16,12 +16,19 @@
     th, td { text-align: left; padding: 9px; border-bottom: 1px solid #374151; }
     th { color: #9ca3af; font-size: 12px; }
     .status { margin: 12px 0; color: #93c5fd; }
+    .auth { display: flex; gap: 8px; max-width: 760px; }
+    .auth input { flex: 1; min-width: 0; padding: 10px; border: 1px solid #4b5563; border-radius: 6px; background: #111827; color: #e5e7eb; }
+    .auth button { padding: 10px 16px; border: 0; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
   </style>
 </head>
 <body>
 <main>
   <h1>Funding Arbitrage Research</h1>
-  <div id="status" class="status">Loading read-only state…</div>
+  <form id="auth-form" class="auth">
+    <input id="access-token" type="password" autocomplete="off" spellcheck="false" placeholder="Read-only JWT access token" required>
+    <button type="submit">Connect</button>
+  </form>
+  <div id="status" class="status">Enter a read-only JWT to load protected data.</div>
   <section class="grid">
     <div class="card"><div class="label">Equity</div><div id="equity" class="value">—</div></div>
     <div class="card"><div class="label">Cash</div><div id="cash" class="value">—</div></div>
@@ -37,13 +44,53 @@
   </table>
 </main>
 <script>
+  let accessToken = '';
+  const status = document.querySelector('#status');
   const money = value => Number(value || 0).toLocaleString(undefined, {maximumFractionDigits: 2});
+
+  async function apiFetch(path) {
+    const response = await fetch(path, {
+      cache: 'no-store',
+      headers: {Authorization: `Bearer ${accessToken}`}
+    });
+    if (!response.ok) {
+      if (response.status === 401) accessToken = '';
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  function renderOpportunities(opportunities) {
+    const body = document.querySelector('#opportunities');
+    body.replaceChildren(...opportunities.map(item => {
+      const row = document.createElement('tr');
+      const values = [
+        item.strategy,
+        item.asset,
+        `${item.venue_a}${item.venue_b ? ' ↔ ' + item.venue_b : ''}`,
+        `${(Number(item.net_apr) * 100).toFixed(2)}%`,
+        Number(item.opportunity_score).toFixed(1),
+        item.status
+      ];
+      for (const value of values) {
+        const cell = document.createElement('td');
+        cell.textContent = String(value ?? '');
+        row.appendChild(cell);
+      }
+      return row;
+    }));
+  }
+
   async function refresh() {
+    if (!accessToken) {
+      status.textContent = 'Enter a read-only JWT to load protected data.';
+      return;
+    }
     try {
       const [portfolio, opportunities, paper] = await Promise.all([
-        fetch('/portfolio').then(r => r.json()),
-        fetch('/opportunities').then(r => r.json()),
-        fetch('/analytics/paper').then(r => r.json())
+        apiFetch('/portfolio'),
+        apiFetch('/opportunities'),
+        apiFetch('/analytics/paper')
       ]);
       document.querySelector('#equity').textContent = money(portfolio.equity);
       document.querySelector('#cash').textContent = money(portfolio.cash);
@@ -51,18 +98,23 @@
       document.querySelector('#count').textContent = opportunities.length;
       document.querySelector('#funding-pnl').textContent = money(paper.funding_pnl);
       document.querySelector('#fees').textContent = money(paper.fees);
-      document.querySelector('#opportunities').innerHTML = opportunities.map(item => `
-        <tr><td>${item.strategy}</td><td>${item.asset}</td>
-        <td>${item.venue_a}${item.venue_b ? ' ↔ ' + item.venue_b : ''}</td>
-        <td>${(Number(item.net_apr) * 100).toFixed(2)}%</td>
-        <td>${Number(item.opportunity_score).toFixed(1)}</td><td>${item.status}</td></tr>`).join('');
-      document.querySelector('#status').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      renderOpportunities(opportunities);
+      status.textContent = `Updated ${new Date().toLocaleTimeString()}`;
     } catch (error) {
-      document.querySelector('#status').textContent = `Read-only API unavailable: ${error}`;
+      status.textContent = accessToken
+        ? `Protected API unavailable: ${error}`
+        : 'JWT was rejected or expired. Enter a new read-only token.';
     }
   }
-  refresh();
-  setInterval(refresh, 5000);
+
+  document.querySelector('#auth-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const input = document.querySelector('#access-token');
+    accessToken = input.value.trim();
+    input.value = '';
+    void refresh();
+  });
+  setInterval(() => void refresh(), 5000);
 </script>
 </body>
 </html>

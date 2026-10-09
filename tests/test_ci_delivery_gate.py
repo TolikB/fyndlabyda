@@ -1,0 +1,283 @@
+import re
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_PATH = ROOT / ".github" / "workflows" / "release-gate.yml"
+SHADOW_SCRIPT_PATH = ROOT / "scripts" / "ci_shadow_smoke.sh"
+LOAD_SLO_SCRIPT_PATH = ROOT / "scripts" / "ci_candidate_load_slo.sh"
+
+
+def _workflow_text() -> str:
+    return WORKFLOW_PATH.read_text(encoding="utf-8")
+
+
+def _workflow_jobs() -> dict[str, object]:
+    payload = yaml.safe_load(_workflow_text())
+    assert isinstance(payload, dict)
+    jobs = payload.get("jobs")
+    assert isinstance(jobs, dict)
+    return jobs
+
+
+def test_release_workflow_has_every_required_delivery_gate() -> None:
+    jobs = _workflow_jobs()
+
+    assert {
+        "verify",
+        "integration-replay",
+        "load-slo",
+        "attest-load-slo",
+        "infrastructure-verify",
+        "container-security",
+        "attest-sbom",
+        "restore-drill",
+        "shadow-deploy",
+        "publish-signed-image",
+        "manual-live-gate",
+    }.issubset(jobs)
+    assert "coverage_gate.py" in str(jobs["verify"])
+    assert "test_historical_replay.py" in str(jobs["integration-replay"])
+    load_slo_script = LOAD_SLO_SCRIPT_PATH.read_text(encoding="utf-8")
+    assert jobs["load-slo"]["needs"] == "build-candidate"
+    assert "scripts/ci_load_candidate_image.sh" in str(jobs["load-slo"])
+    assert "scripts/ci_candidate_load_slo.sh" in str(jobs["load-slo"])
+    assert "scripts/verify_load_slo_evidence.py" in str(jobs["load-slo"])
+    assert "requirements-linux.lock" in str(jobs["load-slo"])
+    assert "scripts/load_slo.py" in load_slo_script
+    assert "--events 20000" in load_slo_script
+    assert "--decisions 5000" in load_slo_script
+    assert "--release-evidence" in load_slo_script
+    assert '--revision "$expected_revision"' in load_slo_script
+    assert "--evidence-source github-actions" in load_slo_script
+    assert '--github-run-id "$github_run_id"' in load_slo_script
+    assert '--github-run-attempt "$github_run_attempt"' in load_slo_script
+    assert '--container-image-id "$expected_image_id"' in load_slo_script
+    assert '"$expected_image_id" \\' in load_slo_script
+    assert "--network none" in load_slo_script
+    assert "--read-only" in load_slo_script
+    assert "--user 10001:10001" in load_slo_script
+    assert "--cap-drop ALL" in load_slo_script
+    assert "TMPDIR=/var/lib/funding-load-slo" in load_slo_script
+    assert "src=$oms_dir,dst=/var/lib/funding-load-slo" in load_slo_script
+    assert "chown -R" not in load_slo_script
+    assert "chown --no-dereference" in load_slo_script
+    assert 'find -P "$oms_dir" -xdev' in load_slo_script
+    assert ".unsafe-funding-load-slo-" in load_slo_script
+    assert (
+        "funding-load-slo-${{ github.sha }}-${{ github.run_id }}-"
+        "${{ github.run_attempt }}"
+    ) in str(jobs["load-slo"])
+    assert "funding-load-slo.json.sha256" in load_slo_script
+    assert "funding-load-slo-run.txt" in str(jobs["load-slo"])
+    assert "funding-load-slo.log" in str(jobs["load-slo"])
+    assert "set -euo pipefail" in str(jobs["load-slo"])
+    assert jobs["load-slo"]["permissions"] == {"contents": "read"}
+    load_steps = [step["name"] for step in jobs["load-slo"]["steps"]]
+    assert load_steps.index("Strictly verify candidate evidence before attestation") < (
+        load_steps.index("Upload commit-bound load SLO evidence")
+    )
+    assert jobs["attest-load-slo"]["needs"] == "load-slo"
+    assert jobs["attest-load-slo"]["if"] == (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    )
+    assert "actions/attest@a1948c3f048ba23858d222213b7c278aabede763" in str(
+        jobs["attest-load-slo"]
+    )
+    assert jobs["attest-load-slo"]["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+        "attestations": "write",
+        "artifact-metadata": "write",
+    }
+    assert set(jobs["publish-signed-image"]["needs"]) == {
+        "shadow-deploy",
+        "attest-load-slo",
+        "attest-sbom",
+    }
+    assert "'retention-days': 30" in str(jobs["load-slo"])
+    assert "terraform -chdir=infra/terraform validate" in str(jobs["infrastructure-verify"])
+    assert "scripts/backup_state.sh" in str(jobs["infrastructure-verify"])
+    assert "scripts/ci_candidate_load_slo.sh" in str(jobs["infrastructure-verify"])
+    assert "scripts/ci_restore_drill.sh" in str(jobs["restore-drill"])
+    assert "scripts/disaster_recovery_evidence.py verify" in str(jobs["restore-drill"])
+    assert "requirements-linux.lock" in str(jobs["restore-drill"])
+    assert "funding-disaster-recovery.json" in str(jobs["restore-drill"])
+    assert "funding-disaster-recovery.json.sha256" not in str(jobs["restore-drill"])
+    assert "restore-drill" in jobs["shadow-deploy"]["needs"]
+    restore_drill = (ROOT / "scripts" / "ci_restore_drill.sh").read_text(encoding="utf-8")
+    assert "BACKUP_FUNDING_V1_POSTGRES_WHILE_APP_STOPPED_AND_FENCED" in (
+        (ROOT / "scripts" / "ci_restore_drill.sh").read_text(encoding="utf-8")
+    )
+    assert '${GITHUB_ACTIONS:-}' in restore_drill
+    assert '${CI:-}' in restore_drill
+    assert '${RUNNER_TEMP:-}' in restore_drill
+    assert 'label=com.docker.compose.project=$project' in restore_drill
+    assert "cleanup_authorized=false" in restore_drill
+    assert 'if [[ "$cleanup_authorized" == "true" ]]' in restore_drill
+    assert 'sudo find "$work_root" -depth -delete' in restore_drill
+    assert "restore drill refuses an existing Compose project" in restore_drill
+    assert "restore drill refuses to overwrite an existing repository artifact" in restore_drill
+    assert "ci-restore-target" in restore_drill
+    assert "ci-restore-post-target" in restore_drill
+    assert "APP_IMAGE=%s" in restore_drill
+    assert '"$app_image"' in restore_drill
+    assert "to_jsonb(paper_fills)::text" in restore_drill
+    assert (
+        "jsonb_agg(to_jsonb(ledger_postings) ORDER BY posting_index)::text"
+        in restore_drill
+    )
+    assert "COUNT(*)::text || $$|$$ || SUM(amount)::text" not in restore_drill
+    assert '"1|target-row"' in restore_drill
+    assert "disaster_recovery_evidence.py" in restore_drill
+    assert "disaster-recovery-drill-facts" in restore_drill
+    assert "recovered_crash_stages" in restore_drill
+    assert "bounded diagnostics follow" in restore_drill
+    assert 'docker logs --tail 200 "$failed_app_container_id"' in restore_drill
+    assert "critical_state_entity_count: 15" in restore_drill
+    assert 'app_restart_policy: "no"' in restore_drill
+    assert 'host_plaintext_artifact_count: 0' in restore_drill
+    assert '--github-run-id "$GITHUB_RUN_ID"' in restore_drill
+    assert '--github-run-attempt "$GITHUB_RUN_ATTEMPT"' in restore_drill
+    assert "SELECT COUNT(*) FROM canonical_events WHERE source = $$ci_restore$$" in restore_drill
+    assert "SELECT payload->>$$marker$$" in restore_drill
+    assert "rm -rf" not in restore_drill
+    workflow = _workflow_text()
+    assert "for script in \\" in workflow
+    assert workflow.count('bash -n "$script"') == 1
+    assert '"$artifact_dir/.release-sha"' in workflow
+    assert "include-hidden-files: true" in workflow
+    assert "pip_audit" in str(jobs["container-security"])
+    assert "trivy-action" in str(jobs["container-security"])
+    assert "sbom-action" in str(jobs["container-security"])
+    assert "'upload-artifact': 'false'" in str(jobs["container-security"])
+    assert "funding-arbitrage-sbom-${{ github.sha }}" in str(
+        jobs["container-security"]
+    )
+    assert jobs["container-security"]["permissions"] == {"contents": "read"}
+    security = str(jobs["container-security"])
+    assert "cosign generate-key-pair" not in security
+    sbom_attestation = jobs["attest-sbom"]
+    assert sbom_attestation["if"] == (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    )
+    assert sbom_attestation["needs"] == "container-security"
+    assert sbom_attestation["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+    }
+    assert "funding-arbitrage.spdx.bundle" in str(sbom_attestation)
+    assert "cosign" in str(sbom_attestation).lower()
+    assert "funding-sbom-bundle-${{ github.sha }}-${{ github.run_id }}-" in str(
+        sbom_attestation
+    )
+    assert "cosign generate-key-pair" not in str(sbom_attestation)
+    assert "certificate-oidc-issuer" in str(sbom_attestation)
+    publish = str(jobs["publish-signed-image"])
+    assert set(jobs["publish-signed-image"]["needs"]) == {
+        "shadow-deploy",
+        "attest-load-slo",
+        "attest-sbom",
+    }
+    assert "funding-signed-release-${{ github.sha }}" in publish
+    assert "funding-release-image.txt" in publish
+    assert "funding-release-revision.txt" in publish
+    assert "funding-release-cosign.json" in publish
+
+
+def test_all_action_dependencies_are_immutable_and_expected() -> None:
+    workflow = _workflow_text()
+    refs = re.findall(r"uses:\s+([^@\s]+)@([^\s]+)", workflow)
+
+    assert refs
+    assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for _, revision in refs)
+    assert (
+        "aquasecurity/trivy-action",
+        "a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8",
+    ) in refs
+    assert (
+        "anchore/sbom-action",
+        "e22c389904149dbc22b58101806040fa8d37a610",
+    ) in refs
+    assert (
+        "sigstore/cosign-installer",
+        "6f9f17788090df1f26f669e9d70d6ae9567deba6",
+    ) in refs
+
+
+def test_shadow_deployment_is_isolated_and_cannot_trade() -> None:
+    script = SHADOW_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "docker network create --internal" in script
+    assert "TRADING_MODE=SHADOW" in script
+    assert "MARKET_DATA_MODE=mock" in script
+    assert "EXECUTION_MODE=paper" in script
+    assert "PAPER_AUTOTRADE=false" in script
+    assert "LIVE_AUTOTRADE=false" in script
+    assert "PAPER_AUTO_INIT_DATABASE=false" in script
+    assert "alembic upgrade head && exec uvicorn" in script
+    assert "--cap-drop ALL" in script
+    assert "no-new-privileges:true" in script
+    assert "--user 70:70" in script
+    assert "--user 10001:10001" in script
+    assert script.count("--init") == 2
+    assert "--pids-limit 128" in script
+    assert "--pids-limit 256" in script
+    assert "--memory 384m" in script
+    assert "--memory 1024m" in script
+    assert script.count("--cpus") == 2
+    assert "docker push" not in script
+    assert "LIVE_ARMED=true" not in script
+    assert not re.search(r"--publish|\s-p\s", script)
+    assert not re.search(r"(?:API_KEY|API_SECRET)=", script)
+
+
+def test_publish_and_manual_gate_are_tightly_scoped() -> None:
+    jobs = _workflow_jobs()
+    publish = jobs["publish-signed-image"]
+    manual = jobs["manual-live-gate"]
+    workflow = _workflow_text()
+
+    assert isinstance(publish, dict)
+    assert publish["if"] == "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    assert publish["permissions"] == {
+        "contents": "read",
+        "packages": "write",
+        "id-token": "write",
+    }
+    assert isinstance(manual, dict)
+    assert manual["if"] == "github.event_name == 'workflow_dispatch'"
+    assert manual["environment"] == "limited-live-approval"
+    assert "manual_live_gate.py" in str(manual)
+    assert "--output" in str(manual)
+    assert "funding-v1-prerequisites.json" in str(manual)
+    assert "funding-limited-live-approval.json.sha256" in str(manual)
+    assert "set -euo pipefail" in str(manual)
+    assert "actions/attest@a1948c3f048ba23858d222213b7c278aabede763" in str(manual)
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in str(manual)
+    assert manual["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+        "attestations": "write",
+        "artifact-metadata": "write",
+    }
+    assert "secrets." not in workflow
+    assert not re.search(r"\b(?:ssh|scp|rsync)\b", workflow, re.IGNORECASE)
+
+
+def test_paper_test_template_satisfies_required_compose_variables() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    environment = dict(
+        line.split("=", 1)
+        for line in (ROOT / ".env.paper-test.example")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    required = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", compose))
+
+    assert required
+    assert required <= environment.keys()
+    assert all(environment[name] for name in required)
+    assert environment["PAPER_AUTO_INIT_DATABASE"] == "false"

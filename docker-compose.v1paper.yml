@@ -1,0 +1,57 @@
+# All-strategy PAPER stack, isolated beside the funding paper stacks on a shared host.
+#
+# Only app, postgres and redis start (ClickHouse and observability stay behind their
+# profiles). Run it only with an explicit project name and both env files:
+#
+#   docker compose -p funding_arbitrage_v1paper \
+#     --env-file /opt/funding_arbitrage_v1paper/app.env \
+#     --env-file /opt/funding_arbitrage_v1paper/runtime.env \
+#     -f docker-compose.yml -f docker-compose.v1paper.yml up -d
+#
+# app.env holds datastore secrets and the paths below; runtime.env holds only
+# non-secret mode, strategy and budget settings (ops/v1paper-runtime.env.example).
+name: funding_arbitrage_v1paper
+
+services:
+  app:
+    # Paper only: no Vault-gated live start applies, so restart after a host reboot.
+    restart: unless-stopped
+    env_file: !override
+      - path: ${APP_ENV_FILE:?point to the stack's secret env file}
+        required: true
+      - path: ${PAPER_RUNTIME_ENV_FILE:?point to the stack's runtime env file}
+        required: true
+    environment:
+      RUN_MODE: paper_test
+      TRADING_MODE: PAPER
+      MARKET_DATA_MODE: live_public
+      EXECUTION_MODE: paper
+      LIVE_AUTOTRADE: "false"
+      LIVE_TRADING_CONFIRM: ""
+      DANGEROUS_CAPABILITY_AUTHORIZATION: ""
+      BYBIT_API_KEY: ""
+      BYBIT_API_SECRET: ""
+      GATE_API_KEY: ""
+      GATE_API_SECRET: ""
+      OKX_API_KEY: ""
+      OKX_API_SECRET: ""
+      OKX_API_PASSPHRASE: ""
+      BINANCE_API_KEY: ""
+      BINANCE_API_SECRET: ""
+      HYPERLIQUID_PRIVATE_KEY: ""
+      MEXC_API_KEY: ""
+      MEXC_API_SECRET: ""
+      KUCOIN_API_KEY: ""
+      KUCOIN_API_SECRET: ""
+      KUCOIN_API_PASSPHRASE: ""
+      HTX_API_KEY: ""
+      HTX_API_SECRET: ""
+    volumes: !override
+      - runtime_state:/app/.runtime
+      - ${PAPER_EMPTY_EXCHANGE_SECRETS_DIR:?point to an empty directory}:/run/secrets/exchange:ro
+      - ${INTERNAL_TLS_SECRETS_DIR:?point to this stack's internal TLS directory}:/run/secrets/internal:ro
+    networks: !override
+      - default
+      - data_plane
+    ports:
+      - "127.0.0.1:${APP_PORT:-8002}:8000"

@@ -6,6 +6,28 @@ from typing import Any
 
 import httpx
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+
+
+def _telegram_chunks(text: str) -> tuple[str, ...]:
+    """Split without losing content, preferring report line boundaries."""
+
+    if len(text) <= TELEGRAM_MESSAGE_LIMIT:
+        return (text,)
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > TELEGRAM_MESSAGE_LIMIT:
+        split_at = remaining.rfind("\n", 0, TELEGRAM_MESSAGE_LIMIT)
+        if split_at <= 0:
+            split_at = TELEGRAM_MESSAGE_LIMIT
+        else:
+            split_at += 1
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    if remaining:
+        chunks.append(remaining)
+    return tuple(chunks)
+
 
 class TelegramNotificationError(RuntimeError):
     """Telegram rejected or failed a notification request."""
@@ -39,19 +61,18 @@ class TelegramNotifier:
     async def send_message(self, text: str) -> None:
         if not self.configured:
             raise TelegramNotificationError("Telegram notifier is not configured")
-        if len(text) > 4096:
-            text = text[:4090] + "…"
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=self.timeout_seconds)
         url = f"{self.api_base_url}/bot{self.bot_token}/sendMessage"
-        try:
-            response = await self._http.post(
-                url,
-                json={"chat_id": self.chat_id, "text": text},
-            )
-            response.raise_for_status()
-            payload: Any = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise TelegramNotificationError("Telegram request failed") from exc
-        if not isinstance(payload, dict) or payload.get("ok") is not True:
-            raise TelegramNotificationError("Telegram returned an unsuccessful response")
+        for chunk in _telegram_chunks(text):
+            try:
+                response = await self._http.post(
+                    url,
+                    json={"chat_id": self.chat_id, "text": chunk},
+                )
+                response.raise_for_status()
+                payload: Any = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise TelegramNotificationError("Telegram request failed") from exc
+            if not isinstance(payload, dict) or payload.get("ok") is not True:
+                raise TelegramNotificationError("Telegram returned an unsuccessful response")

@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from funding_arbitrage.exchanges.base.models import InstrumentType
+
 
 class FillStatus(StrEnum):
     FILLED = "FILLED"
@@ -20,6 +22,7 @@ class ExecutionIntent(BaseModel):
     client_order_id: str = Field(default_factory=lambda: str(uuid4()))
     exchange: str
     symbol: str
+    instrument_type: InstrumentType
     side: str
     quantity: Decimal = Field(gt=0)
     limit_price: Decimal | None = Field(default=None, gt=0)
@@ -30,11 +33,14 @@ class PaperFill(BaseModel):
     client_order_id: str
     exchange: str
     symbol: str
+    instrument_type: InstrumentType | None = None
     side: str
     requested_quantity: Decimal = Field(gt=0)
     filled_quantity: Decimal = Field(ge=0)
     price: Decimal | None = Field(default=None, gt=0)
+    reference_price: Decimal | None = Field(default=None, gt=0)
     fee: Decimal = Field(ge=0)
+    spread: Decimal = Field(default=Decimal("0"), ge=0)
     slippage: Decimal = Field(ge=0)
     status: FillStatus
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))

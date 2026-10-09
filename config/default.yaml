@@ -30,27 +30,70 @@ binance:
 hyperliquid:
   base_url: https://api.hyperliquid.xyz
   websocket_url: wss://api.hyperliquid.xyz/ws
+mexc:
+  base_url: https://api.mexc.com
+  futures_base_url: https://api.mexc.com
+  futures_websocket_url: wss://contract.mexc.com/edge
+  spot_websocket_url: wss://wbs-api.mexc.com/ws
+kucoin:
+  spot_base_url: https://api.kucoin.com
+  futures_base_url: https://api-futures.kucoin.com
+  spot_websocket_url: wss://ws-api-spot.kucoin.com
+  futures_websocket_url: wss://ws-api-futures.kucoin.com
+htx:
+  spot_base_url: https://api.huobi.pro
+  futures_base_url: https://api.hbdm.com
+  spot_websocket_url: wss://api.huobi.pro/ws
+  futures_websocket_url: wss://api.hbdm.com/linear-swap-ws
 market_data:
   stale_seconds: 30
 scanner:
   minimum_net_apr: 0.10
   minimum_liquidity_score: 70
-  maximum_slippage_percent: 0.15
-  maximum_spread_percent: 0.20
+  maximum_slippage_percent: 0.0015
+  maximum_spread_percent: 0.0020
   minimum_funding_samples: 20
   minimum_opportunity_duration_seconds: 30
+  allow_spot_short: false
+  borrowing_cost_daily: 0
 paper_portfolio:
-  initial_balance_usd: 15000
+  initial_balance_usd: 1000
+  size_grid_usd: 50,100,250,500,1000,2500,5000
+  max_funding_capital_usd: 100
+  minimum_funding_rate: 0.0002
   reserve_percent: 20
+  max_single_opportunity_percent: 20
+  max_single_asset_percent: 30
+  max_single_exchange_percent: 40
+  max_single_strategy_percent: 60
+  max_correlated_group_percent: 50
+  legging_move_percent: 0.0002
+  correlation_groups: BTC,ETH,SOL;DOGE,SHIB,PEPE,WIF,BONK,FLOKI,TUT
   autotrade: false
+  autotrade_start_utc: null
   loop_interval_seconds: 10
   confirmation_seconds: 30
   max_hold_seconds: 900
-  position_size_usd: 250
-  max_open_positions: 10
+  position_size_usd: 50
+  max_open_positions: 8
   auto_init_database: false
   history_refresh_seconds: 3600
   orderbook_symbol_limit: 10
+  market_asset_limit: 12
+  history_symbol_limit: 5
+  market_persist_interval_seconds: 300
+  simulation_version: v34-cost-gated-candidate
+  strategy_profile: candidate
+  comparison_enabled: false
+  baseline_simulation_version: v34-cost-gated-baseline
+  exit_edge_miss_cycles: 2
+  funding_horizon_hours: 24
+  funding_reconciliation_window_seconds: 7200
+  funding_reconciliation_poll_seconds: 60
+  funding_reconciliation_max_post_deadline_attempts: 5
+  entry_window_hours: 2
+  min_settlement_cost_coverage: 2
+  max_adverse_basis_percent: 0.005
 telegram:
   enabled: false
   api_base_url: https://api.telegram.org
@@ -63,3 +106,8 @@ fees:
   okx: {maker_fee: 0.00020, taker_fee: 0.00050}
   binance: {maker_fee: 0.00020, taker_fee: 0.00040}
   hyperliquid: {maker_fee: 0.00015, taker_fee: 0.00035}
+  # Conservative API fee defaults; live preflight reads the account-specific fee.
+  mexc: {maker_fee: 0.00060, taker_fee: 0.00080}
+  # Conservative paper defaults; authenticated live preflight reads exact account fees.
+  kucoin: {maker_fee: 0.00100, taker_fee: 0.00100}
+  htx: {maker_fee: 0.00200, taker_fee: 0.00200}

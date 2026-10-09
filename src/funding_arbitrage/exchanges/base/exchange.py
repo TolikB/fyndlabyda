@@ -6,7 +6,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import datetime
 
+from funding_arbitrage.domain.events import OptionQuoteSnapshot
+
 from .models import (
+    Candle,
     FundingHistoryPoint,
     FundingSnapshot,
     InstrumentType,
@@ -43,10 +46,38 @@ class ExchangeAdapter(ABC):
     ) -> list[FundingHistoryPoint]: ...
 
     @abstractmethod
-    def stream_tickers(self, symbols: list[str]) -> AsyncIterator[Ticker]: ...
+    def stream_tickers(
+        self, symbols: list[tuple[str, InstrumentType]]
+    ) -> AsyncIterator[Ticker]: ...
 
-    def stream_orderbooks(self, symbols: list[str]) -> AsyncIterator[OrderBook]:
-        raise NotImplementedError("orderbook streaming is not part of PHASE 2")
+    def stream_orderbooks(
+        self,
+        symbols: list[tuple[str, InstrumentType]],
+        depth: int = 20,
+    ) -> AsyncIterator[OrderBook]:
+        raise NotImplementedError("orderbook streaming is not implemented by this adapter")
 
     def stream_funding(self, symbols: list[str]) -> AsyncIterator[FundingSnapshot]:
-        raise NotImplementedError("funding streaming is not part of PHASE 2")
+        raise NotImplementedError("native funding streaming is unavailable for this adapter")
+
+    async def get_candles(
+        self,
+        symbol: str,
+        instrument_type: InstrumentType,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int = 60,
+    ) -> list[Candle]:
+        raise NotImplementedError("historical candles are not implemented by this adapter")
+
+    async def get_option_chain(
+        self, base_assets: tuple[str, ...]
+    ) -> list[OptionQuoteSnapshot]:
+        """Return normalized executable option quotes when the venue supports them.
+
+        Unsupported venues intentionally return an empty capability result. The
+        method is public-data only and must never require account credentials.
+        """
+
+        del base_assets
+        return []

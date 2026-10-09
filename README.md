@@ -1,10 +1,12 @@
 # Funding Arbitrage Research Bot
 
-Read-only, market-neutral funding/basis research system. It normalizes public
-market data from Bybit, Gate.io, OKX, Binance, and Hyperliquid; ranks funding,
-spot/perpetual, perp/perp, and dated-futures opportunities; and keeps all
-execution strictly in `PaperTradingExecutor`. No API keys or live orders are
-used in v1.
+Market-neutral funding/basis arbitrage system for Bybit, Gate.io, OKX,
+Binance, Hyperliquid, MEXC, KuCoin, and HTX. It normalizes public REST/WebSocket data, exact
+venue funding cycles, spot/perpetual, perp/perp, and dated-futures
+opportunities. Paper mode is the default. A separately interlocked live mode
+uses authenticated order/fill/balance/position streams, periodic authoritative
+account reconciliation, durable order intents, idempotent client IDs, bounded
+IOC orders, and persistent kill switches.
 
 ## Local setup
 
@@ -39,11 +41,43 @@ score, win rate, profit factor, utilization, and monthly percentiles.
 ## Safety and data assumptions
 
 The adapters use public REST for initial snapshots, history, and recovery, and
-provide reconnecting public ticker streams. Orderbook depth is used for paper
+reconnecting public ticker and typed spot/perpetual order-book streams as the
+primary incremental source. Orderbook depth is used for paper
 slippage estimates when supplied. Missing historical depth is treated
 conservatively as unavailable rather than inferred. Funding is normalized to
 daily and annualized comparison metrics; realized paper PnL is settled from
 timestamped funding events.
+
+## Guarded capabilities
+
+Eight capabilities the specification marks financially dangerous are fail-closed
+and disabled by default. Enabling one is always two independent operator
+decisions: its own `*_ENABLED` flag, and its exact canonical name in
+`DANGEROUS_CAPABILITY_AUTHORIZATION`. An unknown name in that list fails the
+runtime closed rather than being ignored, and each capability additionally
+requires its own endpoints, journals, allowlists, and economic bounds before it
+can start.
+
+| Capability | Flag | Notes |
+| --- | --- | --- |
+| `automated_withdrawals` | `WITHDRAWALS_ENABLED` | Dual-role approval, per-destination venue and amount bounds |
+| `dex_execution` | `DEX_EXECUTION_ENABLED` | Signer named by reference; no key material is read, generated, or stored |
+| `mev_execution` | `MEV_EXECUTION_ENABLED` | Requires the DEX engine beneath it and a private relay |
+| `martingale` | `MARTINGALE_RESEARCH_ENABLED` | Research only; live use needs the authorization too |
+| `grid_averaging` | `GRID_RESEARCH_ENABLED` | Research only |
+| `loss_averaging` | `LOSS_AVERAGING_RESEARCH_ENABLED` | Research only |
+| `live_rl_decisions` | `DECISION_SUPPORT_RL_ENABLED` | Advisory; authorization required only in live modes |
+| `live_llm_decisions` | `DECISION_SUPPORT_LLM_ENABLED` | Advisory; never granted execution authority |
+
+Three further capabilities are safety features rather than risks and default to
+on: exchange-side reduce-only protective stops (`PROTECTIVE_STOPS_ENABLED`,
+mandatory in live modes), smart order routing (`SMART_ORDER_ROUTER_ENABLED`),
+and venue margin simulation (`PORTFOLIO_MARGIN_SIMULATION_ENABLED`). The
+colocation-capable native path (`NATIVE_LOW_LATENCY_ENABLED`) is off until a
+sidecar host and port are configured.
+
+`.env.example` documents every switch. `docs/V1_EVIDENCE_SEALING.md` describes
+how delivery status is sealed and proved.
 
 ## Docker
 
@@ -55,7 +89,152 @@ docker compose up -d --build
 ```
 
 This starts the production-shaped paper-test deployment: real public market
-data from Bybit, Gate, OKX, Binance, and Hyperliquid, automatic paper
+data from Bybit, Gate, OKX, Binance, Hyperliquid, MEXC, KuCoin, and HTX, automatic paper
 execution, funding settlement, PostgreSQL persistence, Prometheus, and
-Grafana. It never sends exchange orders. Use `.env.paper-test.example` only
-for the fully offline deterministic mock profile.
+Grafana support. The default lightweight profile starts only app, PostgreSQL,
+and Redis; add `--profile observability` when the host has enough resources for
+Prometheus and Grafana. It never sends exchange orders. Use
+`.env.paper-test.example` only for the fully offline deterministic mock profile.
+The Docker base image is digest-pinned and `requirements.lock` fixes the exact
+tested runtime dependency graph so a rebuild cannot silently change the
+candidate or baseline environment.
+
+The live-data paper profile persists full market snapshots every five minutes
+to keep PostgreSQL growth bounded. Diagnose current public-market candidates
+without writing data or placing orders with:
+
+```powershell
+docker compose exec app python scripts/paper_scan_probe.py
+docker compose exec app python scripts/mexc_public_probe.py
+docker compose exec app python scripts/kucoin_htx_public_probe.py
+```
+
+Port 8000 is bound to VM localhost by default. Reach the dashboard safely with
+an SSH tunnel such as `ssh -L 8000:127.0.0.1:8000 user@vm`, then open
+`http://127.0.0.1:8000/dashboard/` locally.
+
+## PnL-correct comparison mode
+
+The active mark-to-market shared-feed OOS candidate is versioned as `v31-oos-candidate`. It requires typed,
+fresh order books for both legs, closes the exact opened quantity, applies the
+taker fee of each venue, and separates legacy results from the current equity
+curve. A deterministic adverse second-leg move is charged in signal sizing,
+paper fills, PnL, and replay attribution through `PAPER_LEGGING_MOVE_PERCENT`.
+Candidate positions are fill-or-kill at entry and close after their target settlement unless
+the next exact venue settlement is projected to cover exit, re-entry, legging, and incremental
+borrow costs. Missing or shallow close books persist a restart-safe exit request until both
+legs can be neutralized; the executor never invents a fill while liquidity is unavailable.
+Ticker and typed spot/perpetual order-book WebSockets are the primary
+incremental source; REST is used for initial snapshots, periodic validation,
+recovery, and funding history.
+
+Run the corrected fixed-size baseline beside the risk-adjusted candidate using
+one shared market-data feed:
+
+The candidate enforces separate opportunity, asset, exchange, strategy, cash
+reserve, and configured correlated-asset exposure limits. Correlation groups
+are supplied through `PAPER_CORRELATION_GROUPS`; the baseline deliberately
+retains fixed sizing as the unchanged control portfolio.
+
+```bash
+PAPER_COMPARISON_ENABLED=true docker compose up -d --build
+```
+
+The baseline has no separate container or published port and Telegram is
+disabled for it. Both
+profiles share PostgreSQL but restore and report only their own
+`simulation_version`. Compare them with:
+
+```text
+GET  /analytics/compare
+GET  /analytics/attribution?simulation_version=v31-oos-candidate
+POST /backtests/replay-paper
+POST /backtests/compare-market
+POST /backtests/compare-market/jobs
+GET  /backtests/compare-market/jobs/{job_id}
+```
+
+`/analytics/compare` keeps `accepted=false` until at least 30 days of evidence
+exist and the candidate beats baseline net PnL by 10%, improves median monthly
+PnL, does not increase drawdown, and is profitable in two of three windows.
+Paper-cycle failures are stored as redacted, version-scoped PostgreSQL
+incidents. Runner process epochs are stored in the same ledger, so a container
+restart cannot reset or hide a failed canary window.
+
+Build an idempotent 30–90 day research dataset from public hourly candles and
+actual settled funding events, then compare both profiles without look-ahead:
+
+```bash
+docker compose exec app python scripts/historical_backfill.py --days 90
+curl -X POST http://127.0.0.1:8000/backtests/compare-market/jobs \
+  -H 'content-type: application/json' \
+  -d '{"start":"2026-05-12T00:00:00Z","end":"2026-08-10T00:00:00Z","initial_capital":"15000"}'
+# Poll the returned job ID; completed jobs include the full comparison result.
+curl http://127.0.0.1:8000/backtests/compare-market/jobs/<job-id>
+```
+
+The response includes a canonical dataset SHA-256, per-series candle coverage
+and largest gaps, position counts, costs, drawdown, rolling-window checks, and
+persisted baseline/candidate run IDs. If historical order books are unavailable,
+replay explicitly uses a conservative synthetic spread/depth model; it never
+silently assumes zero slippage.
+
+Elapsed `GATE-001` Shadow and `GATE-002` Paper evidence uses the immutable
+contract and verifier in `docs/V1_ACCEPTANCE_WINDOWS.md`. The contract is
+implemented, but both gates remain incomplete until a deployment-specific
+collector records a clean 72-hour Shadow window and a clean 30-day Paper window
+for one exact code/image/config identity and trusted signed provenance is verified.
+Evidence-summary success, independently verified replay, policy success, and final
+gate acceptance are reported as separate fail-closed states.
+
+## Guarded live mode
+
+Live execution is disabled unless `RUN_MODE=live`, `EXECUTION_MODE=live`,
+`TRADING_MODE=LIMITED_LIVE` or `LIVE`, `LIVE_ARMED=true`, and the exact
+confirmation phrase in `.env.live.example`
+are all present. Copy that example only after completing the checklist in
+`ops/LIVE_TRADING_RUNBOOK.md`. Never reuse a paper `.env` or grant withdrawal
+or transfer permissions.
+
+Public tick trades, one-minute OHLCV, mark/index/funding snapshots, open
+interest, and venue-supported public liquidations are written to the canonical
+journal for all eight CEX. The active universe is bounded per spot/derivative
+profile and ranked by normalized 24-hour volume. Native adapters remain the
+source of truth for exact funding timestamps, rates, mark, and index prices;
+CCXT Pro supplies supplemental streams and conservative REST recovery. Missing
+venue capabilities are exported explicitly and never replaced by synthetic data.
+Authenticated private events from all eight CEX are normalized into the same
+immutable journal as market data. WebSocket order, fill, balance, and supported
+position updates are paired with periodic REST reconciliation; MEXC and HTX
+position snapshots use that explicit REST recovery path because pinned CCXT Pro
+4.5.73 does not advertise their position streams. Any reconnecting channel,
+stale checkpoint, stopped task, normalization failure, or journal failure blocks
+new entries. `/system/live`, Prometheus, and Grafana expose only health metadata,
+never credentials or raw private payloads.
+
+MEXC paper mode uses the same public spot/futures feeds and exact settlement
+timestamps as production. MEXC live mode uses native spot V3 and futures V1
+signing, converts futures contracts to base quantity, configures Hedge Mode,
+recovers ambiguous submissions by `externalOid`, and treats unresolved order
+outcomes as `UNKNOWN` so the second leg cannot proceed. MEXC, KuCoin, and HTX
+have no separate live sandbox in this service; use `paper_test` with
+`live_public` data for the test phase.
+
+KuCoin uses separate Classic spot and futures accounts, a mandatory API
+passphrase, dynamic public WebSocket tokens, exact funding timestamps, and
+contract-to-base conversion. HTX uses spot plus isolated USDT-M linear swaps,
+gzip WebSockets, dynamic settlement periods, exact funding events, a numeric
+deterministic client order ID, and the authenticated linear-swap fee endpoint.
+Both venues fail closed on ambiguous order outcomes and reconcile funding only
+for live-allowlisted assets.
+
+Run long replays in a dedicated `RUN_MODE=api`, `PAPER_AUTOTRADE=false` worker.
+This keeps paper market polling responsive and prevents an HTTP client timeout
+from cancelling result delivery. Candidate entries use the same portfolio risk
+limits as the live-data paper runner and require the nearest settlement to cover
+round-trip costs with the configured safety margin.
+
+By default the backfill discovers a bounded 12-asset universe using current
+funding potential and liquidity while retaining BTC, ETH, and SOL. Override it
+with `--assets BTC,ETH,SOL` or adjust breadth with `--asset-limit`. Historical
+funding is collected for every perpetual in the selected runner universe.

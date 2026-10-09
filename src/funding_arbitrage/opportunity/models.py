@@ -37,6 +37,7 @@ class CostBreakdown(BaseModel):
     exit_slippage: Decimal = Field(ge=0)
     borrowing_cost: Decimal = Field(ge=0)
     network_cost: Decimal = Field(ge=0)
+    legging_cost: Decimal = Field(default=Decimal("0"), ge=0)
 
     @property
     def total(self) -> Decimal:

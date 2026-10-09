@@ -1,0 +1,2 @@
+# Shell entrypoints and operational scripts must execute identically on Linux.
+*.sh text eol=lf

@@ -1,0 +1,701 @@
+import json
+import os
+import re
+import shutil
+import subprocess
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import pytest
+import yaml
+
+COMPOSE_PATH = Path(__file__).resolve().parents[1] / "docker-compose.yml"
+PAPER_CONTABO_OVERLAY_PATH = (
+    Path(__file__).resolve().parents[1] / "docker-compose.paper-contabo.yml"
+)
+DOCKERFILE_PATH = Path(__file__).resolve().parents[1] / "Dockerfile"
+REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements.lock"
+LINUX_REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements-linux.lock"
+DEV_REQUIREMENTS_LOCK_PATH = Path(__file__).resolve().parents[1] / "requirements-dev.lock"
+LINUX_DEV_REQUIREMENTS_LOCK_PATH = (
+    Path(__file__).resolve().parents[1] / "requirements-dev-linux.lock"
+)
+DOCKERIGNORE_PATH = Path(__file__).resolve().parents[1] / ".dockerignore"
+LIVE_RUNBOOK_PATH = Path(__file__).resolve().parents[1] / "ops" / "LIVE_TRADING_RUNBOOK.md"
+LIVE_ENV_EXAMPLE_PATH = Path(__file__).resolve().parents[1] / ".env.live.example"
+NGINX_CONTROL_PLANE_PATH = (
+    Path(__file__).resolve().parents[1] / "docker" / "nginx" / "control-plane.conf"
+)
+DASHBOARD_PATH = Path(__file__).resolve().parents[1] / "dashboard" / "index.html"
+POSTGRES_HBA_PATH = (
+    Path(__file__).resolve().parents[1] / "docker" / "postgres" / "pg_hba.conf"
+)
+REDIS_ENTRYPOINT_PATH = (
+    Path(__file__).resolve().parents[1] / "docker" / "redis" / "secure-entrypoint.sh"
+)
+CLICKHOUSE_TLS_PATH = (
+    Path(__file__).resolve().parents[1] / "docker" / "clickhouse" / "config.d" / "tls.xml"
+)
+CLICKHOUSE_RESOURCES_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "docker"
+    / "clickhouse"
+    / "config.d"
+    / "resources.xml"
+)
+CLICKHOUSE_CLIENT_PATH = (
+    Path(__file__).resolve().parents[1] / "docker" / "clickhouse" / "client.xml"
+)
+FORBIDDEN_HOST_PORTS = {5432, 9108, 9109}
+
+
+def _locked_versions(path: Path) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([^\s]+)\s+\\", line)
+        if match:
+            versions[match.group(1).lower()] = match.group(2)
+    return versions
+
+
+def _compose() -> dict[str, object]:
+    payload = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
+def test_contabo_paper_overlay_pins_safe_mode_and_has_no_exchange_keys() -> None:
+    class OverrideLoader(yaml.SafeLoader):
+        pass
+
+    OverrideLoader.add_constructor(
+        "!override", lambda loader, node: loader.construct_sequence(node)
+    )
+    payload = yaml.load(
+        PAPER_CONTABO_OVERLAY_PATH.read_text(encoding="utf-8"), Loader=OverrideLoader
+    )
+    app = payload["services"]["app"]
+    assert app["restart"] == "unless-stopped"
+    paper_boundary = {
+        "RUN_MODE": "paper_test",
+        "TRADING_MODE": "PAPER",
+        "MARKET_DATA_MODE": "live_public",
+        "EXECUTION_MODE": "paper",
+        "LIVE_AUTOTRADE": "false",
+        "LIVE_TRADING_CONFIRM": "",
+        "DANGEROUS_CAPABILITY_AUTHORIZATION": "",
+    }
+    for key, value in paper_boundary.items():
+        assert app["environment"][key] == value
+    private_keys = {
+        "BYBIT_API_KEY", "BYBIT_API_SECRET", "GATE_API_KEY", "GATE_API_SECRET",
+        "OKX_API_KEY", "OKX_API_SECRET", "OKX_API_PASSPHRASE",
+        "BINANCE_API_KEY", "BINANCE_API_SECRET", "HYPERLIQUID_PRIVATE_KEY",
+        "MEXC_API_KEY", "MEXC_API_SECRET", "KUCOIN_API_KEY",
+        "KUCOIN_API_SECRET", "KUCOIN_API_PASSPHRASE", "HTX_API_KEY",
+        "HTX_API_SECRET",
+    }
+    assert all(app["environment"][key] == "" for key in private_keys)
+    assert len(app["env_file"]) == 2
+    assert "APP_RUNTIME_SECRETS_ENV_FILE" not in str(app["env_file"])
+    assert app["volumes"][1].startswith("${PAPER_EMPTY_EXCHANGE_SECRETS_DIR:")
+    assert app["ports"] == ["127.0.0.1:8000:8000"]
+    assert app["networks"] == ["default", "data_plane"]
+
+
+def test_contabo_paper_effective_compose_drops_private_secret_sources(
+    tmp_path: Path,
+) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker Compose is not installed")
+    if subprocess.run(
+        [docker, "compose", "version"], capture_output=True, check=False
+    ).returncode != 0:
+        pytest.skip("Docker Compose v2 is not available")
+
+    root = COMPOSE_PATH.parent
+    secret_env = tmp_path / "must-not-load.env"
+    secret_env.write_text("SECRET_SOURCE_SENTINEL=unsafe-test-value\n", encoding="utf-8")
+    exchange_dir = tmp_path / "empty-exchange"
+    exchange_dir.mkdir()
+    release_sha = "a" * 40
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_ENV_FILE": str(root / ".env.paper-live-data.example"),
+            "PAPER_RUNTIME_ENV_FILE": str(root / ".env.paper-test.example"),
+            "APP_RUNTIME_SECRETS_ENV_FILE": str(secret_env),
+            "PAPER_EMPTY_EXCHANGE_SECRETS_DIR": str(exchange_dir),
+            "INTERNAL_TLS_SECRETS_DIR": str(tmp_path),
+            "APP_IMAGE": "funding-arbitrage-paper:merge-test",
+            "RELEASE_COMMIT_SHA": release_sha,
+            "POSTGRES_PASSWORD": "compose-merge-test-only",
+            "CLICKHOUSE_PASSWORD": "compose-merge-test-only",
+            "GRAFANA_ADMIN_PASSWORD": "compose-merge-test-only",
+            "BYBIT_API_KEY": "unsafe-test-key",
+        }
+    )
+    result = subprocess.run(
+        [
+            docker, "compose", "-p", "funding_arbitrage_paper_merge_test",
+            "-f", str(COMPOSE_PATH), "-f", str(PAPER_CONTABO_OVERLAY_PATH),
+            "config", "--format", "json",
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    app = json.loads(result.stdout)["services"]["app"]
+    assert app["image"] == "funding-arbitrage-paper:merge-test"
+    assert app["environment"]["RELEASE_COMMIT_SHA"] == release_sha
+    assert app["environment"]["RUN_MODE"] == "paper_test"
+    assert app["environment"]["TRADING_MODE"] == "PAPER"
+    assert app["environment"]["MARKET_DATA_MODE"] == "live_public"
+    assert app["environment"]["EXECUTION_MODE"] == "paper"
+    assert app["environment"]["LIVE_AUTOTRADE"] == "false"
+    assert app["environment"]["BYBIT_API_KEY"] == ""
+    assert "SECRET_SOURCE_SENTINEL" not in app["environment"]
+    assert app["restart"] == "unless-stopped"
+    volumes = {volume["target"]: volume for volume in app["volumes"]}
+    assert volumes["/run/secrets/exchange"]["source"] == str(exchange_dir)
+    assert volumes["/run/secrets/exchange"]["read_only"] is True
+    assert {port["host_ip"] for port in app["ports"]} == {"127.0.0.1"}
+
+
+def test_shell_scripts_are_lf_only() -> None:
+    root = COMPOSE_PATH.parent
+    shell_scripts = sorted(root.rglob("*.sh"))
+    assert shell_scripts
+    assert "*.sh text eol=lf" in (root / ".gitattributes").read_text(encoding="utf-8")
+    if os.name != "posix":
+        return
+    for path in shell_scripts:
+        assert b"\r\n" not in path.read_bytes(), path.relative_to(root)
+
+
+def test_every_service_has_cpu_and_memory_limits() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name, service in services.items():
+        assert isinstance(service, dict), name
+        assert service.get("cpus"), name
+        assert service.get("mem_limit"), name
+
+    app = services["app"]
+    assert app["cpus"] == "2.00"
+    assert app["mem_limit"] == "3072m"
+    assert services["postgres"]["cpus"] == "0.50"
+    assert services["postgres"]["mem_limit"] == "640m"
+    assert services["postgres"]["memswap_limit"] == "1280m"
+    assert services["clickhouse"]["mem_limit"] == "1280m"
+
+
+def test_every_service_has_bounded_json_log_rotation() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name, service in services.items():
+        assert isinstance(service, dict), name
+        logging = service.get("logging")
+        assert isinstance(logging, dict), name
+        assert logging.get("driver") == "json-file", name
+        options = logging.get("options")
+        assert isinstance(options, dict), name
+        assert options.get("max-size") == "10m", name
+        assert options.get("max-file") == "3", name
+
+
+def test_published_ports_are_loopback_only_and_do_not_conflict() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name, service in services.items():
+        assert isinstance(service, dict), name
+        for binding in service.get("ports", []):
+            assert isinstance(binding, str), name
+            host_ip, host_port, _container_port = binding.split(":")
+            assert host_ip == "127.0.0.1", (name, binding)
+            assert int(host_port) not in FORBIDDEN_HOST_PORTS, (name, binding)
+
+
+def test_datastores_publish_no_host_ports() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name in ("postgres", "redis", "clickhouse"):
+        service = services[name]
+        assert isinstance(service, dict)
+        assert not service.get("ports")
+
+
+def test_data_plane_is_internal_authenticated_and_tls_only() -> None:
+    compose = _compose()
+    services = compose["services"]
+    networks = compose["networks"]
+    assert isinstance(services, dict)
+    assert isinstance(networks, dict)
+    assert networks["data_plane"]["internal"] is True
+
+    app = services["app"]
+    assert "data_plane" in app["networks"]
+    for name in ("postgres", "redis", "clickhouse"):
+        service = services[name]
+        assert service["networks"] == ["data_plane"]
+        assert not service.get("ports")
+
+    expected_users = {
+        "postgres": "70:70",
+        "redis": "999:1000",
+        "clickhouse": "101:101",
+    }
+    for name, expected_user in expected_users.items():
+        service = services[name]
+        assert service["user"] == expected_user
+        assert service["init"] is True
+        assert service["read_only"] is True
+        assert service["cap_drop"] == ["ALL"]
+        assert "no-new-privileges:true" in service["security_opt"]
+        assert service["pids_limit"] > 0
+
+    assert "uid=70,gid=70" in " ".join(services["postgres"]["tmpfs"])
+    assert "uid=999,gid=1000" in " ".join(services["redis"]["tmpfs"])
+    assert "uid=101,gid=101" in " ".join(services["clickhouse"]["tmpfs"])
+    assert "/etc/clickhouse-server/users.d" in " ".join(services["clickhouse"]["tmpfs"])
+
+    postgres = services["postgres"]
+    postgres_command = " ".join(postgres["command"])
+    assert "ssl=on" in postgres_command
+    assert "ssl_ca_file=/run/secrets/internal/ca.crt" in postgres_command
+    assert "password_encryption=scram-sha-256" in postgres_command
+    hba = POSTGRES_HBA_PATH.read_text(encoding="utf-8")
+    assert "hostnossl all           all" in hba
+    assert hba.count("clientcert=verify-full") == 2
+    assert "scram-sha-256" in hba
+
+    redis = services["redis"]
+    assert redis["command"] == ["sh", "/etc/redis/secure-entrypoint.sh"]
+    redis_script = REDIS_ENTRYPOINT_PATH.read_text(encoding="utf-8")
+    assert "--port 0" in redis_script
+    assert "--tls-port 6379" in redis_script
+    assert "--aclfile /tmp/users.acl" in redis_script
+    assert "user default off" in redis_script
+    assert "echo \"$password\"" not in redis_script
+    redis_healthcheck = " ".join(redis["healthcheck"]["test"])
+    assert "--sni redis --user funding -h redis ping" in redis_healthcheck
+    assert "--host redis" not in redis_healthcheck
+
+    clickhouse = services["clickhouse"]
+    assert clickhouse["expose"] == ["8443", "9440"]
+    assert (
+        "./docker/clickhouse/config.d/resources.xml:"
+        "/etc/clickhouse-server/config.d/resources.xml:ro"
+    ) in clickhouse["volumes"]
+    assert (
+        "./docker/clickhouse/client.xml:/etc/clickhouse-client/config.xml:ro"
+        in clickhouse["volumes"]
+    )
+    clickhouse_healthcheck = " ".join(clickhouse["healthcheck"]["test"])
+    assert "--config-file /etc/clickhouse-client/config.xml" in clickhouse_healthcheck
+    clickhouse_tls = CLICKHOUSE_TLS_PATH.read_text(encoding="utf-8")
+    assert '<http_port remove="remove"/>' in clickhouse_tls
+    assert "<https_port>8443</https_port>" in clickhouse_tls
+    assert "<tcp_port_secure>9440</tcp_port_secure>" in clickhouse_tls
+    assert clickhouse_tls.count("<verificationMode>strict</verificationMode>") == 2
+    client_config = ET.parse(CLICKHOUSE_CLIENT_PATH).getroot()
+    client_tls = client_config.find("openSSL/client")
+    assert client_tls is not None
+    assert client_tls.findtext("certificateFile") == "/run/secrets/internal/clickhouse-client.crt"
+    assert client_tls.findtext("privateKeyFile") == "/run/secrets/internal/clickhouse-client.key"
+    assert client_tls.findtext("caConfig") == "/run/secrets/internal/ca.crt"
+    assert client_tls.findtext("verificationMode") == "strict"
+
+    resource_config = ET.parse(CLICKHOUSE_RESOURCES_PATH).getroot()
+    assert resource_config.tag == "clickhouse"
+    assert int(resource_config.findtext("max_thread_pool_size") or 0) <= 32
+    pool_sizes = {
+        element.tag: int(element.text or "0")
+        for element in resource_config
+        if element.tag.endswith("pool_size") and element.tag != "max_thread_pool_size"
+    }
+    assert pool_sizes
+    assert max(pool_sizes.values()) <= 8
+
+
+def test_live_environment_requires_internal_tls_and_credential_policy() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    assert values["REDIS_URL"] == "rediss://redis:6379/0"
+    assert values["REDIS_USERNAME"] == "funding"
+    assert values["INTERNAL_SERVICE_TLS_REQUIRED"] == "true"
+    assert values["INTERNAL_TLS_CA_FILE"] == "/run/secrets/internal/ca.crt"
+    assert values["LIVE_CREDENTIAL_POLICY_FILE"] == (
+        "/run/secrets/exchange/credential-policy.json"
+    )
+    assert values["LIVE_CREDENTIAL_MAX_AGE_DAYS"] == "90"
+    assert values["LIVE_CREDENTIAL_ATTESTATION_MAX_AGE_HOURS"] == "24"
+
+
+def test_every_prebuilt_service_image_is_digest_pinned() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name in (
+        "control-plane",
+        "postgres",
+        "redis",
+        "clickhouse",
+        "alertmanager",
+        "prometheus",
+        "grafana",
+    ):
+        service = services[name]
+        assert isinstance(service, dict)
+        image = service.get("image")
+        assert isinstance(image, str)
+        assert re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", image), (name, image)
+
+
+def test_app_container_is_unprivileged_and_filesystem_locked_down() -> None:
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    app = services["app"]
+    assert isinstance(app, dict)
+
+    assert app.get("user") == "10001:10001"
+    assert app.get("init") is True
+    assert app.get("read_only") is True
+    assert app.get("pids_limit") == 256
+    assert app.get("stop_grace_period") == "90s"
+    assert app.get("cap_drop") == ["ALL"]
+    assert "no-new-privileges:true" in app.get("security_opt", [])
+    assert "/tmp:size=64m,mode=1777" in app.get("tmpfs", [])
+    assert "runtime_state:/app/.runtime" in app.get("volumes", [])
+
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    assert "USER 10001:10001" in dockerfile
+    assert "chown funding:funding /app/.runtime" in dockerfile
+
+
+def test_runtime_dependency_lock_is_exact_and_hash_enforced() -> None:
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    assert (
+        "pip install --no-cache-dir --require-hashes --requirement requirements-linux.lock"
+        in dockerfile
+    )
+
+    for path, event_loop, expected_count in (
+        (REQUIREMENTS_LOCK_PATH, "winloop", 55),
+        (LINUX_REQUIREMENTS_LOCK_PATH, "uvloop", 54),
+    ):
+        content = path.read_text(encoding="utf-8")
+        blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
+        requirements = []
+        for block in blocks:
+            if not re.match(r"^[A-Za-z0-9_.-]+==", block):
+                continue
+            first_line = block.splitlines()[0]
+            assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", first_line)
+            hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", block)
+            assert hashes, first_line
+            assert len(hashes) == len(set(hashes)), first_line
+            requirements.append(first_line.removesuffix(" \\"))
+
+        assert len(requirements) == expected_count
+        assert len(requirements) == len(set(requirements))
+        assert "ccxt==4.5.85" in requirements
+        assert "protobuf==5.29.6" in requirements
+        assert any(item.startswith(event_loop + "==") for item in requirements)
+
+
+def test_development_dependency_lock_is_hash_enforced() -> None:
+    for dev_path, runtime_path, event_loop in (
+        (DEV_REQUIREMENTS_LOCK_PATH, REQUIREMENTS_LOCK_PATH, "winloop"),
+        (
+            LINUX_DEV_REQUIREMENTS_LOCK_PATH,
+            LINUX_REQUIREMENTS_LOCK_PATH,
+            "uvloop",
+        ),
+    ):
+        content = dev_path.read_text(encoding="utf-8")
+        blocks = re.split(r"(?m)(?=^[A-Za-z0-9_.-]+==)", content)
+        requirements: set[str] = set()
+        for block in blocks:
+            if not re.match(r"^[A-Za-z0-9_.-]+==", block):
+                continue
+            first_line = block.splitlines()[0]
+            assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^\s]+\s+\\", first_line)
+            assert re.search(r"--hash=sha256:[0-9a-f]{64}", block), first_line
+            requirements.add(first_line.split("==", 1)[0].lower())
+
+        assert {
+            "coverage",
+            "mypy",
+            "pip-audit",
+            "pytest",
+            "ruff",
+            event_loop,
+        }.issubset(requirements)
+        runtime_versions = _locked_versions(runtime_path)
+        development_versions = _locked_versions(dev_path)
+        assert runtime_versions
+        assert all(
+            development_versions.get(name) == version for name, version in runtime_versions.items()
+        )
+
+
+def test_docker_context_excludes_local_secrets_and_runtime_state() -> None:
+    patterns = {
+        line.strip()
+        for line in DOCKERIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+    assert {
+        ".git",
+        ".env",
+        ".env.*",
+        ".release-cosign.json",
+        ".release-image.json",
+        ".release-sha",
+        ".runtime",
+        ".venv",
+        ".venv*",
+    }.issubset(patterns)
+
+
+def test_release_workflow_pins_actions_and_has_no_remote_vm_deployment() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release-gate.yml"
+    ).read_text(encoding="utf-8")
+
+    action_refs = re.findall(r"uses:\s+[^@\s]+@([^\s]+)", workflow)
+    assert action_refs
+    assert all(re.fullmatch(r"[0-9a-f]{40}", reference) for reference in action_refs)
+    assert workflow.count("docker build") == 1
+    assert "Build candidate image exactly once" in workflow
+    assert workflow.count("scripts/ci_load_candidate_image.sh") == 6
+    loader = (
+        Path(__file__).resolve().parents[1] / "scripts" / "ci_load_candidate_image.sh"
+    ).read_text(encoding="utf-8")
+    assert "index.json" in loader
+    assert ".manifests | type == \"array\" and length == 1" in loader
+    assert 'actual_image_id" == "$manifest_digest' in loader
+    assert 'config_digest" == "$expected_image_id' in loader
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
+    assert workflow.count(
+        "actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53"
+    ) == 7
+    assert 'docker tag "$CI_IMAGE" "${image}:${GITHUB_SHA}"' in workflow
+    assert "alembic downgrade base" in workflow
+    assert "scripts/ci_shadow_smoke.sh" in workflow
+    assert "environment: limited-live-approval" in workflow
+    assert not re.search(r"\b(?:ssh|scp|rsync)\b", workflow, re.IGNORECASE)
+    assert not re.search(
+        r"(?:BYBIT|GATE|OKX|BINANCE|HYPERLIQUID|MEXC|KUCOIN|HTX)_API_(?:KEY|SECRET)",
+        workflow,
+    )
+
+
+def test_live_runbook_requires_release_gate_backup_and_rollback() -> None:
+    runbook = LIVE_RUNBOOK_PATH.read_text(encoding="utf-8")
+
+    assert "Release gate" in runbook
+    assert "pg_dump" in runbook
+    assert "LIVE_DISABLED" in runbook
+    assert "immutable commit" in runbook
+    assert "rollback" in runbook.lower()
+
+
+def test_live_example_requires_operator_to_enable_autotrade_after_preflight() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    assert values["LIVE_AUTOTRADE"] == "false"
+
+
+def test_live_example_uses_current_official_mexc_endpoints() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    assert values["MEXC_BASE_URL"] == "https://api.mexc.com"
+    assert values["MEXC_FUTURES_BASE_URL"] == "https://api.mexc.com"
+    assert values["MEXC_FUTURES_WS_URL"] == "wss://contract.mexc.com/edge"
+    assert "https://contract.mexc.com` origin" not in LIVE_RUNBOOK_PATH.read_text(encoding="utf-8")
+
+
+def test_live_example_uses_official_kucoin_and_htx_endpoints() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    assert values["KUCOIN_SPOT_BASE_URL"] == "https://api.kucoin.com"
+    assert values["KUCOIN_FUTURES_BASE_URL"] == "https://api-futures.kucoin.com"
+    assert values["KUCOIN_FUTURES_WS_URL"] == "wss://ws-api-futures.kucoin.com"
+    assert values["HTX_SPOT_BASE_URL"] == "https://api.huobi.pro"
+    assert values["HTX_FUTURES_BASE_URL"] == "https://api.hbdm.com"
+    assert values["HTX_FUTURES_WS_URL"] == "wss://api.hbdm.com/linear-swap-ws"
+
+def test_mtls_reverse_proxy_is_the_only_published_app_boundary() -> None:
+    compose = _compose()
+    services = compose["services"]
+    assert isinstance(services, dict)
+    app = services["app"]
+    proxy = services["control-plane"]
+    assert isinstance(app, dict)
+    assert isinstance(proxy, dict)
+
+    assert not app.get("ports")
+    assert app.get("expose") == ["8000"]
+    assert "control_plane" in app.get("networks", [])
+    assert proxy.get("profiles") == ["secure-control"]
+    assert proxy.get("user") == "101:101"
+    assert proxy.get("read_only") is True
+    assert proxy.get("cap_drop") == ["ALL"]
+    assert proxy.get("ports") == ["127.0.0.1:8443:8443"]
+    proxy_network = proxy.get("networks", {}).get("control_plane", {})
+    # Overridable for isolated windows, but it must default to the pinned range
+    # that the live profile trusts.
+    assert proxy_network.get("ipv4_address") == "${CONTROL_PLANE_PROXY_IP:-172.30.241.10}"
+
+    nginx = NGINX_CONTROL_PLANE_PATH.read_text(encoding="utf-8")
+    assert "ssl_protocols TLSv1.2 TLSv1.3;" in nginx
+    assert "ssl_verify_client on;" in nginx
+    assert "ssl_client_certificate /run/secrets/control-plane-client-ca.crt;" in nginx
+    assert "client_max_body_size 1m;" in nginx
+    assert 'proxy_set_header X-Client-Cert-SHA256 "";' in nginx
+    assert "proxy_set_header X-Verified-Client-Cert $ssl_client_escaped_cert;" in nginx
+    assert "listen 8080;" in nginx
+    assert "location = /proxy-health" in nginx
+
+
+def test_live_control_plane_trusts_only_the_pinned_proxy_and_uses_redis() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    assert values["CONTROL_PLANE_MTLS_CERTIFICATE_HEADER_REQUIRED"] == "true"
+    assert values["CONTROL_PLANE_MTLS_TRUSTED_PROXIES"] == "172.30.241.10"
+    assert values["CONTROL_PLANE_RATE_LIMIT_BACKEND"] == "redis"
+    assert values["CONTROL_PLANE_MAX_REQUEST_BYTES"] == "1048576"
+
+
+def test_dashboard_uses_in_memory_bearer_auth_and_safe_dom_rendering() -> None:
+    dashboard = DASHBOARD_PATH.read_text(encoding="utf-8")
+
+    assert "Read-only JWT access token" in dashboard
+    assert "Authorization: `Bearer ${accessToken}`" in dashboard
+    assert "response.ok" in dashboard
+    assert "sessionStorage" not in dashboard
+    assert "localStorage" not in dashboard
+    assert ".innerHTML" not in dashboard
+    assert "cell.textContent" in dashboard
+
+
+def _clickhouse_resources() -> ET.Element:
+    return ET.parse(CLICKHOUSE_RESOURCES_PATH).getroot()
+
+
+def _compose_memory_bytes(value: str) -> int:
+    units = {"k": 1024, "m": 1024**2, "g": 1024**3}
+    suffix = value[-1].lower()
+    if suffix in units:
+        return int(value[:-1]) * units[suffix]
+    return int(value)
+
+
+def test_clickhouse_budget_stays_below_its_container_memory_limit() -> None:
+    """ClickHouse must throttle itself before the cgroup kills it.
+
+    `max_server_memory_usage_to_ram_ratio` resolves against host RAM, not the
+    cgroup, so on a small container it lets the server believe it has several
+    times its real budget and be OOM-killed mid-merge on a loop.
+    """
+
+    resources = _clickhouse_resources()
+    ceiling = resources.findtext("max_server_memory_usage")
+    assert ceiling is not None, "an absolute server memory ceiling is required"
+
+    services = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))["services"]
+    limit = _compose_memory_bytes(services["clickhouse"]["mem_limit"])
+    assert int(ceiling) < limit, "the ceiling must sit below the container limit"
+    # Leave real headroom for allocator overhead, threads, and page cache.
+    assert int(ceiling) <= limit * 3 // 4
+
+    ratio = resources.findtext("max_server_memory_usage_to_ram_ratio")
+    assert ratio is None, "a host-RAM ratio would contradict the absolute ceiling"
+
+
+def test_clickhouse_caches_fit_inside_the_server_budget() -> None:
+    resources = _clickhouse_resources()
+    ceiling = int(resources.findtext("max_server_memory_usage") or 0)
+    caches = sum(
+        int(resources.findtext(name) or 0)
+        for name in (
+            "mark_cache_size",
+            "uncompressed_cache_size",
+            "index_mark_cache_size",
+            "index_uncompressed_cache_size",
+            "compiled_expression_cache_size",
+        )
+    )
+    # ClickHouse defaults these to gigabytes, which alone exceed a small budget.
+    assert 0 < caches < ceiling // 2
+
+
+def test_clickhouse_merge_concurrency_is_sized_for_the_budget() -> None:
+    resources = _clickhouse_resources()
+    assert int(resources.findtext("background_pool_size") or 0) <= 4
+
+    merge_tree = resources.find("merge_tree")
+    assert merge_tree is not None
+    largest_merge = int(
+        merge_tree.findtext("max_bytes_to_merge_at_max_space_in_pool") or 0
+    )
+    ceiling = int(resources.findtext("max_server_memory_usage") or 0)
+    assert 0 < largest_merge
+    # One merge may be large on disk, but never more than the whole pool budget.
+    assert largest_merge <= ceiling * 2
+
+
+def test_control_plane_network_defaults_to_the_trusted_production_range() -> None:
+    """An override must not be able to silently move the trusted proxy."""
+
+    compose = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    subnet = compose["networks"]["control_plane"]["ipam"]["config"][0]["subnet"]
+    assert subnet == "${CONTROL_PLANE_SUBNET:-172.30.241.0/24}"
+
+    values = dict(
+        line.split("=", 1)
+        for line in LIVE_ENV_EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    trusted = values["CONTROL_PLANE_MTLS_TRUSTED_PROXIES"]
+    proxy = compose["services"]["control-plane"]["networks"]["control_plane"]
+    default_proxy_ip = proxy["ipv4_address"].split(":-", 1)[1].rstrip("}")
+    default_subnet_prefix = subnet.split(":-", 1)[1].rstrip("}").rsplit(".", 1)[0]
+
+    assert trusted == default_proxy_ip
+    assert default_proxy_ip.startswith(default_subnet_prefix + ".")
+
+    # The live profile must not carry an override that would move either.
+    assert "CONTROL_PLANE_SUBNET" not in values
+    assert "CONTROL_PLANE_PROXY_IP" not in values

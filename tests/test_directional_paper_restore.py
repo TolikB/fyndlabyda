@@ -1,0 +1,633 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from funding_arbitrage.backtest.fills import (
+    FillModelPolicy,
+    SimulatedOrderState,
+    SimulatedOrderType,
+)
+from funding_arbitrage.config import Settings
+from funding_arbitrage.database.models import Base
+from funding_arbitrage.database.repositories.directional_paper import (
+    load_directional_paper_checkpoint,
+    load_directional_paper_positions,
+    save_directional_paper_event,
+)
+from funding_arbitrage.database.repositories.events import append_events
+from funding_arbitrage.database.repositories.journal_profiles import (
+    append_canonical_journal_profile_boundary,
+    canonical_journal_profile_spec,
+    canonical_journal_writer_lease,
+)
+from funding_arbitrage.domain.events import (
+    BookLevel,
+    BookSnapshot,
+    EventEnvelope,
+    EventKind,
+    EventMetadata,
+    InstrumentKey,
+    InstrumentType,
+    Side,
+    TradingMode,
+)
+from funding_arbitrage.execution.directional_paper import (
+    DirectionalPaperBroker,
+    DirectionalPaperOrder,
+    DirectionalPaperPosition,
+    DirectionalPaperStatus,
+    DirectionalPaperUpdate,
+)
+from funding_arbitrage.services import multi_regime_runtime as runtime_module
+from funding_arbitrage.services.multi_regime import MultiRegimeEngine, MultiRegimeEngineConfig
+from funding_arbitrage.services.multi_regime_runtime import DurableMultiRegimeRuntime
+from funding_arbitrage.services.runtime import RuntimeState
+
+NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
+INSTRUMENT = InstrumentKey(
+    venue="BYBIT",
+    exchange_symbol="BTCUSDT",
+    base_asset="BTC",
+    quote_asset="USDT",
+    instrument_type=InstrumentType.PERPETUAL,
+    settlement_asset="USDT",
+)
+
+
+def _event(number: int) -> EventEnvelope[BookSnapshot]:
+    timestamp = NOW + timedelta(seconds=number)
+    return EventEnvelope[BookSnapshot](
+        kind=EventKind.BOOK_SNAPSHOT,
+        metadata=EventMetadata(
+            event_id=f"book-{number}",
+            exchange_timestamp=timestamp,
+            receive_timestamp=timestamp,
+            monotonic_ns=number,
+            sequence_id=str(number),
+            native_sequence=number,
+            source="BYBIT:BOOK",
+            correlation_id="BTCUSDT",
+            payload_version=1,
+        ),
+        payload=BookSnapshot(
+            instrument=INSTRUMENT,
+            bids=(BookLevel(price=Decimal("100"), quantity=Decimal("5")),),
+            asks=(BookLevel(price=Decimal("100.5"), quantity=Decimal("5")),),
+            sequence=number,
+            exchange_timestamp=timestamp,
+        ),
+    )
+
+
+def _pending(simulation_version: str = "v1-legacy") -> DirectionalPaperPosition:
+    return DirectionalPaperPosition(
+        position_id="mrp_restore_1",
+        simulation_version=simulation_version,
+        plan_id="plan-restore-1",
+        signal_id="signal-restore-1",
+        risk_decision_id="risk-restore-1",
+        strategy_id="orderflow-breakout-v1",
+        instrument=INSTRUMENT,
+        side=Side.BUY,
+        approved_notional=Decimal("101"),
+        structural_stop=Decimal("98"),
+        target_price=Decimal("103"),
+        expected_exit_at=NOW + timedelta(minutes=30),
+        status=DirectionalPaperStatus.PENDING_ENTRY,
+        entry_order=DirectionalPaperOrder(
+            client_order_id="mro_restore_entry_1",
+            side=Side.BUY,
+            order_type=SimulatedOrderType.LIMIT,
+            requested_quantity=Decimal("1"),
+            limit_price=Decimal("101"),
+            submitted_at=NOW,
+            expires_at=NOW + timedelta(seconds=15),
+            state=SimulatedOrderState.OPEN,
+        ),
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+
+async def test_restart_replays_only_events_after_durable_checkpoint() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    first, second = _event(1), _event(2)
+    async with factory() as session:
+        await append_events(session, (first, second))
+    async with factory() as session:
+        await save_directional_paper_event(
+            session,
+            first,
+            (DirectionalPaperUpdate(position=_pending()),),
+            event_row_id=1,
+        )
+
+    broker = DirectionalPaperBroker(
+        {
+            "BYBIT": FillModelPolicy(
+                order_latency_ms=0,
+                maximum_participation_rate=Decimal("1"),
+            )
+        }
+    )
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+    )
+    restored = await runtime.restore_features(start=NOW)
+
+    async with factory() as session:
+        positions = await load_directional_paper_positions(session)
+    await database.dispose()
+    assert restored == 2
+    assert runtime.paper_replayed_events == 1
+    assert broker.positions[0].status is DirectionalPaperStatus.OPEN
+    assert positions[0].status is DirectionalPaperStatus.OPEN
+
+
+async def test_checkpoint_at_new_profile_boundary_rejects_old_position_state() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    old_spec = canonical_journal_profile_spec(
+        Settings(
+            _env_file=None,
+            RUN_MODE="paper_test",
+            TRADING_MODE="PAPER",
+            PAPER_VENUES="BYBIT",
+            PAPER_SIMULATION_VERSION="v1-legacy",
+            RELEASE_COMMIT_SHA="a" * 40,
+        )
+    )
+    new_spec = canonical_journal_profile_spec(
+        Settings(
+            _env_file=None,
+            RUN_MODE="paper_test",
+            TRADING_MODE="PAPER",
+            PAPER_VENUES="BYBIT",
+            PAPER_SIMULATION_VERSION="v1-legacy",
+            RELEASE_COMMIT_SHA="b" * 40,
+        )
+    )
+    first = _event(1)
+    async with canonical_journal_writer_lease(database) as writer_lease:
+        async with factory() as session:
+            old_boundary = await append_canonical_journal_profile_boundary(
+                session,
+                old_spec,
+                writer_lease=writer_lease,
+                started_at=NOW,
+            )
+            await append_events(session, (first,))
+            await save_directional_paper_event(
+                session,
+                first,
+                (DirectionalPaperUpdate(position=_pending()),),
+                event_row_id=1,
+                journal_profile_boundary_id=old_boundary.boundary_id,
+                journal_profile_config_sha256=old_spec.config_sha256,
+            )
+            new_boundary = await append_canonical_journal_profile_boundary(
+                session,
+                new_spec,
+                writer_lease=writer_lease,
+                started_at=NOW + timedelta(seconds=2),
+            )
+
+        runtime = DurableMultiRegimeRuntime(
+            MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+            factory,
+            paper_broker=DirectionalPaperBroker({"BYBIT": FillModelPolicy(order_latency_ms=0)}),
+            canonical_journal_profile=new_spec,
+        )
+        runtime.bind_canonical_journal_boundary(new_boundary)
+        with pytest.raises(RuntimeError, match="checkpoint canonical journal profile"):
+            await runtime.restore_features(start=NOW)
+    await database.dispose()
+
+
+async def test_profile_restore_uses_row_boundary_not_process_wall_clock() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    spec = canonical_journal_profile_spec(
+        Settings(
+            _env_file=None,
+            RUN_MODE="paper_test",
+            TRADING_MODE="PAPER",
+            PAPER_VENUES="BYBIT",
+        )
+    )
+    delayed = _event(1)
+    async with canonical_journal_writer_lease(database) as writer_lease:
+        async with factory() as session:
+            boundary = await append_canonical_journal_profile_boundary(
+                session,
+                spec,
+                writer_lease=writer_lease,
+                started_at=NOW + timedelta(minutes=5),
+            )
+            await append_events(session, (delayed,))
+        runtime = DurableMultiRegimeRuntime(
+            MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+            factory,
+            canonical_journal_profile=spec,
+        )
+        runtime.bind_canonical_journal_boundary(boundary)
+        restored = await runtime.restore_features(start=NOW)
+    await database.dispose()
+
+    assert restored == 1
+
+
+async def test_same_tip_restart_keeps_checkpoint_on_boundary_covering_its_row() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    spec = canonical_journal_profile_spec(
+        Settings(
+            _env_file=None,
+            RUN_MODE="paper_test",
+            TRADING_MODE="PAPER",
+            PAPER_VENUES="BYBIT",
+        )
+    )
+    event = _event(1)
+
+    async with canonical_journal_writer_lease(database) as writer_lease:
+        async with factory() as session:
+            covering_boundary = await append_canonical_journal_profile_boundary(
+                session,
+                spec,
+                writer_lease=writer_lease,
+                started_at=NOW,
+            )
+            await append_events(session, (event,))
+            first_startup_boundary = await append_canonical_journal_profile_boundary(
+                session,
+                spec,
+                writer_lease=writer_lease,
+                started_at=NOW + timedelta(seconds=2),
+            )
+        first_runtime = DurableMultiRegimeRuntime(
+            MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+            factory,
+            paper_broker=DirectionalPaperBroker(
+                {"BYBIT": FillModelPolicy(order_latency_ms=0)}
+            ),
+            canonical_journal_profile=spec,
+        )
+        first_runtime.bind_canonical_journal_boundary(first_startup_boundary)
+        await first_runtime.restore_features(start=NOW)
+
+    async with factory() as session:
+        first_checkpoint = await load_directional_paper_checkpoint(session)
+    assert first_checkpoint is not None
+    assert first_checkpoint.event_row_id == 1
+    assert (
+        first_checkpoint.journal_profile_boundary_id
+        == covering_boundary.boundary_id
+    )
+
+    async with canonical_journal_writer_lease(database) as writer_lease:
+        async with factory() as session:
+            second_startup_boundary = await append_canonical_journal_profile_boundary(
+                session,
+                spec,
+                writer_lease=writer_lease,
+                started_at=NOW + timedelta(seconds=3),
+            )
+        second_runtime = DurableMultiRegimeRuntime(
+            MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+            factory,
+            paper_broker=DirectionalPaperBroker(
+                {"BYBIT": FillModelPolicy(order_latency_ms=0)}
+            ),
+            canonical_journal_profile=spec,
+        )
+        second_runtime.bind_canonical_journal_boundary(second_startup_boundary)
+        restored = await second_runtime.restore_features(start=NOW)
+
+    await database.dispose()
+    assert restored == 1
+
+
+async def test_restart_honors_paper_execution_boundary_without_losing_checkpoint() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    first, before_boundary, at_boundary = _event(1), _event(2), _event(10)
+    async with factory() as session:
+        await append_events(session, (first, before_boundary))
+    async with factory() as session:
+        await save_directional_paper_event(
+            session,
+            first,
+            (DirectionalPaperUpdate(position=_pending()),),
+            event_row_id=1,
+        )
+
+    broker = DirectionalPaperBroker(
+        {
+            "BYBIT": FillModelPolicy(
+                order_latency_ms=0,
+                maximum_participation_rate=Decimal("1"),
+            )
+        }
+    )
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+        paper_execution_start_utc=at_boundary.metadata.exchange_timestamp,
+    )
+
+    restored = await runtime.restore_features(start=NOW)
+    async with factory() as session:
+        checkpoint_before = await load_directional_paper_checkpoint(session)
+        await append_events(session, (at_boundary,))
+
+    assert restored == 2
+    assert runtime.paper_replayed_events == 1
+    assert checkpoint_before is not None
+    assert checkpoint_before.event_row_id == 2
+    assert broker.positions[0].status is DirectionalPaperStatus.PENDING_ENTRY
+
+    await runtime.publish(at_boundary)
+    async with factory() as session:
+        checkpoint_after = await load_directional_paper_checkpoint(session)
+    await database.dispose()
+
+    assert checkpoint_after is not None
+    assert checkpoint_after.event_row_id == 3
+    assert broker.positions[0].status is DirectionalPaperStatus.OPEN
+
+
+async def test_new_paper_version_does_not_replay_events_before_boundary() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    async with factory() as session:
+        await append_events(session, (_event(1),))
+
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=DirectionalPaperBroker({"BYBIT": FillModelPolicy(order_latency_ms=0)}),
+        paper_execution_start_utc=_event(10).metadata.exchange_timestamp,
+    )
+
+    restored = await runtime.restore_features(start=NOW)
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+    await database.dispose()
+
+    assert restored == 1
+    assert runtime.paper_replayed_events == 0
+    assert checkpoint is None
+
+
+async def test_out_of_order_callback_catches_up_in_canonical_row_order() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    first, second = _event(1), _event(2)
+    async with factory() as session:
+        await append_events(session, (first, second))
+
+    broker = DirectionalPaperBroker({"BYBIT": FillModelPolicy(order_latency_ms=0)})
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+    )
+    await runtime.publish(second)
+    await runtime.publish(first)
+
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+    await database.dispose()
+    assert checkpoint is not None
+    assert checkpoint.event_row_id == 2
+    assert checkpoint.event_id == "book-2"
+
+
+async def test_started_worker_does_not_block_canonical_event_publication(
+    monkeypatch,
+) -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    first, second = _event(1), _event(2)
+    broker = DirectionalPaperBroker({"BYBIT": FillModelPolicy(order_latency_ms=0)})
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+    )
+    await runtime.restore_features(start=NOW)
+    async with factory() as session:
+        await append_events(session, (first, second))
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_save = runtime_module.save_directional_paper_page
+
+    async def blocking_save(*args, **kwargs) -> None:
+        entered.set()
+        await release.wait()
+        await original_save(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "save_directional_paper_page", blocking_save)
+    runtime.start()
+
+    await asyncio.wait_for(runtime.publish(second), timeout=0.1)
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await asyncio.wait_for(runtime.publish(first), timeout=0.1)
+    release.set()
+    await asyncio.wait_for(runtime.stop(), timeout=2)
+
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+    await database.dispose()
+    assert checkpoint is not None
+    assert checkpoint.event_row_id == 2
+    assert checkpoint.event_id == "book-2"
+
+
+async def test_flush_barrier_processes_every_durable_row() -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    broker = DirectionalPaperBroker({"BYBIT": FillModelPolicy(order_latency_ms=0)})
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+    )
+    await runtime.restore_features(start=NOW)
+    runtime.start()
+    async with factory() as session:
+        await append_events(session, (_event(1), _event(2)))
+
+    await asyncio.wait_for(runtime.flush(), timeout=2)
+
+    async with factory() as session:
+        checkpoint = await load_directional_paper_checkpoint(session)
+    await runtime.stop()
+    await database.dispose()
+    assert checkpoint is not None
+    assert checkpoint.event_row_id == 2
+
+
+async def test_background_failure_marks_runtime_unhealthy(monkeypatch) -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+    )
+
+    async def fail_catch_up() -> None:
+        raise RuntimeError("synthetic database failure")
+
+    monkeypatch.setattr(runtime, "_catch_up", fail_catch_up)
+    runtime.start()
+    await runtime.publish(_event(1))
+    assert runtime._worker_task is not None
+    await asyncio.wait_for(runtime._worker_task, timeout=1)
+
+    assert runtime.healthy is False
+    assert runtime.failure_reason == "RuntimeError"
+    with pytest.raises(RuntimeError, match="runtime is failed"):
+        await runtime.stop()
+    await database.dispose()
+
+
+async def test_stop_cancels_worker_after_bounded_timeout(monkeypatch) -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+    )
+    entered = asyncio.Event()
+
+    async def blocked_catch_up() -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime, "_catch_up", blocked_catch_up)
+    runtime.start()
+    await runtime.publish(_event(1))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    with pytest.raises(TimeoutError, match="shutdown timed out"):
+        await runtime.stop(timeout_seconds=0.01)
+
+    assert runtime.failure_reason == "ShutdownTimeout"
+    assert runtime._worker_task is not None
+    assert runtime._worker_task.cancelled()
+    await database.dispose()
+
+
+def test_combined_snapshot_preserves_equity_invariant_and_reserves_cash() -> None:
+    state = RuntimeState(
+        Settings(
+            run_mode="paper_test",
+            paper_initial_balance_usd=Decimal("10000"),
+            paper_simulation_version="v32-test",
+        ),
+        {},
+        emit_metrics=False,
+    )
+    broker = DirectionalPaperBroker(
+        {"BYBIT": FillModelPolicy(order_latency_ms=0)},
+        simulation_version="v32-test",
+    )
+    broker.restore((_pending("v32-test"),))
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        async_sessionmaker(create_async_engine("sqlite+aiosqlite:///:memory:")),
+        paper_broker=broker,
+        runtime_state=state,
+    )
+
+    snapshot = runtime._combined_portfolio_snapshot(NOW)
+
+    assert snapshot is not None
+    assert snapshot.cash == Decimal("9899")
+    assert snapshot.locked_capital == Decimal("101")
+    assert snapshot.total_pnl == 0
+    assert snapshot.equity == Decimal("10000")
+    assert snapshot.equity == (snapshot.cash + snapshot.locked_capital + snapshot.total_pnl)
+
+
+async def test_delayed_journal_event_loads_batch_by_source_id_not_exchange_time(
+    monkeypatch,
+) -> None:
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    first = _event(1)
+    delayed_time = NOW - timedelta(hours=1)
+    delayed_payload = _event(2).payload.model_copy(update={"exchange_timestamp": delayed_time})
+    delayed = _event(2).model_copy(
+        update={
+            "metadata": _event(2).metadata.model_copy(
+                update={
+                    "event_id": "delayed-book",
+                    "exchange_timestamp": delayed_time,
+                    "receive_timestamp": NOW + timedelta(seconds=2),
+                }
+            ),
+            "payload": delayed_payload,
+        }
+    )
+    async with factory() as session:
+        await append_events(session, (first, delayed))
+    async with factory() as session:
+        await save_directional_paper_event(
+            session,
+            first,
+            (DirectionalPaperUpdate(position=_pending()),),
+            event_row_id=1,
+        )
+
+    requested_source_ids: list[tuple[str, ...]] = []
+
+    async def capture_batches(_session, **kwargs):
+        requested_source_ids.append(tuple(kwargs.get("source_event_ids", ())))
+        return ()
+
+    monkeypatch.setattr(runtime_module, "load_multi_regime_batches", capture_batches)
+    broker = DirectionalPaperBroker({"BYBIT": FillModelPolicy(order_latency_ms=0)})
+    runtime = DurableMultiRegimeRuntime(
+        MultiRegimeEngine(MultiRegimeEngineConfig(mode=TradingMode.PAPER)),
+        factory,
+        paper_broker=broker,
+    )
+
+    await runtime.restore_features(start=delayed_time)
+
+    await database.dispose()
+    assert requested_source_ids == [(), ("delayed-book",)]
+    assert runtime.paper_replayed_events == 1
