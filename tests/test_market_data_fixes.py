@@ -31,6 +31,8 @@ from funding_arbitrage.exchanges.okx import OkxPublicAdapter
 from funding_arbitrage.market_data.collector import MarketDataCollector
 from funding_arbitrage.market_data.health import CircuitBreaker, VenueStatus
 from funding_arbitrage.market_data.rate_limit import RateLimiter
+from funding_arbitrage.opportunity.models import CostBreakdown
+from tests.builders import spot_perp_market
 
 D = Decimal
 
@@ -370,3 +372,29 @@ async def test_one_failing_or_hanging_venue_never_blanks_the_others() -> None:
     perp_book = snapshot.orderbook("bybit", "BTCUSDT", InstrumentType.PERPETUAL)
     assert spot_book is not None and perp_book is not None
     assert spot_book.mid_price != perp_book.mid_price
+
+
+def test_history_refresh_keeps_the_built_lookup_indexes() -> None:
+    market = spot_perp_market(datetime(2026, 10, 1, 12, tzinfo=UTC))
+    assert market.ticker("bybit", "BTCUSDT", InstrumentType.PERPETUAL) is not None
+    refreshed = market.with_funding_history({("bybit", "BTCUSDT"): []})
+    assert refreshed.funding_history == {("bybit", "BTCUSDT"): []}
+    assert refreshed.__dict__["ticker_index"] is market.__dict__["ticker_index"]
+    assert "funding_index" not in refreshed.__dict__  # never built, so nothing to keep
+    assert refreshed.ticker("bybit", "BTCUSDT", InstrumentType.PERPETUAL) is market.ticker(
+        "bybit", "BTCUSDT", InstrumentType.PERPETUAL
+    )
+
+
+def test_cost_total_sums_every_component() -> None:
+    costs = CostBreakdown(
+        entry_fees=Decimal("0.1"),
+        exit_fees=Decimal("0.2"),
+        entry_spread=Decimal("0.3"),
+        exit_spread=Decimal("0.4"),
+        entry_slippage=Decimal("0.5"),
+        exit_slippage=Decimal("0.6"),
+        borrowing_cost=Decimal("0.7"),
+        network_cost=Decimal("0.8"),
+    )
+    assert costs.total == sum(costs.model_dump().values(), Decimal("0")) == Decimal("3.6")

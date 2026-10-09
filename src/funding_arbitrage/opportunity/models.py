@@ -58,7 +58,9 @@ class CostBreakdown(BaseModel):
 
     @property
     def total(self) -> Decimal:
-        return sum(self.model_dump().values(), Decimal("0"))
+        # Read the fields directly: model_dump() built a dict on every call, and the
+        # scanner asks for the total of every size quote of every opportunity.
+        return sum((getattr(self, name) for name in type(self).model_fields), Decimal("0"))
 
 
 class SizeQuote(BaseModel):

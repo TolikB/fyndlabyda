@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
 from time import perf_counter
@@ -63,6 +63,21 @@ class MarketSnapshot:
     captured_at: datetime
     funding_history: dict[FundingKey, list[FundingHistoryPoint]] | None = None
     venues: dict[str, VenueState] = field(default_factory=dict)
+
+    def with_funding_history(
+        self, history: dict[FundingKey, list[FundingHistoryPoint]] | None
+    ) -> MarketSnapshot:
+        """The same market data with refreshed history, keeping built lookup indexes.
+
+        Tickers, instruments and funding are shared, so their indexes stay valid;
+        rebuilding them for the second scan of every cycle was measurable CPU.
+        """
+
+        updated = replace(self, funding_history=history)
+        for name in ("ticker_index", "instrument_index", "funding_index"):
+            if name in self.__dict__:
+                updated.__dict__[name] = self.__dict__[name]
+        return updated
 
     @cached_property
     def ticker_index(self) -> dict[MarketKey, Ticker]:

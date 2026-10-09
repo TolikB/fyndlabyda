@@ -14,7 +14,11 @@ from typing import Any
 import httpx
 import websockets
 
-from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError, NetworkError
+from funding_arbitrage.exchanges.base.exceptions import (
+    ExchangeError,
+    InvalidResponseError,
+    NetworkError,
+)
 from funding_arbitrage.exchanges.base.exchange import ExchangeAdapter
 from funding_arbitrage.exchanges.base.http import parse_rows, rate_limited
 from funding_arbitrage.exchanges.base.models import (
@@ -66,6 +70,7 @@ class OkxPublicAdapter(ExchangeAdapter):
         max_reconnects: int | None = None,
         funding_symbol_limit: int = 30,
         funding_requests_per_second: float = 4.0,
+        bulk_funding: bool = True,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.websocket_url = websocket_url
@@ -82,6 +87,9 @@ class OkxPublicAdapter(ExchangeAdapter):
         self._rotation_index = 0
         self._priority_symbols: set[str] = set()
         self._funding_cache: dict[str, FundingSnapshot] = {}
+        # OKX answers instId=ANY with every swap's funding in one response; the
+        # per-instrument rotation is the fallback when that request fails.
+        self.bulk_funding = bulk_funding
         self._instruments_lock = asyncio.Lock()
 
     async def _ensure_http(self) -> httpx.AsyncClient:
@@ -271,6 +279,8 @@ class OkxPublicAdapter(ExchangeAdapter):
 
     async def get_funding_rates(self) -> list[FundingSnapshot]:
         await self._ensure_swap_symbols()
+        if self.bulk_funding and await self._refresh_all_funding():
+            return list(self._funding_cache.values())
         batch = self._next_funding_batch()
         for symbol in batch:
             rows = await self._request(
@@ -281,6 +291,31 @@ class OkxPublicAdapter(ExchangeAdapter):
             ):
                 self._funding_cache[snapshot.symbol] = snapshot
         return list(self._funding_cache.values())
+
+    async def _refresh_all_funding(self) -> bool:
+        """Every linear swap's funding in one request; False to fall back.
+
+        The rotation refreshed 30 swaps a pass at 4 requests per second, so OKX
+        held the whole collection pass for ~9s and each swap's rate was up to
+        ~7 minutes old.
+        """
+
+        try:
+            rows = await self._request(
+                "/api/v5/public/funding-rate", {"instId": "ANY"}, self._funding_limiter
+            )
+        except ExchangeError as exc:
+            logger.warning(
+                "okx_bulk_funding_failed", extra={"exchange": self.name, "error": str(exc)}
+            )
+            return False
+        wanted = set(self._swap_symbols) | self._priority_symbols
+        for snapshot in parse_rows(
+            rows, self._parse_funding, logger=logger, venue=self.name, what="funding"
+        ):
+            if not wanted or snapshot.symbol in wanted:
+                self._funding_cache[snapshot.symbol] = snapshot
+        return True
 
     def _next_funding_batch(self) -> list[str]:
         limit = max(1, self.funding_symbol_limit)

@@ -16,7 +16,6 @@ simulator fills against the fetched books.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 from collections import Counter
 from collections.abc import Callable
@@ -458,7 +457,7 @@ class PaperTestRunner:
             fetched_history = await self.collector.ensure_funding_history(
                 history_keys, self.settings.paper_history_requests_per_cycle
             )
-            snapshot = dataclasses.replace(snapshot, funding_history=self.collector.history_view())
+            snapshot = snapshot.with_funding_history(self.collector.history_view())
             stage = "scan"
             opportunities = await asyncio.to_thread(engine.scan, snapshot, FilterStage.FULL)
             self.runtime.update_market(snapshot, opportunities)

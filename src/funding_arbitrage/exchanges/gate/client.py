@@ -251,8 +251,18 @@ class GatePublicAdapter(ExchangeAdapter):
         return payload
 
     async def get_tickers(self) -> list[Ticker]:
-        futures_payload = await self._get_futures_tickers()
-        spot_payload = await self._request("/spot/tickers")
+        # Two independent endpoints of ~1-2s each: awaiting them in turn put their
+        # sum into every collection pass.
+        futures_task = asyncio.create_task(self._get_futures_tickers())
+        spot_task = asyncio.create_task(self._request("/spot/tickers"))
+        try:
+            futures_payload, spot_payload = await asyncio.gather(futures_task, spot_task)
+        except BaseException:
+            # gather propagates the first failure without cancelling its sibling.
+            futures_task.cancel()
+            spot_task.cancel()
+            await asyncio.gather(futures_task, spot_task, return_exceptions=True)
+            raise
         if not isinstance(spot_payload, list):
             raise InvalidResponseError("Gate ticker responses must be arrays")
         now = datetime.now(UTC)

@@ -32,7 +32,10 @@ async def test_okx_funding_rates_are_symbol_scoped_without_btc_hardcode() -> Non
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="https://test.invalid"
     )
-    adapter = OkxPublicAdapter(base_url="https://test.invalid", http_client=client)
+    # The per-instrument rotation is the fallback when the bulk request fails.
+    adapter = OkxPublicAdapter(
+        base_url="https://test.invalid", http_client=client, bulk_funding=False
+    )
     funding = await adapter.get_funding_rates()
     await client.aclose()
 
@@ -106,3 +109,62 @@ async def test_hyperliquid_public_info_orderbook_is_normalized() -> None:
     assert book.timestamp.tzinfo is UTC
     assert book.bids[0].price == Decimal("99")
     assert book.asks[0].price == Decimal("101")
+
+
+def _okx_funding_transport(requested: list[str], *, bulk_status: int = 200) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/public/instruments"):
+            data = [
+                {"instId": "ETH-USDT-SWAP", "ctType": "linear", "state": "live"},
+                {"instId": "ZZZ-USDT-SWAP", "ctType": "linear", "state": "live"},
+                {"instId": "BTC-USD-SWAP", "ctType": "inverse", "state": "live"},
+            ]
+            return httpx.Response(200, json={"code": "0", "data": data})
+        if request.url.path.endswith("/public/funding-rate"):
+            symbol = request.url.params["instId"]
+            requested.append(symbol)
+            if symbol == "ANY" and bulk_status != 200:
+                return httpx.Response(bulk_status)
+            symbols = (
+                ["ETH-USDT-SWAP", "ZZZ-USDT-SWAP", "BTC-USD-SWAP"] if symbol == "ANY" else [symbol]
+            )
+            rows = [{"instId": item, "fundingRate": "0.0001"} for item in symbols]
+            return httpx.Response(200, json={"code": "0", "data": rows})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_okx_funding_reads_every_linear_swap_in_one_request() -> None:
+    requested: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_okx_funding_transport(requested), base_url="https://test.invalid"
+    )
+    # A limit of one would have reached ZZZ only on a later pass of the rotation.
+    adapter = OkxPublicAdapter(
+        base_url="https://test.invalid", http_client=client, funding_symbol_limit=1
+    )
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert requested == ["ANY"]
+    # Inverse swaps were never part of the linear universe and stay out of it.
+    assert sorted(item.symbol for item in funding) == ["ETH-USDT-SWAP", "ZZZ-USDT-SWAP"]
+
+
+@pytest.mark.asyncio
+async def test_okx_funding_falls_back_to_the_rotation() -> None:
+    requested: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_okx_funding_transport(requested, bulk_status=500),
+        base_url="https://test.invalid",
+    )
+    adapter = OkxPublicAdapter(
+        base_url="https://test.invalid", http_client=client, funding_symbol_limit=1
+    )
+    funding = await adapter.get_funding_rates()
+    await client.aclose()
+
+    assert requested == ["ANY", "ETH-USDT-SWAP"]
+    assert [item.symbol for item in funding] == ["ETH-USDT-SWAP"]
