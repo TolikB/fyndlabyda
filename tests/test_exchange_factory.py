@@ -77,3 +77,12 @@ async def test_all_paper_test_mock_venues_emit_funding() -> None:
 
     assert set(funding) == set(adapters)
     assert all(rate != 0 for rate in funding.values())
+
+
+def test_paper_runs_only_build_the_configured_venues() -> None:
+    paper = create_public_adapters(
+        Settings(RUN_MODE="paper_test", PAPER_VENUES="bybit,okx,binance,gate,hyperliquid")
+    )
+    assert set(paper) == {"bybit", "okx", "binance", "gate", "hyperliquid"}
+    # Other process shapes keep every adapter.
+    assert len(create_public_adapters(Settings(PAPER_VENUES="bybit,okx"))) == 8

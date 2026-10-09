@@ -233,7 +233,7 @@ requirements:
       src/funding_arbitrage/exchanges/bybit/__init__.py: 61a28a7672a00df0036db38d0612ec3fd014c3a9cca4943610c759ded854d9d4
       src/funding_arbitrage/exchanges/bybit/client.py: 16a84a9b7684ae168a341be6086bdeae645f72e1939e991aeb874633bb823257
       src/funding_arbitrage/exchanges/bybit/orderbook.py: a91b396eaa09435046517d80f904a8264006bd6b482768fd22e7d66dc8b64a33
-      src/funding_arbitrage/exchanges/factory.py: 1ec037ca0c9b220d4026191db3c1e1542a42960a3a74a6430547b3e8560417fa
+      src/funding_arbitrage/exchanges/factory.py: 1ff9b5e97d93efe8b7a1a80eedab6759eff4aee60b98823006b28693d487cd9a
       src/funding_arbitrage/exchanges/gate/__init__.py: 41a4c988c4c46031be07f994169a1527fede6522f7ef365e992d5c4324f56741
       src/funding_arbitrage/exchanges/gate/client.py: c8f120757f369e6bf531fb557da957138b6ca923e03e7fb331ce874550f9aeda
       src/funding_arbitrage/exchanges/gate/orderbook.py: d155f85cebcf531b71078c89acb4c00986fb6cade88a379e5e6fbd935c4c67af
@@ -358,7 +358,7 @@ requirements:
       src/funding_arbitrage/exchanges/bybit/__init__.py: 61a28a7672a00df0036db38d0612ec3fd014c3a9cca4943610c759ded854d9d4
       src/funding_arbitrage/exchanges/bybit/client.py: 16a84a9b7684ae168a341be6086bdeae645f72e1939e991aeb874633bb823257
       src/funding_arbitrage/exchanges/bybit/orderbook.py: a91b396eaa09435046517d80f904a8264006bd6b482768fd22e7d66dc8b64a33
-      src/funding_arbitrage/exchanges/factory.py: 1ec037ca0c9b220d4026191db3c1e1542a42960a3a74a6430547b3e8560417fa
+      src/funding_arbitrage/exchanges/factory.py: 1ff9b5e97d93efe8b7a1a80eedab6759eff4aee60b98823006b28693d487cd9a
       src/funding_arbitrage/exchanges/gate/__init__.py: 41a4c988c4c46031be07f994169a1527fede6522f7ef365e992d5c4324f56741
       src/funding_arbitrage/exchanges/gate/client.py: c8f120757f369e6bf531fb557da957138b6ca923e03e7fb331ce874550f9aeda
       src/funding_arbitrage/exchanges/gate/orderbook.py: d155f85cebcf531b71078c89acb4c00986fb6cade88a379e5e6fbd935c4c67af
@@ -1615,7 +1615,7 @@ requirements:
       tests/test_event_sampling.py: e8748784ecd42d392e4d78125605c5130869527bbfe1d3b9e1f1f9b11f40fe59
       tests/test_event_writer.py: c5674ca03a7523a21f11394c545f7f86a9ebecaa55ee7d0f63b07bd8bb421a28
       tests/test_event_writer_config.py: 383f594874be6b13edccbeb3c9012231e10edbdb893dd56af0b2b61cb3e5b5b3
-      tests/test_exchange_factory.py: 287d26b48cc365694f8888863313e1324e2d1701f4735c09ba7625c3797f6a57
+      tests/test_exchange_factory.py: 3a17fd6e1c74a23390104d9d7dbac5decd1e0b2f97515c10b8d6973071e93fd0
       tests/test_funding_basis_strategy.py: 6ec08a4039ff265b2361f3e16d1a50d3e134e552a1c440d929b9eb20b7946b2f
       tests/test_funding_harvest_state_machine.py: 3d2cc21edbc07645ba602a56d77f8b833958ac088f294a33df573cffd2e1999a
       tests/test_funding_ledger_repository.py: 0be54984eed5f584c95de2f5aea513485047c5c1ce01bc2bd09a83da9515d103

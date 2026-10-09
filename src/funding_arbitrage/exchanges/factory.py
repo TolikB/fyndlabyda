@@ -120,6 +120,11 @@ def create_public_adapters(
         ),
     }
     _validate_orderbook_protocols(adapters)
+    if settings.run_mode == "paper_test":
+        # An unused venue would still stream books and trades into the canonical
+        # journal, which is never pruned, and spend its rate limits for nothing.
+        selected = {venue.lower() for venue in settings.paper_venue_values}
+        return {name: adapter for name, adapter in adapters.items() if name in selected}
     return adapters
 
 
