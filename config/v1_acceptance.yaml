@@ -1645,7 +1645,7 @@ requirements:
       tests/test_market_data_repository.py: 9418fae2d6f5281effa20d9ca71a83c22edc9bad202d2696dbb313d362fdce9b
       tests/test_market_data_repository_postgres.py: f633eb48ebbba3fc9a5ea43f3fcb6ee675594594e1956257fa0da4b7445058f9
       tests/test_market_making_strategy.py: 6f37f8a263cffbe2d815f3da5fc38ec4678bc903d63249f71957420eb8bcb6bc
-      tests/test_market_risk_opportunity.py: 08c35f3b7783dcd8cd33ea78dd825e433c07b801fdd4a87d81729bbc84b61f84
+      tests/test_market_risk_opportunity.py: 6a77076cba9d210e13d2cdee9cc669ea9d3f9e5965a6915e76ce95a263a34932
       tests/test_meta_labeling.py: 3dff00c6b5614e3714d3690d7046a420e438f09a873c95f1e0574dd8513f48d3
       tests/test_mev_execution.py: 93ebbc6fd1a5fc285f00283324f9bb81b53a72327c1125d2a312bed9ec1fd19b
       tests/test_mexc_adapter.py: 3f73e589dd2fc3cfd38421db0675cc61f2833ab4c00bb06a0375a8386a7b3657
