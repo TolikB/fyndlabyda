@@ -1,23 +1,29 @@
-# Strategy v2 experiment: four series side by side on the same market snapshots.
+# Strategy v2 experiment: paper series side by side on the same market snapshots.
 #
 # Runs in its own stack (docker-compose.paper-v2.yml) so the 30-day candidate/baseline
 # series in config/paper_series.yaml keep their book slots, history budget and code.
+# Every series differs from another one in a single rule, so the comparison says
+# which rule earned (or lost) money. See docs/STRATEGY_V2.md.
 #
-# Each series adds one change to the previous one, so the comparison says which
-# change earned (or lost) money:
+# Round 1 (from 2026-10-06):
+#   control         candidate's entry and exit rules (the reference)
+#   patient         + hold at least 24h, leave only on a clearly negative edge
+#   quality         + persistent funding only, forecast must pay the round trip
+#   (quality-maker  + passive legs; stopped 2026-10-09: adverse selection cost
+#                   0.177% per passive fill against a 0.032% fee saving)
 #
-#   control        candidate's entry and exit rules (the reference)
-#   patient        + hold at least 24h, leave only on a clearly negative edge
-#   quality        + persistent funding only, forecast must pay the round trip
-#   quality-maker  + one leg of every entry and exit rests as a passive order
+# Round 2 (from 2026-10-09), all built on patient, which beat control by 6.3 USDT
+# on identical entries; in 217 real positions trades held under 12h lost 0.146
+# USDT each and trades held 12-48h made +0.09..+0.12:
+#   patient-strict  + only entries paying at least 0.2% per 8h (twice the funding
+#                   per hour of 0.1-0.2% entries)
+#   patient-top4    + the strict entry, at most 4 positions (only the best signals)
+#   patient-long    + forced exit after 168h instead of 96h (a replay of six days
+#                   of live data: cutting at 72h earned +0.07% per trade against
+#                   +0.29% at 96h, so longer holds may pay more)
 #
-# Why: on the first 2.7 days of the live series a round trip cost ~0.33% of the
-# per-leg notional, the funding rate shown at entry did not predict the next day's
-# edge, positions left right after the 8h minimum hold, and persistence >= 90
-# was the only predictive signal. See docs/STRATEGY_V2.md.
-#
-# Same capital and capacity everywhere: 1000 USDT, 50 USDT per position, 8 positions.
-primary_series: quality
+# 1000 USDT per series, 50 USDT per position.
+primary_series: patient
 
 series:
   - name: control
@@ -104,8 +110,8 @@ series:
     holding:
       exit_confirmation_minutes: "60"
 
-  - name: quality-maker
-    label: quality-maker-v2-20261006
+  - name: patient-strict
+    label: patient-strict-v2-20261009
     initial_balance_usdt: "1000"
     position_notional_usdt: "50"
     max_total_notional_usdt: "400"
@@ -114,7 +120,7 @@ series:
     perp_leverage: "1"
     strategies: [spot_perp, cross_exchange_funding]
     entry:
-      min_funding_rate_8h: "0"
+      min_funding_rate_8h: "0.002"
       min_net_apr: "0.10"
       min_liquidity_score: "70"
       max_slippage_percent: "0.15"
@@ -125,20 +131,56 @@ series:
       max_hold_hours: "96"
       exit_funding_rate_8h: "-0.0005"
     selection:
-      min_persistence_score: "90"
-      max_interval_ratio: "4"
       reentry_cooldown_hours: "8"
-      forecast:
-        current_weight: "0.1"
-        lookback_hours: "24"
-        min_history_points: 3
-        horizon_hours: "48"
-        min_expected_net: "0.001"
-      rank_by: expected_net
     holding:
       exit_confirmation_minutes: "60"
-    execution:
-      maker_entry: true
-      maker_exit: true
-      maker_timeout_seconds: 180
-      entry_fallback_taker: false
+
+  - name: patient-top4
+    label: patient-top4-v2-20261009
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "200"
+    max_open_positions: 4
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0.002"
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "24"
+      max_hold_hours: "96"
+      exit_funding_rate_8h: "-0.0005"
+    selection:
+      reentry_cooldown_hours: "8"
+    holding:
+      exit_confirmation_minutes: "60"
+
+  - name: patient-long
+    label: patient-long-v2-20261009
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0.0002"
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "24"
+      max_hold_hours: "168"
+      exit_funding_rate_8h: "-0.0005"
+    selection:
+      reentry_cooldown_hours: "8"
+    holding:
+      exit_confirmation_minutes: "60"

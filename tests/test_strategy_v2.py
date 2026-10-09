@@ -31,6 +31,7 @@ from funding_arbitrage.services.series import (
     PaperSeriesFile,
     SelectionRules,
     SeriesConfig,
+    changed_keys,
     load_series_file,
 )
 from tests.builders import book, funding, history_point, instrument, snapshot, ticker
@@ -151,10 +152,32 @@ def test_block_validation() -> None:
 def test_v2_series_file_is_valid() -> None:
     series = load_series_file("config/paper_series.v2.yaml")
     by_name = {item.name: item for item in series.series}
-    assert set(by_name) == {"control", "patient", "quality", "quality-maker"}
+    assert set(by_name) == {
+        "control",
+        "patient",
+        "quality",
+        "patient-strict",
+        "patient-top4",
+        "patient-long",
+    }
     # The control series keeps the live candidate's rules, so it keeps no new block.
     assert "selection" not in by_name["control"].identity("2.0.1", {})["series"]
-    assert by_name["quality-maker"].execution is not None
+    # Round-2 series each change exactly one rule of patient.
+    patient = by_name["patient"].identity("2.0.1", {})["series"]
+    expected = {
+        "patient-strict": ["entry.min_funding_rate_8h"],
+        "patient-top4": [
+            "entry.min_funding_rate_8h",
+            "max_open_positions",
+            "max_total_notional_usdt",
+        ],
+        "patient-long": ["exit.max_hold_hours"],
+    }
+    for name, keys in expected.items():
+        variant = by_name[name].identity("2.0.1", {})["series"]
+        assert [
+            key for key in changed_keys(patient, variant) if key not in ("name", "label")
+        ] == keys
 
 
 # ------------------------------------------------------------------ selection helpers

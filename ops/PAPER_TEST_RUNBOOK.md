@@ -199,7 +199,7 @@ docker compose exec app funding-arbitrage reconcile
 
 ## 11. Стек v2: експеримент стратегії поруч із живими серіями
 
-Чотири серії з `config/paper_series.v2.yaml` (control, patient, quality, quality-maker)
+Серії з `config/paper_series.v2.yaml` (control, patient, quality, patient-strict, patient-top4, patient-long)
 працюють в окремому compose-проєкті `funding_arbitrage_paper_v2` зі своєю БД
 `funding_arbitrage_paper_v2_pgdata` і портом 8001. Живий стек (`funding_arbitrage_paper`,
 порт 8000) не зупиняється і не перезбирається. Пояснення змін: `docs/STRATEGY_V2.md`.
