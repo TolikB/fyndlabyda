@@ -290,7 +290,9 @@ class MarketDataCollector:
         self._stream_orderbook_cache: dict[
             tuple[str, str, InstrumentType], OrderBook
         ] = {}
-        self._orderbook_stream_tasks: dict[str, asyncio.Task[None]] = {}
+        self._orderbook_stream_tasks: dict[
+            tuple[str, str, InstrumentType], asyncio.Task[None]
+        ] = {}
         self._orderbook_stream_requests: dict[
             str, frozenset[tuple[str, InstrumentType]]
         ] = {}
@@ -1316,26 +1318,29 @@ class MarketDataCollector:
             return
         target = frozenset(requests)
         self._prune_stream_orderbook_cache(adapter.name, target)
-        existing = self._orderbook_stream_tasks.get(adapter.name)
-        if (
-            existing is not None
-            and not existing.done()
-            and self._orderbook_stream_requests.get(adapter.name) == target
-        ):
-            return
-        if existing is not None and not existing.done():
-            existing.cancel()
         self._orderbook_stream_requests[adapter.name] = target
-        exchange_stream_last_message_timestamp.labels(
-            adapter.name, "orderbook"
-        ).set(0)
+        # One stream per market. A stream publishes each update durably before it
+        # reads the next, so one shared connection serialised every market of the
+        # venue behind journal commits, and any change to the requested set used
+        # to restart all of them.
+        for key, task in tuple(self._orderbook_stream_tasks.items()):
+            if key[0] == adapter.name and (key[1], key[2]) not in target:
+                task.cancel()
+                del self._orderbook_stream_tasks[key]
         if not target:
-            self._orderbook_stream_tasks.pop(adapter.name, None)
+            exchange_stream_last_message_timestamp.labels(
+                adapter.name, "orderbook"
+            ).set(0)
             return
-        self._orderbook_stream_tasks[adapter.name] = asyncio.create_task(
-            self._consume_orderbook_stream(adapter, list(target)),
-            name=f"market-orderbooks-{adapter.name}",
-        )
+        for market in sorted(target, key=lambda item: (item[0], item[1].value)):
+            key = (adapter.name, *market)
+            existing = self._orderbook_stream_tasks.get(key)
+            if existing is not None and not existing.done():
+                continue
+            self._orderbook_stream_tasks[key] = asyncio.create_task(
+                self._consume_orderbook_stream(adapter, [market]),
+                name=f"market-orderbook-{adapter.name}-{market[0]}",
+            )
 
     async def _consume_orderbook_stream(
         self,

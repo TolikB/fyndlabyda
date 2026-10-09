@@ -1522,3 +1522,50 @@ async def test_a_slow_fetch_does_not_make_parse_stamped_tickers_future_dated() -
     assert snapshot.tickers
     assert [key for key in snapshot.orderbooks if key[0] == "bybit"]
     assert snapshot.incomplete_venues == ()
+
+
+@pytest.mark.asyncio
+async def test_each_book_market_streams_alone_and_survives_set_changes() -> None:
+    # A stream journals each update before reading the next, so markets sharing a
+    # connection queued behind each other's commits and fell minutes behind.
+    class RecordingMock(MockExchangeAdapter):
+        def __init__(self) -> None:
+            super().__init__("bybit", sleep=0)
+            self.opened: list[list[tuple[str, InstrumentType]]] = []
+
+        def stream_orderbooks(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int = 20,
+        ) -> AsyncIterator[OrderBook]:
+            self.opened.append(list(symbols))
+            return self._book_stream(symbols, depth)
+
+        async def _book_stream(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int,
+        ) -> AsyncIterator[OrderBook]:
+            for symbol, instrument_type in symbols:
+                yield await MockExchangeAdapter.get_orderbook(
+                    self, symbol, depth, instrument_type
+                )
+            await asyncio.Event().wait()
+
+    adapter = RecordingMock()
+    collector = MarketDataCollector([adapter], enable_streams=True)
+    btc = ("BTCUSDT", InstrumentType.PERPETUAL)
+    eth = ("ETHUSDT", InstrumentType.PERPETUAL)
+    sol = ("SOLUSDT", InstrumentType.PERPETUAL)
+
+    collector._ensure_orderbook_stream(adapter, [btc, eth])
+    await asyncio.sleep(0)
+    btc_task = collector._orderbook_stream_tasks[("bybit", *btc)]
+    collector._ensure_orderbook_stream(adapter, [btc, sol])
+    await asyncio.sleep(0)
+
+    assert collector._orderbook_stream_tasks[("bybit", *btc)] is btc_task
+    assert ("bybit", *eth) not in collector._orderbook_stream_tasks
+    assert sorted(adapter.opened) == [[btc], [eth], [sol]]
+    await collector.close()
+    assert not collector._orderbook_stream_tasks
