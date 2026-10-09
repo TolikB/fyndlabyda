@@ -371,3 +371,11 @@ runtime needs it complete. Measure its growth in the first hour
 (`pg_total_relation_size('canonical_events')`) and keep enough free disk for the
 planned run; lower `MULTI_REGIME_UNIVERSE_MAXIMUM_ASSETS` or the venue list if it
 does not fit.
+
+A cron guard (`/etc/cron.d/funding_arbitrage_v1paper_diskguard`, every 5 minutes)
+stops `funding_arbitrage_v1paper-app-1` once less than 15 GiB remain on `/`, so the
+journal cannot fill the disk the funding paper stacks write to. Its actions are
+logged to `/opt/funding_arbitrage_v1paper/diskguard.log`; restart the app by hand
+after freeing space. With the template's limits (4 book symbols and assets per
+venue, 4 dynamic-universe assets) the journal stays in the September run's range;
+the defaults (10/12/20) measured 15 GB/day on this host.
