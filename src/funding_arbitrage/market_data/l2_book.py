@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -243,9 +244,19 @@ class LocalOrderBook:
         self.quality = DataQuality.RECOVERING
         self.recovery_reason = reason
 
-    def snapshot(self) -> BookSnapshot:
+    def snapshot(self, depth: int | None = None) -> BookSnapshot:
         if self.sequence is None or self.exchange_timestamp is None:
             raise RuntimeError("book has no authoritative snapshot")
+        if depth is not None:
+            # Only the best levels: rebuilding a 1000-level Binance book on every
+            # delta for a 20-level consumer took a fifth of a core.
+            return self._candidate_snapshot(
+                bids=dict(heapq.nlargest(depth, self._bids.items())),
+                asks=dict(heapq.nsmallest(depth, self._asks.items())),
+                sequence=self.sequence,
+                exchange_timestamp=self.exchange_timestamp,
+                checksum=None,
+            )
         if self._snapshot is None:
             self._snapshot = self._candidate_snapshot(
                 bids=self._bids,

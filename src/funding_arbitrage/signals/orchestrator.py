@@ -113,6 +113,10 @@ class SignalOrchestrator:
         self._seen: OrderedDict[str, str] = OrderedDict()
         self._last_timestamp: datetime | None = None
 
+    @property
+    def last_timestamp(self) -> datetime | None:
+        return self._last_timestamp
+
     def orchestrate(
         self, intents: tuple[SignalIntent, ...], timestamp: datetime
     ) -> SignalOrchestrationResult:

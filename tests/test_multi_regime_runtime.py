@@ -489,9 +489,14 @@ def _envelope(
     )
 
 
-def _events() -> list[EventEnvelope]:
+def _events(
+    *,
+    start: datetime = START,
+    instrument: InstrumentKey = INSTRUMENT,
+    first_sequence: int = 0,
+) -> list[EventEnvelope]:
     events: list[EventEnvelope] = []
-    sequence = 0
+    sequence = first_sequence
     hourly = (
         Decimal("100"),
         Decimal("110"),
@@ -502,13 +507,13 @@ def _events() -> list[EventEnvelope]:
         Decimal("86"),
     )
     for minute in range(len(hourly) * 60 + 1):
-        timestamp = START + timedelta(minutes=minute + 1)
+        timestamp = start + timedelta(minutes=minute + 1)
         hour = min(minute // 60, len(hourly) - 1)
         quarter = (minute % 60) // 15
         price = hourly[hour] + Decimal(quarter - 1) / Decimal("2")
         sequence += 1
         book = BookSnapshot(
-            instrument=INSTRUMENT,
+            instrument=instrument,
             bids=tuple(
                 BookLevel(price=price - Decimal(index + 1) / Decimal("10"), quantity=Decimal("100"))
                 for index in range(5)
@@ -522,9 +527,9 @@ def _events() -> list[EventEnvelope]:
         )
         events.append(_envelope(EventKind.BOOK_SNAPSHOT, book, sequence))
         sequence += 1
-        open_time = START + timedelta(minutes=minute)
+        open_time = start + timedelta(minutes=minute)
         candle = Candle(
-            instrument=INSTRUMENT,
+            instrument=instrument,
             interval_seconds=60,
             open_time=open_time,
             close_time=timestamp,
@@ -1043,6 +1048,31 @@ def test_multi_regime_replay_is_deterministic_and_idempotent() -> None:
     ]
     assert first_engine.process(events[-1]) is None
 
+
+def test_late_venue_decisions_are_skipped_instead_of_failing_the_runtime() -> None:
+    # Every instrument shares the orchestrator clock. Candles from a venue that
+    # arrive an hour late used to raise there and fail the whole runtime.
+    engine = _engine()
+    assert _replay(engine, _events())
+    late_venue = InstrumentKey(
+        venue="OKX",
+        exchange_symbol="BTC-USDT-SWAP",
+        base_asset="BTC",
+        quote_asset="USDT",
+        instrument_type=InstrumentType.PERPETUAL,
+        settlement_asset="USDT",
+    )
+    late = _events(
+        start=START - timedelta(hours=1),
+        instrument=late_venue,
+        first_sequence=1_000_000,
+    )
+    skipped_before = engine.skipped_out_of_order_events
+
+    assert _replay(engine, late) == []
+    assert engine.skipped_out_of_order_events > skipped_before
+
+
 def test_future_book_is_unavailable_and_cannot_leak_into_decision_time() -> None:
     events = _events()
     final_book = events[-2]
@@ -1057,6 +1087,45 @@ def test_future_book_is_unavailable_and_cannot_leak_into_decision_time() -> None
 
     assert batches
     assert batches[-1].orderflow.data_quality is DataQuality.UNAVAILABLE
+
+
+def _received_after(event: EventEnvelope, delay: timedelta) -> EventEnvelope:
+    return event.model_copy(
+        update={
+            "metadata": event.metadata.model_copy(
+                update={"receive_timestamp": event.metadata.exchange_timestamp + delay}
+            )
+        }
+    )
+
+
+def test_book_streamed_before_a_polled_candle_arrives_is_valid_orderflow() -> None:
+    # A polled candle reaches the runtime after its bar closed; the book that kept
+    # streaming meanwhile is the market at decision time, not look-ahead.
+    events = _events()
+    final_book = events[-2]
+    assert isinstance(final_book.payload, BookSnapshot)
+    streamed = final_book.payload.model_copy(
+        update={
+            "exchange_timestamp": final_book.payload.exchange_timestamp
+            + timedelta(seconds=10)
+        }
+    )
+    events[-2] = _envelope(EventKind.BOOK_SNAPSHOT, streamed, 100_000)
+    events[-1] = _received_after(events[-1], timedelta(seconds=20))
+
+    batches = _replay(_engine(), events)
+
+    assert batches[-1].orderflow.data_quality is DataQuality.VALID
+
+
+def test_candle_received_after_the_freshness_window_leaves_orderflow_stale() -> None:
+    events = _events()
+    events[-1] = _received_after(events[-1], timedelta(minutes=10))
+
+    batches = _replay(_engine(), events)
+
+    assert batches[-1].orderflow.data_quality is DataQuality.STALE
 
 
 def test_canonical_book_delta_updates_runtime_l2_and_gap_blocks_quality() -> None:

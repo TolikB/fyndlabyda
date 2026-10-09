@@ -217,7 +217,7 @@ class BinanceOrderBookNormalizer:
         else:
             event = EventEnvelope[BookDelta](kind=kind, metadata=metadata, payload=payload)
         current = (
-            self.local_book.snapshot()
+            self.local_book.snapshot(self.output_depth)
             if result.status is BookApplyStatus.APPLIED and self.local_book.tradable
             else None
         )

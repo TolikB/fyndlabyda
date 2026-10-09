@@ -111,7 +111,7 @@ requirements:
     evidence_sha256:
       migrations/versions/0011_canonical_events.py: 08dc8e3f20df217a6765df32e08c69eac8546fc019ebcb3d2acd1de09db3f7eb
       src/funding_arbitrage/database/repositories/directional_paper.py: 3d6246a471ec2ce8a07aef6621064ef2f9b0b78ffc7764f423bca7bb075a9c47
-      src/funding_arbitrage/database/repositories/events.py: fe55faaf8f4d2dd3676dee791066b832cde620ef5acdff8c1570f7daa46bac3f
+      src/funding_arbitrage/database/repositories/events.py: 52b0d2194cf14e3c297a1f4f15d83d2121f3aacf603c2656ac27283193f83e56
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/services/event_router.py: 0771db2aba10976172ee4fca450335c54c3f30eef55a9e79749a829a9424ace4
       src/funding_arbitrage/services/event_writer.py: 7ccd452539cfac9ebef27555f0ed5f6c8f08e9f8ee1bfa64e2f4eeb53d921660
@@ -228,7 +228,7 @@ requirements:
       src/funding_arbitrage/exchanges/base/models.py: d9877ea375d47f8e0447cd37bdda17a6bcd3eba094edbe5034f3a78513d786cd
       src/funding_arbitrage/exchanges/binance/__init__.py: b65a02eaa1903894f833102f627095ab54d4192ba7a01c9850d93b9730404cba
       src/funding_arbitrage/exchanges/binance/client.py: 08c98363b5e6d447b93376013cae5d032e2631caabbef94a761c29326a42d397
-      src/funding_arbitrage/exchanges/binance/orderbook.py: f63ac0f5abff3efbf5acd330dd53b0d2e1898ddebc2db38d8a9e7fe62794abc4
+      src/funding_arbitrage/exchanges/binance/orderbook.py: 90c1ecf27673eb9b9e5ab4917fe30f629ea4ebe1e462910e5781332e3992361d
       src/funding_arbitrage/exchanges/bybit/README.md: 9d2d0338988b5e46ed094ca71ce444922a218eec03f8eb0001a839f27af01ce7
       src/funding_arbitrage/exchanges/bybit/__init__.py: 61a28a7672a00df0036db38d0612ec3fd014c3a9cca4943610c759ded854d9d4
       src/funding_arbitrage/exchanges/bybit/client.py: 16a84a9b7684ae168a341be6086bdeae645f72e1939e991aeb874633bb823257
@@ -353,7 +353,7 @@ requirements:
       src/funding_arbitrage/exchanges/base/models.py: d9877ea375d47f8e0447cd37bdda17a6bcd3eba094edbe5034f3a78513d786cd
       src/funding_arbitrage/exchanges/binance/__init__.py: b65a02eaa1903894f833102f627095ab54d4192ba7a01c9850d93b9730404cba
       src/funding_arbitrage/exchanges/binance/client.py: 08c98363b5e6d447b93376013cae5d032e2631caabbef94a761c29326a42d397
-      src/funding_arbitrage/exchanges/binance/orderbook.py: f63ac0f5abff3efbf5acd330dd53b0d2e1898ddebc2db38d8a9e7fe62794abc4
+      src/funding_arbitrage/exchanges/binance/orderbook.py: 90c1ecf27673eb9b9e5ab4917fe30f629ea4ebe1e462910e5781332e3992361d
       src/funding_arbitrage/exchanges/bybit/README.md: 9d2d0338988b5e46ed094ca71ce444922a218eec03f8eb0001a839f27af01ce7
       src/funding_arbitrage/exchanges/bybit/__init__.py: 61a28a7672a00df0036db38d0612ec3fd014c3a9cca4943610c759ded854d9d4
       src/funding_arbitrage/exchanges/bybit/client.py: 16a84a9b7684ae168a341be6086bdeae645f72e1939e991aeb874633bb823257
@@ -382,15 +382,15 @@ requirements:
       src/funding_arbitrage/exchanges/private_streams.py: 29160eebf95126d962dace67d422ffd26341c89d9b4b6af26f6cf9519441fe1b
       src/funding_arbitrage/exchanges/public_events.py: 9c83d0ce4bfcbcb3b76354752e042e7e7b004fce615c9f3f2317d7d112135791
       src/funding_arbitrage/exchanges/trading.py: d4a83d80d1b9494a701ea93d36a8b53b3fa2d27e13769e46521ae733a52e2015
-      src/funding_arbitrage/market_data/l2_book.py: 8824159607e32f28a3add353e24f6def019f41053e2de32dd376d9b945ed1577
+      src/funding_arbitrage/market_data/l2_book.py: 5ae20606dca46a49debf6b672eac10e2e9ecc961e493c95ffda7a8c5b765cf4b
       src/funding_arbitrage/market_data/orderbook_protocols.py: 62f26ebdebd91cb2113d9cc89d97e92a97ab98fdff407d69ca6fc2b0ad3c7a37
       tests/test_binance_canonical_orderbook.py: 1d210d47257b4616531b59cca7088e0facecef7520873b5c8f3c5982de4fe0b4
       tests/test_bybit_canonical_orderbook.py: e24d409be9c44c2e31f252b1b6a82bd4afbd74f1b19a3f2fc560f772db5a79dd
       tests/test_gate_canonical_orderbook.py: 846eab13d8562e19f0f2348863c31fb85cc99decc690b0c242440c57aeb94501
       tests/test_hyperliquid_canonical_orderbook.py: 7f80c4e17e5906bfe7b3808167656b6646e581f69fb1a32c6b8e8b870c2ebc0b
-      tests/test_l2_book.py: 0662c17a18106e46503634afcb1a7094f3a7c21d8c0b4c3608ff349c5f42e321
+      tests/test_l2_book.py: 936ad2f6c894ff992e567e2f10ede0cd2ca951510291338758b3a0b17b6fd1d0
       tests/test_mexc_canonical_orderbook.py: 79451ab9ecc9c647b3637d94e1a37deeab293cdf2928972175d4e9eb1df3e08c
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_okx_canonical_orderbook.py: eee38fbb285be9a7d01fa9e3b331995ce2ad605db89a6bdca0591e90d337daae
       tests/test_orderbook_protocols.py: 3015603cc1b70d4acc19e162adc2951a5962245cf32e9953e7addf15e23e703b
       tests/test_remaining_canonical_orderbooks.py: eaa2a90d1aec579be8c3fb62c552247508820093dc56786a3a15068758162c56
@@ -465,9 +465,9 @@ requirements:
     evidence_sha256:
       src/funding_arbitrage/features/candles.py: 7fd78760e0fdbccbe4c58bc49c8c31a8ddb47691f38089bf2f5f0c0355b3adde
       src/funding_arbitrage/features/technical.py: fcfe9d2a03515f6b96973b3f2a98885df37e5e8372e80e9322c8fda2d2ef28a6
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       tests/test_candle_aggregation.py: 4ab991aabb898b6ce0320c383cc29e48fe16dad4308e0c99b3314a1a5da665b5
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_technical_features.py: 64db8a99986dbf75496c9316446c2f0c815169bf2c71415afa392e08f4fd125c
   - id: FEAT-002
     category: features
@@ -510,8 +510,8 @@ requirements:
       - tests/test_regime_classifier.py
     evidence_sha256:
       src/funding_arbitrage/regime/classifier.py: 0a3a60098a0768ec23bfab9eab3e2091bca5e9885d69404bfe15bab92a6f0019
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_regime_classifier.py: efa7e7b7b6687bb63ee555f62fbde730f5cb5e5b10ebc51577869a5deb930d01
   - id: REG-002
     category: regime
@@ -527,8 +527,8 @@ requirements:
       - tests/test_regime_classifier.py
     evidence_sha256:
       src/funding_arbitrage/regime/classifier.py: 0a3a60098a0768ec23bfab9eab3e2091bca5e9885d69404bfe15bab92a6f0019
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_regime_classifier.py: efa7e7b7b6687bb63ee555f62fbde730f5cb5e5b10ebc51577869a5deb930d01
   - id: STRAT-001
     category: strategies
@@ -546,11 +546,11 @@ requirements:
       - tests/test_multi_regime_runtime.py
       - tests/test_strategy_suite.py
     evidence_sha256:
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/strategy_suite.py: 7aed9727aeb4775d298af4cb50c8f670a7a64ab66aef8993b088527642f92416
       src/funding_arbitrage/strategies/directional.py: 317386702652d25bac4160a45eee990c7eac8b6de557c82caaad3da5680d7c8f
       tests/test_directional_strategies.py: 138a5c756b09cd0ee9cda412f3943fecfe7eeb7a70878a9fe693260d0bc2fe95
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_strategy_suite.py: ff65803e0a50b8b03360cd028e3950ca0b71d02edce19960cb83a6b778265d8e
   - id: STRAT-002
     category: strategies
@@ -568,11 +568,11 @@ requirements:
       - tests/test_multi_regime_runtime.py
       - tests/test_strategy_suite.py
     evidence_sha256:
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/strategy_suite.py: 7aed9727aeb4775d298af4cb50c8f670a7a64ab66aef8993b088527642f92416
       src/funding_arbitrage/strategies/directional.py: 317386702652d25bac4160a45eee990c7eac8b6de557c82caaad3da5680d7c8f
       tests/test_directional_strategies.py: 138a5c756b09cd0ee9cda412f3943fecfe7eeb7a70878a9fe693260d0bc2fe95
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_strategy_suite.py: ff65803e0a50b8b03360cd028e3950ca0b71d02edce19960cb83a6b778265d8e
   - id: STRAT-003
     category: strategies
@@ -683,7 +683,7 @@ requirements:
       src/funding_arbitrage/services/strategy_suite.py: 7aed9727aeb4775d298af4cb50c8f670a7a64ab66aef8993b088527642f92416
       src/funding_arbitrage/strategies/market_making.py: 57c9c851531ce10ef159d22fbaf35fea0eb09d0929534274d77ce0c5c18f5bb5
       tests/test_market_making_strategy.py: 6f37f8a263cffbe2d815f3da5fc38ec4678bc903d63249f71957420eb8bcb6bc
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_strategy_suite.py: ff65803e0a50b8b03360cd028e3950ca0b71d02edce19960cb83a6b778265d8e
   - id: STRAT-008
     category: strategies
@@ -703,7 +703,7 @@ requirements:
     evidence_sha256:
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/main.py: 5f246ab9395b81a4692f26ac71f4bb88c89f969e432b3f72edf2c56d0f0f29d9
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/runtime_universe.py: 1f0df5431eefc725edc49c5bd5b2ee33b49b72f7e5c9d9fc10209410870e424d
       src/funding_arbitrage/strategies/universe.py: ffa4b9b3c585821fd0036998407f71cc76e7b873b39198d7098825c3e286adf5
       tests/test_runtime_universe.py: ffa7ea4298ea70a302f7d4ee4ccd0412dcb1c5fda130fd8fdc2fd26edf37635e
@@ -754,11 +754,11 @@ requirements:
       src/funding_arbitrage/ai/meta_labeling.py: 3fae266b4ea5661fc6712cb08b1c5c7c8680117dc4be17357ef47377baf9e2aa
       src/funding_arbitrage/main.py: 5f246ab9395b81a4692f26ac71f4bb88c89f969e432b3f72edf2c56d0f0f29d9
       src/funding_arbitrage/services/decision_support.py: cf1e5ff90d4ca18d616e68e192ebab32c9247b97621e356a3ae1bf18bb527419
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/runtime_decision_support.py: 173d3348dbee40200c8ac9f494da803b51cf419c91955e9eaf7628ee652b2453
       tests/test_decision_support.py: ed562aba54c0f83938624e32dbb1c3a051e99cc76af8a76516606d644d5fd121
       tests/test_meta_labeling.py: 3dff00c6b5614e3714d3690d7046a420e438f09a873c95f1e0574dd8513f48d3
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_runtime_decision_support.py: 0bffcec8e3c39a150c1c7d17bd9da1c6571ee9b1f9da1525decfdea322e64c42
   - id: AI-002
     category: strategies
@@ -791,11 +791,11 @@ requirements:
       src/funding_arbitrage/database/repositories/market_data.py: 3cff8fb559b3bd4afd41490c6203cbd19916cb6f012d581cf7382183ed2b36bc
       src/funding_arbitrage/main.py: 5f246ab9395b81a4692f26ac71f4bb88c89f969e432b3f72edf2c56d0f0f29d9
       src/funding_arbitrage/services/decision_support.py: cf1e5ff90d4ca18d616e68e192ebab32c9247b97621e356a3ae1bf18bb527419
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/runtime_decision_support.py: 173d3348dbee40200c8ac9f494da803b51cf419c91955e9eaf7628ee652b2453
       tests/test_decision_support.py: ed562aba54c0f83938624e32dbb1c3a051e99cc76af8a76516606d644d5fd121
       tests/test_market_data_repository.py: 9418fae2d6f5281effa20d9ca71a83c22edc9bad202d2696dbb313d362fdce9b
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_rl_policy.py: d76f22b928fac2bcccdd6c2a8cfe03b31af685386d35fe0223c2bc00633161a8
       tests/test_runtime_decision_support.py: 0bffcec8e3c39a150c1c7d17bd9da1c6571ee9b1f9da1525decfdea322e64c42
   - id: AI-003
@@ -825,12 +825,12 @@ requirements:
       src/funding_arbitrage/ai/llm_gateway.py: 053ba42d9ce21a78d25bac5672c5a5e725af922cac224049dcc937bcd2261184
       src/funding_arbitrage/ai/llm_providers.py: 70bf0cfee7f42a05a0bdebda7e766d3d28001ec582f44e22278f736149232533
       src/funding_arbitrage/services/decision_support.py: cf1e5ff90d4ca18d616e68e192ebab32c9247b97621e356a3ae1bf18bb527419
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/runtime_llm.py: 0be7290515ae4b08887c0556fb6b198fb8f403403f81967490633a9dfbc40497
       tests/test_decision_support.py: ed562aba54c0f83938624e32dbb1c3a051e99cc76af8a76516606d644d5fd121
       tests/test_guarded_capabilities.py: 888a680309a2ce79cc16ac173e83f730487eb79781c618d60e67999cbaa7af00
       tests/test_llm_gateway.py: d885d7684d83ac434fa1a6b28a286e3c461466dfc395e3256bb43b2dd6424e4d
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_runtime_llm.py: e65bcb9fc35d8b2082cf079ad5c6643cc006bd2f6b65d6917a459217ea5ac44b
   - id: SIG-001
     category: strategies
@@ -848,10 +848,10 @@ requirements:
       - tests/test_signal_orchestrator.py
       - tests/test_strategy_suite.py
     evidence_sha256:
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/strategy_suite.py: 7aed9727aeb4775d298af4cb50c8f670a7a64ab66aef8993b088527642f92416
-      src/funding_arbitrage/signals/orchestrator.py: ce11dfe900444532dd15e33f67f0b63dd978dea3c25d79cc1dcef7498e6d8234
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      src/funding_arbitrage/signals/orchestrator.py: a3cfa83ca72812f46ff25b27d026f7c81db94d9a964009fccf6a2caf8f59f1b0
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_signal_orchestrator.py: 88aa6a2f554c35b76df91345fe9f620f874bf6400e257735ed1fc0b56af3c039
       tests/test_strategy_suite.py: ff65803e0a50b8b03360cd028e3950ca0b71d02edce19960cb83a6b778265d8e
   - id: RISK-001
@@ -872,9 +872,9 @@ requirements:
     evidence_sha256:
       src/funding_arbitrage/risk/portfolio.py: 273fcade16b5c971a2b84c0841c03e4811637a738ad52c707d34f4aedf62ed1f
       src/funding_arbitrage/services/decision_support.py: cf1e5ff90d4ca18d616e68e192ebab32c9247b97621e356a3ae1bf18bb527419
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       tests/test_decision_support.py: ed562aba54c0f83938624e32dbb1c3a051e99cc76af8a76516606d644d5fd121
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_portfolio_risk_authority.py: 9f7756c4427b1b597a057e930d5123497fa1507f563b1e478554f0044243b0ef
   - id: RISK-002
     category: risk
@@ -1243,7 +1243,7 @@ requirements:
       docs/V1_DATA_RETENTION.md: 123486d3c77db980a17bc3c0a4241e8b38457dd625a13d3944a69136ac2f3293
       migrations/versions/0011_canonical_events.py: 08dc8e3f20df217a6765df32e08c69eac8546fc019ebcb3d2acd1de09db3f7eb
       migrations/versions/0013_append_only_retention.py: 66ac7b58b134efe93d6f4f036a0e6fc1bb38ac6b78a645310105efd564dbe03b
-      src/funding_arbitrage/database/repositories/events.py: fe55faaf8f4d2dd3676dee791066b832cde620ef5acdff8c1570f7daa46bac3f
+      src/funding_arbitrage/database/repositories/events.py: 52b0d2194cf14e3c297a1f4f15d83d2121f3aacf603c2656ac27283193f83e56
       src/funding_arbitrage/storage/incident.py: fe38946017308f6ffd426cb2e8c317350890081a91eda15ba5dfb7a1b71dbeb4
       tests/test_event_journal.py: a01291065738d52a851e4797465881e0d26b5b91a0dd9ac70486fe5800c026d6
       tests/test_immutable_retention.py: 0b03cec1edc1a92886cf86228470e3464e51764f1400af2feb7a29efe002f8c0
@@ -1632,7 +1632,7 @@ requirements:
       tests/test_journal_profiles.py: efd3fbbb6e0c15667f1c73da3e03afd1e9d7fa29ba327bcfc918f718a2f9baf7
       tests/test_kucoin_htx_adapters.py: 10e026a57b8d36e45ca981ad24f82f8366c87d5f711f558480ab64e563966c90
       tests/test_kucoin_htx_trading.py: 830aba5b2d0816800d405182ec0054573f26dd6293b82aa2242d9e6837dcb598
-      tests/test_l2_book.py: 0662c17a18106e46503634afcb1a7094f3a7c21d8c0b4c3608ff349c5f42e321
+      tests/test_l2_book.py: 936ad2f6c894ff992e567e2f10ede0cd2ca951510291338758b3a0b17b6fd1d0
       tests/test_lead_lag_strategy.py: be2e9026481ad22144bd7fb742916908adce1da7c00065aeb79543d87725264f
       tests/test_live_config.py: d645bccbe2a5051562256c572c0d7a961653baa9027ed52f34de602e1a7b0b7c
       tests/test_live_daily_report.py: cffadbd0f1098ce0778bb6b0b0936da3758d63b509f7db5c60ca702bf9a98fe4
@@ -1645,7 +1645,7 @@ requirements:
       tests/test_market_data_repository.py: 9418fae2d6f5281effa20d9ca71a83c22edc9bad202d2696dbb313d362fdce9b
       tests/test_market_data_repository_postgres.py: f633eb48ebbba3fc9a5ea43f3fcb6ee675594594e1956257fa0da4b7445058f9
       tests/test_market_making_strategy.py: 6f37f8a263cffbe2d815f3da5fc38ec4678bc903d63249f71957420eb8bcb6bc
-      tests/test_market_risk_opportunity.py: 6a77076cba9d210e13d2cdee9cc669ea9d3f9e5965a6915e76ce95a263a34932
+      tests/test_market_risk_opportunity.py: db731b5364e91fd675d776b0d6b2948b63ee29a35883f70e55898e1187171594
       tests/test_meta_labeling.py: 3dff00c6b5614e3714d3690d7046a420e438f09a873c95f1e0574dd8513f48d3
       tests/test_mev_execution.py: 93ebbc6fd1a5fc285f00283324f9bb81b53a72327c1125d2a312bed9ec1fd19b
       tests/test_mexc_adapter.py: 3f73e589dd2fc3cfd38421db0675cc61f2833ab4c00bb06a0375a8386a7b3657
@@ -1658,7 +1658,7 @@ requirements:
       tests/test_multi_regime_persistence.py: 268121bf598e4c45e14f8d9272d37179a73ccd463b330beb15dfa2f33ad2b3f9
       tests/test_multi_regime_restore.py: 0e9f2bbe2c3db5c9e8ec35f00347334bd1391b18cf661a0d3283d9519139e607
       tests/test_multi_regime_restore_filter.py: 2472377478e75c2658c87060b6bea3393bd1bbaf283e2bbafaba17c1c643af27
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_native_low_latency.py: 4f2fab04e325221a627a054568eb246e5f143f29d28a03759327fd617fff430d
       tests/test_native_market_data_coverage.py: 778dbc0569927e19627db9edbd97758c9d5f084d8e644236dfc957ff5b193fb9
       tests/test_new_exchange_adapters.py: 76c7f7c847908f968bb1e647026e21a1ec4ef5d80af22a0fa17ee0bce3add4ac
@@ -1836,9 +1836,9 @@ requirements:
       src/funding_arbitrage/execution/directional_paper.py: 6ead49266ee3be3b7faa187f3537b36c6e3e71add3faa9232da14a68fefd63df
       src/funding_arbitrage/qa/multi_regime_paper.py: 5c0ed37b6b7d8a527d1354eac3e6aa1711c40ad544e0b89bdd7b49a3e3a1a75f
       src/funding_arbitrage/services/daily_report.py: b77ea692755c62fe91c0b8aa9febe83295e3403537c2fcc01a19173962c5969f
-      src/funding_arbitrage/services/multi_regime.py: 4c24172f0923b75fdc80e9703f6e25d7b05ee6abf64dfbf26f1c5c429eb88413
+      src/funding_arbitrage/services/multi_regime.py: 6924cf26c0e2426682ded889da895b19807b8bad9663f2cb85e16137f156fc3a
       src/funding_arbitrage/services/multi_regime_runtime.py: f0240bba7f6f75f19a0918527c8b3e92d619efddb9ca029439fc8aab9a16b8ea
-      src/funding_arbitrage/services/paper_runner.py: 044269ce0fa874c0da62192b702136634b5da7a51f2401e36427de6a0fcdc134
+      src/funding_arbitrage/services/paper_runner.py: e25a3988b8279e3d66f8545f2f003d21d870557d29c141c872a5b85d44dcbe30
       src/funding_arbitrage/services/runtime_strategy_contexts.py: f61529013d37649747d2d8d28741566621b29a7e84f1508f4fc217258836dc62
       src/funding_arbitrage/services/strategy_execution.py: 92eadd87568430e446e1fe93d7dfbefe024a3885a0f1a0ef1a04e38d0f3a25d1
       tests/test_advanced_paper.py: 1872b0e71c292682b435dd0c8a10ae1a8d5a92b0e9a42f8eed1493fea87c4475
@@ -1848,7 +1848,7 @@ requirements:
       tests/test_directional_paper_restore.py: 5387da7a9965aadd4f44ba606c809c50c3a0b01b2e660c9c910c4cd8715478af
       tests/test_funding_ledger_repository.py: 0be54984eed5f584c95de2f5aea513485047c5c1ce01bc2bd09a83da9515d103
       tests/test_multi_regime_paper_probe.py: 3bdec7f40f019c68a682946486c1443b50b8c1d6f8eb524ab744dedcb2f91d11
-      tests/test_multi_regime_runtime.py: 4c593f9a8085d66aa1d28403f3152a93e37100264031d43b220aa53fe4f2be5a
+      tests/test_multi_regime_runtime.py: 3243930a02f2c5db7a3c7796d263173429155ede84bc63b1809cc6e01fc2bb8a
       tests/test_runtime_strategy_contexts.py: 15b01f4ce6cc854dffe68698cdd8d5a991cb42b303b847690de35460b8c66d3f
       tests/test_strategy_execution.py: 94b05013cf5b682b15577724164ecc2998a3ec830d30b04706b1c339a72e696b
       tests/test_telegram.py: 5d23d39568dd23b0ee5cb4d228016704ee5f5f5605c4fad84a03ad74ca3ca961

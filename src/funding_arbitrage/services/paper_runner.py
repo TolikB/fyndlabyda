@@ -201,6 +201,11 @@ class PaperTestRunner:
                 if settings.options_market_data_enabled
                 else ()
             ),
+            pinned_book_assets=(
+                settings.multi_regime_asset_values
+                if settings.multi_regime_enabled
+                else ()
+            ),
             option_refresh_seconds=settings.options_refresh_seconds,
             option_maximum_expiries=settings.options_maximum_expiries,
             option_strikes_per_expiry=settings.options_strikes_per_expiry,

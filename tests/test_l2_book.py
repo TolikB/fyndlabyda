@@ -316,3 +316,15 @@ def test_conflicting_duplicate_delta_fails_closed_without_mutating_levels() -> N
     assert result.reason == "delta_identity_collision"
     assert book.snapshot() == authoritative
     assert book.tradable is False
+
+
+def test_depth_limited_snapshot_keeps_only_the_best_levels() -> None:
+    book = LocalOrderBook(INSTRUMENT)
+    book.apply_snapshot(_snapshot())
+
+    top = book.snapshot(1)
+
+    assert [level.price for level in top.bids] == [Decimal("100")]
+    assert [level.price for level in top.asks] == [Decimal("101")]
+    assert top.sequence == book.snapshot().sequence == 100
+    assert len(book.snapshot().bids) == 2
