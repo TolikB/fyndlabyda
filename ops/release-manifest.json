@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-09T14:05:31.406147+00:00",
+  "generated_at": "2026-10-10T19:55:13.376330+00:00",
   "git_commit": null,
   "simulator_version": "2.0.1",
-  "runtime_sha256": "1813df8d33a9527ebcd9900df233ca211bb0810cbe9819b5b085c81db9b59363",
+  "runtime_sha256": "74a53b629b3c5747bd89cc0d09c3aba05aea9191abb32ad9d82ef3e1351def2d",
   "deployment_sha256": "6fc6d960cff8a0f8b8ca8e085a63706b43022a3eaacf0222d08a0a6f34b12809",
   "verification": {
-    "checked_at": "2026-10-09T14:05:29.981584+00:00",
+    "checked_at": "2026-10-10T19:55:12.155488+00:00",
     "python": "3.12.14",
-    "pytest": "124 passed in 68.26s (0:01:08)",
+    "pytest": "127 passed in 66.04s (0:01:06)",
     "ruff": "ruff 0.16.10",
     "mypy": "mypy 1.20.2 (compiled: yes)",
     "postgres_integration": true
@@ -17,7 +17,7 @@
     "alembic.ini": "167a48a1d8c3033d1b7c2184f3fe970de3ecdd8bca07b1824846d27f7e164d29",
     "config/default.yaml": "9cad9986062a4e0ffae9d2e1aba612fd6828f6237f57cba6ca203f2f7723237b",
     "config/paper_series.mock.yaml": "98a63920b61391cc53edb254aaa4c2bcd549aace91f3eafc3030a8a4946f697c",
-    "config/paper_series.v2.yaml": "ebb654c8f4fded6222f193f45396b0c5f6f77f52397bfdd956496c9c0b03b567",
+    "config/paper_series.v2.yaml": "4031a0019b145952ccc2667b95e2a1939560c546c7568a227b9de71c82a390c5",
     "config/paper_series.yaml": "7a2a693b199e988c0591a3178f99cc1f49b8c67179b29498987ac76ab1d52851",
     "dashboard/index.html": "47834f4de12fb50e453c5a9abdf8756fd2e26bf72e8d117793efc1d4f234fa89",
     "migrations/env.py": "02778fa702409696c7b467efe8c6f1059281ada40f8faf9bda4286289d1295fe",
@@ -101,7 +101,7 @@
     "src/funding_arbitrage/opportunity/filters.py": "70ffc838291bedb3911be3d1b04ac1d325fd79601bcef12fea0d272c2be1b55e",
     "src/funding_arbitrage/opportunity/models.py": "406101ae3cf8219a693280f32002e8083d02cc5c7d9109e5efa3a3eb0047be1b",
     "src/funding_arbitrage/opportunity/ranking.py": "6bb5d4ae6112715d2d8b1827fe3832540750bc9d5676efbb492b5cfa9c54e41a",
-    "src/funding_arbitrage/opportunity/selection.py": "f855e75772dbafec3fbb61b64a818f52dd2d3c6b9c5164f7bda77b2cfeaba78b",
+    "src/funding_arbitrage/opportunity/selection.py": "93989a14361342d8fff855a2753ed8a8cbd9b7d22ae32ba511c53cd2e0cfedb1",
     "src/funding_arbitrage/opportunity/strategies.py": "78bf8569d90f1f9931ad6b16b8d05e86cdb2bde778a1a0153919522677ea91db",
     "src/funding_arbitrage/portfolio/__init__.py": "91c010b8fadb263d148bd1dbd142c38facee4289dffade7cec8a11a6b827e75a",
     "src/funding_arbitrage/portfolio/funding.py": "eedc98e61a18bf5c29faa5610ec2dc01ad4371a58c0911058ddf59c9991498ea",
@@ -117,11 +117,11 @@
     "src/funding_arbitrage/services/analytics.py": "5441e32c957c98445ea2f45b5345e0dae6f798f30b4edbe74a7ffa4dd0977ffb",
     "src/funding_arbitrage/services/daily_report.py": "77bd85924a3ff3e15ef1cb497e4825444f6d1c1edafb76766b3864bb5b66f31d",
     "src/funding_arbitrage/services/funding_settlement.py": "8ee251ed1bbc27514f8bacd7bc7a482c53bda7cd8b5ec0a79bd9772fcfc53e36",
-    "src/funding_arbitrage/services/paper_runner.py": "6316e9930d8ac193953c4993dd5ce2a97101211d4682d3228690041b07eaea5d",
+    "src/funding_arbitrage/services/paper_runner.py": "c5a1021710b4286cde7a0a8b8005668bf7f101a5e6d40b3e70993d498ad44462",
     "src/funding_arbitrage/services/preflight.py": "ab519629539ff4bb0949ae53b95dbc946c8475ef09545c9140c9db1a04861cf2",
     "src/funding_arbitrage/services/release_manifest.py": "1e7f1bb6c956996783b5dfd5b0c910474def76d61f7375d93449a5331120ae8b",
     "src/funding_arbitrage/services/runtime.py": "0436f2e0bc4e3ba7c21c9b911e46ff20e1c7e6a444f89d2c80c703fc7815608b",
-    "src/funding_arbitrage/services/series.py": "93f01a3ead3add8c1ccaf37febdd392353f00b7b91d750a13cb515c11c7d5f9b"
+    "src/funding_arbitrage/services/series.py": "29c6e843db4486dea434831c261868a45bf1be41c132e72fac05830d9b69f359"
   },
   "deployment_files": {
     "Dockerfile": "378d2280fb77f83c75adf36d791a865ebc26b4f763620839320f2949ac889c6f",
