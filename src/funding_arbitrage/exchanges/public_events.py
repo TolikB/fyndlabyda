@@ -1112,8 +1112,11 @@ def create_public_event_supervisor(
     if settings.public_event_enrichment_enabled:
         import ccxt.pro as ccxtpro  # type: ignore[import-untyped]
 
+        enabled_accounts = set(settings.public_event_account_values)
         for venue in venues:
             for profile in public_event_profiles(venue):
+                if profile.account not in enabled_accounts:
+                    continue
                 options: dict[str, object] = {"defaultType": profile.default_type}
                 if venue in {"binance", "bybit", "okx"}:
                     options["adjustForTimeDifference"] = True

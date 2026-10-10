@@ -206,6 +206,7 @@ class PaperTestRunner:
                 if settings.multi_regime_enabled
                 else ()
             ),
+            stream_discovery_books=settings.paper_stream_discovery_books,
             option_refresh_seconds=settings.options_refresh_seconds,
             option_maximum_expiries=settings.options_maximum_expiries,
             option_strikes_per_expiry=settings.options_strikes_per_expiry,

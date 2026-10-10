@@ -97,6 +97,8 @@ def test_journal_profile_hash_is_deterministic_and_contract_sensitive() -> None:
         {"RELEASE_COMMIT_SHA": "a" * 40},
         {"PAPER_LOOP_INTERVAL_SECONDS": 11},
         {"PAPER_ORDERBOOK_SYMBOL_LIMIT": 11},
+        {"PAPER_STREAM_DISCOVERY_BOOKS": False},
+        {"PUBLIC_EVENT_ACCOUNTS": "linear"},
         {
             "MARKET_DATA_STREAMS_ENABLED": False,
             "CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED": False,

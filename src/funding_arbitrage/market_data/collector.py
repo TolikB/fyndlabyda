@@ -192,6 +192,7 @@ class MarketDataCollector:
         book_stale_after_seconds: int | None = None,
         option_assets: Iterable[str] = (),
         pinned_book_assets: Iterable[str] = (),
+        stream_discovery_books: bool = True,
         option_refresh_seconds: float = 5.0,
         option_maximum_expiries: int = 2,
         option_strikes_per_expiry: int = 3,
@@ -264,6 +265,7 @@ class MarketDataCollector:
         self.pinned_book_assets = frozenset(
             asset.strip().upper() for asset in pinned_book_assets if asset.strip()
         )
+        self.stream_discovery_books = stream_discovery_books
         self.option_refresh_seconds = option_refresh_seconds
         self.option_maximum_expiries = option_maximum_expiries
         self.option_strikes_per_expiry = option_strikes_per_expiry
@@ -840,12 +842,13 @@ class MarketDataCollector:
             ranked_discovery_books = _rank_orderbook_requests(
                 valid_tickers, venue_funding, venue_instruments
             )
+            pinned_asset_books = _asset_perpetual_books(
+                venue_instruments, self.pinned_book_assets
+            )
             discovery_book_requests = list(
                 dict.fromkeys(
                     [
-                        *_asset_perpetual_books(
-                            venue_instruments, self.pinned_book_assets
-                        ),
+                        *pinned_asset_books,
                         *pinned_discovery_books,
                         *ranked_discovery_books,
                     ]
@@ -859,7 +862,14 @@ class MarketDataCollector:
                     ]
                 )
             )
-            self._ensure_orderbook_stream(adapter, book_requests)
+            # A book left out of the streams has no stream cache entry, so it is
+            # fetched over REST on every pass below.
+            self._ensure_orderbook_stream(
+                adapter,
+                book_requests
+                if self.stream_discovery_books
+                else list(dict.fromkeys([*requested_books, *pinned_asset_books])),
+            )
             for symbol, instrument_type in book_requests:
                 key = (adapter.name, symbol, instrument_type)
                 streamed = self._stream_orderbook_cache.get(key)

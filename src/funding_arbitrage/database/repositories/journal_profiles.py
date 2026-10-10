@@ -264,11 +264,13 @@ def canonical_journal_profile_spec(settings: Settings) -> CanonicalJournalProfil
         "venues": venues,
         "public_event_enrichment_enabled": settings.public_event_enrichment_enabled,
         "public_event_symbol_limit_per_profile": (settings.public_event_symbol_limit_per_profile),
+        "public_event_accounts": settings.public_event_account_values,
         "public_event_rest_interval_seconds": _decimal_text(
             settings.public_event_rest_interval_seconds
         ),
         "paper_loop_interval_seconds": _decimal_text(settings.paper_loop_interval_seconds),
         "paper_orderbook_symbol_limit": settings.paper_orderbook_symbol_limit,
+        "paper_stream_discovery_books": settings.paper_stream_discovery_books,
         "paper_market_asset_limit": settings.paper_market_asset_limit,
         "paper_history_symbol_limit": settings.paper_history_symbol_limit,
         "paper_history_refresh_seconds": settings.paper_history_refresh_seconds,

@@ -49,6 +49,9 @@ from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
 logger = logging.getLogger(__name__)
 
 _WS_TOPIC_BATCH_SIZE = 10
+# 200 levels push every 100 ms; 50 levels pushed every 20 ms, five times the
+# messages to journal and parse for the same top of book.
+_ORDERBOOK_STREAM_DEPTH = 200
 
 
 def _utc_from_ms(value: object, field: str = "timestamp") -> datetime:
@@ -860,7 +863,7 @@ class BybitPublicAdapter(ExchangeAdapter):
         depth: int,
     ) -> AsyncIterator[OrderBook]:
         reconnects = 0
-        stream_depth = 50
+        stream_depth = _ORDERBOOK_STREAM_DEPTH
         while self.max_reconnects is None or reconnects <= self.max_reconnects:
             states: dict[str, BybitOrderBookNormalizer] = {}
             try:
@@ -967,7 +970,7 @@ class BybitPublicAdapter(ExchangeAdapter):
             states[symbol] = BybitOrderBookNormalizer(
                 self._canonical_instrument(symbol, instrument_type),
                 depth=depth,
-                source_depth=50,
+                source_depth=_ORDERBOOK_STREAM_DEPTH,
             )
         elif symbol not in states:
             return None

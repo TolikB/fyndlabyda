@@ -166,6 +166,8 @@ def test_multi_regime_rejects_incomplete_canonical_market_journal(
             "canonical_high_frequency_market_event_min_interval_seconds": 901,
         },
         {"public_event_symbol_limit_per_profile": 0},
+        {"public_event_accounts": "futures"},
+        {"public_event_accounts": " , "},
         {"public_event_rest_interval_seconds": 0},
         {
             "public_event_reconnect_initial_seconds": 31,

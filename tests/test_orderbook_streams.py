@@ -1522,3 +1522,29 @@ async def test_a_slow_fetch_does_not_make_parse_stamped_tickers_future_dated() -
     assert snapshot.tickers
     assert [key for key in snapshot.orderbooks if key[0] == "bybit"]
     assert snapshot.incomplete_venues == ()
+
+
+@pytest.mark.asyncio
+async def test_discovery_books_come_over_rest_when_only_pinned_books_stream() -> None:
+    adapter = MockExchangeAdapter("bybit", sleep=0)
+    streamed: list[list[tuple[str, InstrumentType]]] = []
+    collector = MarketDataCollector(
+        [adapter],
+        enable_streams=True,
+        pinned_book_assets=("BTC",),
+        stream_discovery_books=False,
+    )
+
+    def record(
+        _adapter: object, requests: list[tuple[str, InstrumentType]]
+    ) -> None:
+        streamed.append(list(requests))
+
+    collector._ensure_orderbook_stream = record  # type: ignore[method-assign,assignment]
+
+    snapshot = await collector.collect_once()
+    await collector.close()
+
+    assert streamed == [[("BTCUSDT", InstrumentType.PERPETUAL)]]
+    assert snapshot.orderbook("bybit", "BTCUSDT", InstrumentType.SPOT) is not None
+    assert snapshot.orderbook("bybit", "BTCUSDT", InstrumentType.PERPETUAL) is not None
