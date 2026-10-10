@@ -238,7 +238,6 @@ class MarketDataCollector:
             if book_stale_after_seconds is None
             else book_stale_after_seconds
         )
-        self.book_revalidation_seconds = max(1, self.book_stale_after_seconds // 2)
         # A book enters the snapshot from the venue's own stage, which is seconds
         # before the snapshot closes, so accepting one right on the budget lets it
         # reach readiness over the budget. Keep the same margin the tickers use.
@@ -295,9 +294,6 @@ class MarketDataCollector:
         self._orderbook_stream_tasks: dict[str, asyncio.Task[None]] = {}
         self._orderbook_stream_requests: dict[
             str, frozenset[tuple[str, InstrumentType]]
-        ] = {}
-        self._last_rest_book_fetch: dict[
-            tuple[str, str, InstrumentType], datetime
         ] = {}
 
     async def close(self) -> None:
@@ -913,7 +909,6 @@ class MarketDataCollector:
                     )
                     continue
                 key = (adapter.name, symbol, instrument_type)
-                self._last_rest_book_fetch[key] = now
                 current = orderbooks.get(key)
                 latest_streamed = self._stream_orderbook_cache.get(key)
                 if (
@@ -1394,9 +1389,6 @@ class MarketDataCollector:
         for key in tuple(self._stream_orderbook_cache):
             if key[0] == exchange and (key[1], key[2]) not in target:
                 self._stream_orderbook_cache.pop(key, None)
-        for key in tuple(self._last_rest_book_fetch):
-            if key[0] == exchange and (key[1], key[2]) not in target:
-                self._last_rest_book_fetch.pop(key, None)
 
     def _book_needs_rest_validation(
         self,
@@ -1406,14 +1398,12 @@ class MarketDataCollector:
     ) -> bool:
         key = (exchange, request[0], request[1])
         streamed = self._stream_orderbook_cache.get(key)
-        last_rest = self._last_rest_book_fetch.get(key)
-        if streamed is None:
-            return True
-        if (now - streamed.timestamp).total_seconds() > self.book_usable_seconds:
-            return True
+        # A fresh stream is not revalidated over REST: the REST snapshot joined the
+        # same canonical book stream with a sequence the next delta could not
+        # follow, and every later delta of that book was journaled as a gap.
         return (
-            last_rest is None
-            or (now - last_rest).total_seconds() >= self.book_revalidation_seconds
+            streamed is None
+            or (now - streamed.timestamp).total_seconds() > self.book_usable_seconds
         )
 
     def _usable_tickers(

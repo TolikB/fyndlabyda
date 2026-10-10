@@ -597,7 +597,6 @@ async def test_collector_prunes_retired_stream_markets() -> None:
     collector._stream_orderbook_cache[old_key] = await adapter.get_orderbook(
         old_market[0], 20, old_market[1]
     )
-    collector._last_rest_book_fetch[old_key] = now
 
     collector._ensure_ticker_stream(
         adapter,
@@ -607,7 +606,6 @@ async def test_collector_prunes_retired_stream_markets() -> None:
 
     assert old_key not in collector._stream_ticker_cache
     assert old_key not in collector._stream_orderbook_cache
-    assert old_key not in collector._last_rest_book_fetch
     await collector.close()
 
 
@@ -1446,7 +1444,6 @@ def test_a_book_is_replaced_before_it_reaches_its_budget() -> None:
     )
 
     assert collector.book_usable_seconds == 100
-    assert collector.book_revalidation_seconds == 60
 
     now = datetime.now(UTC)
     key = ("bybit", "BTCUSDT", InstrumentType.PERPETUAL)
@@ -1458,7 +1455,6 @@ def test_a_book_is_replaced_before_it_reaches_its_budget() -> None:
         asks=[OrderBookLevel(price=Decimal("101"), quantity=Decimal("1"))],
         timestamp=now - timedelta(seconds=110),
     )
-    collector._last_rest_book_fetch[key] = now
 
     # Inside the 120s budget, but past the usable margin, so it is refreshed
     # rather than carried into a snapshot that closes seconds later.
@@ -1548,3 +1544,37 @@ async def test_discovery_books_come_over_rest_when_only_pinned_books_stream() ->
     assert streamed == [[("BTCUSDT", InstrumentType.PERPETUAL)]]
     assert snapshot.orderbook("bybit", "BTCUSDT", InstrumentType.SPOT) is not None
     assert snapshot.orderbook("bybit", "BTCUSDT", InstrumentType.PERPETUAL) is not None
+
+
+def test_a_fresh_streamed_book_is_never_revalidated_over_rest() -> None:
+    # A REST snapshot joins the same canonical book stream, and the next WebSocket
+    # delta cannot follow its sequence: every later delta was journaled as a gap.
+    collector = MarketDataCollector(
+        [MockExchangeAdapter("bybit", sleep=0)],
+        enable_streams=True,
+        stale_after_seconds=30,
+        book_stale_after_seconds=120,
+    )
+    now = datetime.now(UTC)
+    btc = ("BTCUSDT", InstrumentType.PERPETUAL)
+
+    def streamed(age_seconds: float) -> OrderBook:
+        return OrderBook(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            instrument_type=InstrumentType.PERPETUAL,
+            bids=[OrderBookLevel(price=Decimal("100"), quantity=Decimal("1"))],
+            asks=[OrderBookLevel(price=Decimal("101"), quantity=Decimal("1"))],
+            timestamp=now - timedelta(seconds=age_seconds),
+        )
+
+    collector._stream_orderbook_cache[("bybit", *btc)] = streamed(1)
+    assert not collector._book_needs_rest_validation("bybit", btc, now)
+
+    collector._stream_orderbook_cache[("bybit", *btc)] = streamed(
+        collector.book_usable_seconds + 1
+    )
+    assert collector._book_needs_rest_validation("bybit", btc, now)
+    assert collector._book_needs_rest_validation(
+        "bybit", ("ETHUSDT", InstrumentType.PERPETUAL), now
+    )
