@@ -111,7 +111,7 @@ requirements:
     evidence_sha256:
       migrations/versions/0011_canonical_events.py: 08dc8e3f20df217a6765df32e08c69eac8546fc019ebcb3d2acd1de09db3f7eb
       src/funding_arbitrage/database/repositories/directional_paper.py: 3d6246a471ec2ce8a07aef6621064ef2f9b0b78ffc7764f423bca7bb075a9c47
-      src/funding_arbitrage/database/repositories/events.py: 52b0d2194cf14e3c297a1f4f15d83d2121f3aacf603c2656ac27283193f83e56
+      src/funding_arbitrage/database/repositories/events.py: 4b1e1bbf68bb6ec7d5881690d48559ce89ddd0e306a19b0ca60ab0caf56d7bd2
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/services/event_router.py: 874325736b96ac2c24029df2bce49a8776ea80e3ba76aa90ff046369bd0a33bd
       src/funding_arbitrage/services/event_writer.py: a14dc726f4ff1465aae529134ab4f90adb2b96383ad7493ff719411178a92b1e
@@ -1243,7 +1243,7 @@ requirements:
       docs/V1_DATA_RETENTION.md: 123486d3c77db980a17bc3c0a4241e8b38457dd625a13d3944a69136ac2f3293
       migrations/versions/0011_canonical_events.py: 08dc8e3f20df217a6765df32e08c69eac8546fc019ebcb3d2acd1de09db3f7eb
       migrations/versions/0013_append_only_retention.py: 66ac7b58b134efe93d6f4f036a0e6fc1bb38ac6b78a645310105efd564dbe03b
-      src/funding_arbitrage/database/repositories/events.py: 52b0d2194cf14e3c297a1f4f15d83d2121f3aacf603c2656ac27283193f83e56
+      src/funding_arbitrage/database/repositories/events.py: 4b1e1bbf68bb6ec7d5881690d48559ce89ddd0e306a19b0ca60ab0caf56d7bd2
       src/funding_arbitrage/storage/incident.py: fe38946017308f6ffd426cb2e8c317350890081a91eda15ba5dfb7a1b71dbeb4
       tests/test_event_journal.py: a01291065738d52a851e4797465881e0d26b5b91a0dd9ac70486fe5800c026d6
       tests/test_immutable_retention.py: 0b03cec1edc1a92886cf86228470e3464e51764f1400af2feb7a29efe002f8c0

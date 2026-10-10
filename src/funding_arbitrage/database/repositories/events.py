@@ -9,10 +9,30 @@ from datetime import datetime
 from typing import Any, cast
 
 from pydantic import BaseModel
-from sqlalchemy import CursorResult, Select, case, func, insert, select
+from sqlalchemy import (
+    ARRAY,
+    JSON,
+    BigInteger,
+    CursorResult,
+    DateTime,
+    Integer,
+    Select,
+    String,
+    Table,
+    Text,
+    any_,
+    bindparam,
+    case,
+    column,
+    func,
+    insert,
+    select,
+)
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.types import TypeEngine
 
 from funding_arbitrage.database.models import CanonicalEventRecord
 from funding_arbitrage.database.repositories.journal_profiles import (
@@ -96,6 +116,76 @@ def _record_values(event: EventEnvelope[Any]) -> dict[str, Any]:
     }
 
 
+# PostgreSQL keeps every prepared statement for the life of its connection, and
+# asyncpg prepares each distinct SQL text. Spelling a batch out as multi-row
+# VALUES or an IN list made a new statement for every batch length; the journal
+# writer's plans reached 2-4 MB each, and the pooled connections pushed the
+# database past its memory limit. Array parameters keep one text per query.
+_PG_JOURNAL_COLUMNS: tuple[tuple[str, TypeEngine[Any]], ...] = (
+    ("event_id", String()),
+    ("kind", String()),
+    ("source", String()),
+    ("sequence_id", String()),
+    ("native_sequence", BigInteger()),
+    ("correlation_id", String()),
+    ("payload_version", Integer()),
+    ("quality", String()),
+    ("exchange_timestamp", DateTime(timezone=True)),
+    ("receive_timestamp", DateTime(timezone=True)),
+    ("monotonic_ns", BigInteger()),
+    ("payload_hash", String()),
+    ("payload", Text()),
+)
+_PG_INCOMING = (
+    func.unnest(
+        *(
+            bindparam(f"incoming_{name}", type_=ARRAY(column_type))
+            for name, column_type in _PG_JOURNAL_COLUMNS
+        )
+    )
+    .table_valued(
+        *(column(name, column_type) for name, column_type in _PG_JOURNAL_COLUMNS),
+        with_ordinality="ordinality",
+    )
+    .render_derived(name="incoming")
+)
+# Rows keep their batch order, so the durable row ID still follows arrival. The
+# insert targets the Core table: an ORM-entity INSERT takes the dict of arrays
+# for bulk row values.
+_CANONICAL_EVENTS = cast(Table, CanonicalEventRecord.__table__)
+_PG_APPEND = (
+    pg_insert(_CANONICAL_EVENTS)
+    .from_select(
+        [name for name, _ in _PG_JOURNAL_COLUMNS],
+        select(
+            *(
+                sql_cast(_PG_INCOMING.c[name], JSON) if name == "payload" else _PG_INCOMING.c[name]
+                for name, _ in _PG_JOURNAL_COLUMNS
+            )
+        ).order_by(_PG_INCOMING.c.ordinality),
+    )
+    .on_conflict_do_nothing(constraint="uq_canonical_event_id")
+    .returning(_CANONICAL_EVENTS.c.id)
+)
+_PG_STORED_HASHES = select(CanonicalEventRecord.event_id, CanonicalEventRecord.payload_hash).where(
+    CanonicalEventRecord.event_id == any_(bindparam("event_ids", type_=ARRAY(String())))
+)
+
+
+async def _stored_hashes(
+    session: AsyncSession, dialect: str, event_ids: list[str]
+) -> dict[str, str]:
+    if dialect == "postgresql":
+        result = await session.execute(_PG_STORED_HASHES, {"event_ids": event_ids})
+    else:
+        result = await session.execute(
+            select(CanonicalEventRecord.event_id, CanonicalEventRecord.payload_hash).where(
+                CanonicalEventRecord.event_id.in_(event_ids)
+            )
+        )
+    return {event_id: payload_hash for event_id, payload_hash in result.all()}
+
+
 async def append_event(session: AsyncSession, event: EventEnvelope[Any]) -> bool:
     """Durably append once, returning false for a reconnect/replay duplicate."""
 
@@ -116,31 +206,24 @@ async def append_events(session: AsyncSession, events: Sequence[EventEnvelope[An
     rows = list(unique.values())
     if not rows:
         return 0
-    existing_rows = (
-        await session.execute(
-            select(CanonicalEventRecord.event_id, CanonicalEventRecord.payload_hash).where(
-                CanonicalEventRecord.event_id.in_(unique)
-            )
-        )
-    ).all()
-    existing_hashes: dict[str, str] = {
-        event_id: payload_hash for event_id, payload_hash in existing_rows
-    }
+    dialect = session.get_bind().dialect.name
+    existing_hashes = await _stored_hashes(session, dialect, list(unique))
     if any(
         event_id in existing_hashes and existing_hashes[event_id] != row["payload_hash"]
         for event_id, row in unique.items()
     ):
         await session.rollback()
         raise EventJournalIntegrityError("stored event ID has a different payload hash")
-    dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
-        # Parameter rows reuse one compiled INSERT; a multi-row VALUES statement was
-        # compiled again for every new batch length on the journal writer's path.
         inserted_ids = await session.execute(
-            pg_insert(CanonicalEventRecord)
-            .on_conflict_do_nothing(constraint="uq_canonical_event_id")
-            .returning(CanonicalEventRecord.id),
-            rows,
+            _PG_APPEND,
+            {
+                f"incoming_{name}": [
+                    json.dumps(row[name]) if name == "payload" else row[name]
+                    for row in rows
+                ]
+                for name, _ in _PG_JOURNAL_COLUMNS
+            },
         )
         inserted = len(inserted_ids.all())
     elif dialect == "sqlite":
@@ -156,16 +239,7 @@ async def append_events(session: AsyncSession, events: Sequence[EventEnvelope[An
         if pending:
             await session.execute(insert(CanonicalEventRecord).values(pending))
         inserted = len(pending)
-    stored_rows = (
-        await session.execute(
-            select(CanonicalEventRecord.event_id, CanonicalEventRecord.payload_hash).where(
-                CanonicalEventRecord.event_id.in_(unique)
-            )
-        )
-    ).all()
-    stored_hashes: dict[str, str] = {
-        event_id: payload_hash for event_id, payload_hash in stored_rows
-    }
+    stored_hashes = await _stored_hashes(session, dialect, list(unique))
     if any(stored_hashes.get(event_id) != row["payload_hash"] for event_id, row in unique.items()):
         await session.rollback()
         raise EventJournalIntegrityError("event journal post-append verification failed")
