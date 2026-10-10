@@ -86,6 +86,8 @@ from funding_arbitrage.opportunity.filters import (
 )
 from funding_arbitrage.opportunity.models import Opportunity, OpportunityStatus, StrategyName
 from funding_arbitrage.opportunity.selection import (
+    entry_gap_value,
+    executable_entry_gap,
     expected_net,
     forecast_edge_8h,
     interval_ratio,
@@ -895,6 +897,15 @@ class PaperTestRunner:
                 )
                 if net < selection.forecast.min_expected_net:
                     self._reject(item, "selection_expected_net")
+                    continue
+            if selection is not None and selection.entry_gap is not None:
+                gap = executable_entry_gap(fills)
+                if (
+                    gap is None
+                    or entry_gap_value(selection.entry_gap, sized, gap)
+                    < selection.entry_gap.min_expected_value
+                ):
+                    self._reject(item, "selection_entry_gap")
                     continue
             position.entry_net_apr = sized.net_apr
             if (

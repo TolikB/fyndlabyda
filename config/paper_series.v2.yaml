@@ -22,6 +22,14 @@
 #                   of live data: cutting at 72h earned +0.07% per trade against
 #                   +0.29% at 96h, so longer holds may pay more)
 #
+# Round 3 (from 2026-10-10), also on patient:
+#   patient-gap     + enter only when 23% of the promised funding over 24h pays the
+#                   round-trip fees and the price gap between the entry fills. In
+#                   234 closed positions the entry gap carried into the price result
+#                   and settled funding was a flat 0.11-0.15% per trade; the rule
+#                   halved the loss in both halves of that data (still a loss: fees
+#                   of 0.206% per trade exceed the funding that settles).
+#
 # 1000 USDT per series, 50 USDT per position.
 primary_series: patient
 
@@ -182,5 +190,35 @@ series:
       exit_funding_rate_8h: "-0.0005"
     selection:
       reentry_cooldown_hours: "8"
+    holding:
+      exit_confirmation_minutes: "60"
+
+  - name: patient-gap
+    label: patient-gap-v2-20261010
+    initial_balance_usdt: "1000"
+    position_notional_usdt: "50"
+    max_total_notional_usdt: "400"
+    max_open_positions: 8
+    max_positions_per_asset: 1
+    perp_leverage: "1"
+    strategies: [spot_perp, cross_exchange_funding]
+    entry:
+      min_funding_rate_8h: "0.0002"
+      min_net_apr: "0.10"
+      min_liquidity_score: "70"
+      max_slippage_percent: "0.15"
+      max_spread_percent: "0.20"
+      min_funding_samples: 20
+    exit:
+      min_hold_hours: "24"
+      max_hold_hours: "96"
+      exit_funding_rate_8h: "-0.0005"
+    selection:
+      reentry_cooldown_hours: "8"
+      entry_gap:
+        funding_realisation: "0.23"
+        horizon_hours: "24"
+        gap_weight: "1"
+        min_expected_value: "0"
     holding:
       exit_confirmation_minutes: "60"

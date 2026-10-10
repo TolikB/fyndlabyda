@@ -9,13 +9,19 @@ it against the full round-trip cost.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.market_data.collector import MarketSnapshot
 
 from .models import Opportunity
+
+if TYPE_CHECKING:
+    from funding_arbitrage.execution.base import PaperFill
+    from funding_arbitrage.services.series import EntryGapRule
 
 _EIGHT = Decimal("8")
 
@@ -110,3 +116,29 @@ def expected_net(forecast_8h: Decimal, horizon_hours: Decimal, cost: Decimal) ->
     """Forecast funding over the horizon minus the round-trip cost (per unit notional)."""
 
     return forecast_8h * horizon_hours / _EIGHT - cost
+
+
+def executable_entry_gap(fills: Sequence[PaperFill]) -> Decimal | None:
+    """Sell minus buy price of the entry fills, per unit of their mean.
+
+    Positive when the position sold the dearer venue. The fill prices already hold
+    spread and depth, so this is the price gap the position starts with; it carried
+    into the closed trades' price result. None unless there is one buy and one sell.
+    """
+
+    opening = [fill for fill in fills if fill.purpose == "open"]
+    buys = [fill.price for fill in opening if fill.side == "BUY"]
+    sells = [fill.price for fill in opening if fill.side == "SELL"]
+    if len(buys) != 1 or len(sells) != 1:
+        return None
+    return (sells[0] - buys[0]) / ((sells[0] + buys[0]) / Decimal("2"))
+
+
+def entry_gap_value(rule: EntryGapRule, opportunity: Opportunity, gap: Decimal) -> Decimal:
+    """Likely funding over the horizon, less round-trip fees, plus the entry gap."""
+
+    return (
+        rule.funding_realisation * opportunity.funding_rate_8h * rule.horizon_hours / _EIGHT
+        - opportunity.trading_fees
+        + rule.gap_weight * gap
+    )

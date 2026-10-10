@@ -67,6 +67,25 @@ class EdgeForecast(BaseModel):
     min_expected_net: Decimal = Decimal("0")
 
 
+class EntryGapRule(BaseModel):
+    """Price the gap between the legs' entry fills into the entry decision.
+
+    The scanner ignores what the two venues' prices are doing. In 234 closed paper
+    positions (live and v2 stacks, 2026-10-03..10) the gap between the entry fills
+    carried into the trade's price result (correlation 0.45), and the funding that
+    actually settled was a flat 0.11-0.15% per trade whatever rate the entry saw.
+    An entry has to pay its round-trip fees and its entry gap from the funding it is
+    likely to receive; in that replay this halved the loss in both halves of the data.
+    """
+
+    # Share of the promised funding that settled on average (0.23 in the replay).
+    funding_realisation: Decimal = Field(default=Decimal("0.23"), gt=0, le=1)
+    horizon_hours: Decimal = Field(default=Decimal("24"), gt=0)
+    gap_weight: Decimal = Field(default=Decimal("1"), ge=0)
+    # Per unit of notional, like ``EdgeForecast.min_expected_net``.
+    min_expected_value: Decimal = Decimal("0")
+
+
 class SelectionRules(BaseModel):
     """Entry refinements on top of ``entry``; evaluated on the confirmed opportunity."""
 
@@ -79,6 +98,7 @@ class SelectionRules(BaseModel):
     forecast: EdgeForecast | None = None
     # "expected_net" needs a forecast; "score" keeps the scanner's ranking.
     rank_by: Literal["score", "expected_net"] = "score"
+    entry_gap: EntryGapRule | None = None
 
     @model_validator(mode="after")
     def ranking_needs_forecast(self) -> SelectionRules:
@@ -172,6 +192,10 @@ class SeriesConfig(BaseModel):
             # Absent blocks stay out, so older series keep their recorded hash.
             if series.get(block) is None:
                 series.pop(block, None)
+        selection = series.get("selection")
+        if selection is not None and selection.get("entry_gap") is None:
+            # Added after the round-2 series started; absent, it stays out too.
+            selection.pop("entry_gap", None)
         return {
             "simulator_version": simulator_version,
             "series": series,

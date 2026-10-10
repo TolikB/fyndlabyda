@@ -18,6 +18,7 @@ from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.market_data.orderbook import OrderSide
 from funding_arbitrage.opportunity.models import FeeSchedule, Opportunity, OpportunityStatus
 from funding_arbitrage.opportunity.selection import (
+    executable_entry_gap,
     expected_net,
     forecast_edge_8h,
     interval_ratio,
@@ -159,11 +160,14 @@ def test_v2_series_file_is_valid() -> None:
         "patient-strict",
         "patient-top4",
         "patient-long",
+        "patient-gap",
     }
     # The control series keeps the live candidate's rules, so it keeps no new block.
     assert "selection" not in by_name["control"].identity("2.0.1", {})["series"]
-    # Round-2 series each change exactly one rule of patient.
+    # Running series without the round-3 rule keep their recorded hash.
     patient = by_name["patient"].identity("2.0.1", {})["series"]
+    assert "entry_gap" not in patient["selection"]
+    # Round-2 and round-3 series each change exactly one rule of patient.
     expected = {
         "patient-strict": ["entry.min_funding_rate_8h"],
         "patient-top4": [
@@ -172,6 +176,7 @@ def test_v2_series_file_is_valid() -> None:
             "max_total_notional_usdt",
         ],
         "patient-long": ["exit.max_hold_hours"],
+        "patient-gap": ["selection.entry_gap"],
     }
     for name, keys in expected.items():
         variant = by_name[name].identity("2.0.1", {})["series"]
@@ -235,6 +240,39 @@ def test_selection_rejects_without_touching_the_account(
     assert not item.account.positions
     assert item.account.cash == D("1000")
     assert item.rejections == {reason: 1}
+
+
+@pytest.mark.parametrize(
+    "high_mid,opened",
+    [
+        # Selling the high-funding venue 1% below the long venue: the entry gap
+        # costs more than the funding likely to settle over a day.
+        ("99", False),
+        # The same funding with no price gap pays its fees.
+        ("100", True),
+    ],
+)
+def test_entry_gap_rule_prices_the_gap_between_the_entry_fills(high_mid: str, opened: bool) -> None:
+    market = cross_market(high_rate="0.01", high_history="0.01", high_mid=high_mid)
+    selection = {"entry_gap": {"funding_realisation": "0.23", "horizon_hours": "24"}}
+    runner, item, opportunity = harness(v2_config(selection=selection), market)
+    runner._open_entries(item, market, [opportunity], NOW)
+    assert bool(item.account.positions) is opened
+    assert item.rejections == ({} if opened else {"selection_entry_gap": 1})
+
+
+def test_executable_entry_gap_is_the_sell_minus_buy_fill_price() -> None:
+    market = cross_market(high_rate="0.01", high_history="0.01", high_mid="99")
+    runner, item, opportunity = harness(v2_config(), market)
+    position, fills = runner.simulator.open(
+        opportunity, D("50"), market, NOW, series_id=item.account.series_id
+    )
+    gap = executable_entry_gap(fills)
+    buy = next(fill.price for fill in fills if fill.side == "BUY")
+    sell = next(fill.price for fill in fills if fill.side == "SELL")
+    assert gap == (sell - buy) / ((sell + buy) / 2)
+    assert gap is not None and gap < D("-0.009")
+    assert executable_entry_gap([]) is None
 
 
 def test_scanner_stage_rules_keep_book_slots_free() -> None:
