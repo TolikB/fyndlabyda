@@ -18,6 +18,8 @@ from funding_arbitrage.domain.events import (
 
 ZERO = Decimal("0")
 BPS = Decimal("10000")
+# The deepest book level any feature reads (book_imbalance_l20).
+ORDERFLOW_BOOK_DEPTH = 20
 
 
 class OrderFlowFeatureSnapshot(BaseModel):
@@ -69,6 +71,18 @@ class OrderFlowFeatureEngine:
     def on_book(
         self, book: BookSnapshot, *, quality: DataQuality = DataQuality.VALID
     ) -> OrderFlowFeatureSnapshot:
+        self.update_book(book, quality=quality)
+        return self.snapshot(book.exchange_timestamp)
+
+    def update_book(
+        self, book: BookSnapshot, *, quality: DataQuality = DataQuality.VALID
+    ) -> None:
+        """Advance the book state; read features with snapshot() when they are used.
+
+        Building every feature on each book update, only for the caller to drop
+        them, was a third of the multi-regime runtime's CPU.
+        """
+
         self._require_instrument(book.instrument)
         self._require_monotonic(book.exchange_timestamp, self._last_book_timestamp, "book")
         self._last_book_timestamp = book.exchange_timestamp
@@ -76,7 +90,8 @@ class OrderFlowFeatureEngine:
         self._book_quality = quality
         if quality is not DataQuality.VALID or not book.bids or not book.asks:
             self._previous_top = None
-            return self.snapshot(book.exchange_timestamp)
+            self._purge(book.exchange_timestamp)
+            return
         current_top = (
             book.bids[0].price,
             book.bids[0].quantity,
@@ -95,7 +110,6 @@ class OrderFlowFeatureEngine:
         if normalized_5s is not None:
             self._ofi_5s_history.append((book.exchange_timestamp, normalized_5s))
         self._purge_zscore(book.exchange_timestamp)
-        return self.snapshot(book.exchange_timestamp)
 
     def on_trade(self, trade: TradeTick) -> None:
         self._require_instrument(trade.instrument)
@@ -147,7 +161,7 @@ class OrderFlowFeatureEngine:
             ofi_zscore_5s=self._ofi_zscore(now),
             book_imbalance_l1=self._book_imbalance(1),
             book_imbalance_l5=self._book_imbalance(5),
-            book_imbalance_l20=self._book_imbalance(20),
+            book_imbalance_l20=self._book_imbalance(ORDERFLOW_BOOK_DEPTH),
             trade_imbalance_5s=self._trade_imbalance(now, 5),
             cvd=self._cvd,
         )

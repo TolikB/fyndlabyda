@@ -42,6 +42,7 @@ from funding_arbitrage.features.derivatives import (
     StaleDerivativesEventError,
 )
 from funding_arbitrage.features.orderflow import (
+    ORDERFLOW_BOOK_DEPTH,
     OrderFlowFeatureEngine,
     OrderFlowFeatureSnapshot,
 )
@@ -779,9 +780,12 @@ class MultiRegimeEngine:
                     event.metadata.exchange_timestamp
                 )
             if result.status is BookApplyStatus.APPLIED:
-                reconstructed = state.local_book.snapshot()
+                # Order-flow features read at most 20 levels and only when a
+                # decision needs them; rebuilding the whole 200-level book and
+                # every feature on each delta held a core the paper cycles needed.
+                reconstructed = state.local_book.snapshot(ORDERFLOW_BOOK_DEPTH)
                 state.latest_book = reconstructed
-                state.orderflow_engine.on_book(
+                state.orderflow_engine.update_book(
                     reconstructed,
                     quality=state.latest_book_quality,
                 )

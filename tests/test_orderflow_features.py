@@ -132,3 +132,23 @@ def test_out_of_order_or_wrong_instrument_events_are_rejected() -> None:
                 exchange_timestamp=NOW,
             )
         )
+
+
+def test_book_updates_without_snapshots_leave_the_same_features() -> None:
+    # The runtime only advances state per book and reads features at decisions;
+    # skipping the per-update snapshot must not change what a decision sees.
+    with_snapshots = OrderFlowFeatureEngine(INSTRUMENT, zscore_history_seconds=30)
+    state_only = OrderFlowFeatureEngine(INSTRUMENT, zscore_history_seconds=30)
+    updates = [
+        (_book(NOW + timedelta(seconds=step), bid_quantity=str(10 + step % 7),
+               ask_price=str(101 + step % 2), sequence=step), DataQuality.VALID)
+        for step in range(40)
+    ]
+    updates[17] = (updates[17][0], DataQuality.GAP)
+    for book, quality in updates:
+        with_snapshots.on_book(book, quality=quality)
+        state_only.update_book(book, quality=quality)
+
+    for offset in (39, 45, 70):
+        at = NOW + timedelta(seconds=offset)
+        assert state_only.snapshot(at) == with_snapshots.snapshot(at)
