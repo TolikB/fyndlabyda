@@ -469,3 +469,39 @@ async def test_router_commits_quality_only_after_durable_publish() -> None:
     assert committed.last_sequence == 100
     assert writer.calls == 2
     assert writer.events[0].metadata.quality is DataQuality.VALID
+
+
+class _BatchRecordingWriter:
+    def __init__(self) -> None:
+        self.batches: list[list[EventEnvelope]] = []
+
+    async def publish(self, event: EventEnvelope) -> None:
+        self.batches.append([event])
+
+    async def publish_many(self, events: list[EventEnvelope]) -> None:
+        self.batches.append(list(events))
+
+
+async def test_router_journals_a_batch_behind_one_commit_with_sequential_quality() -> None:
+    # The delta is judged after the snapshot ahead of it in the batch, exactly as
+    # if the two had been published one by one.
+    monitor = _monitor()
+    writer = _BatchRecordingWriter()
+    router = CanonicalEventRouter(writer, monitor)  # type: ignore[arg-type]
+    consumed: list[str] = []
+
+    async def consume(event: EventEnvelope) -> None:
+        consumed.append(event.metadata.event_id)
+
+    router.subscribe(consume)
+    events = [_event(_snapshot()), _event(_delta(101, 101, 100))]
+
+    await router.publish_many(events)
+
+    assert len(writer.batches) == 1
+    assert [item.metadata.quality for item in writer.batches[0]] == [
+        DataQuality.VALID,
+        DataQuality.VALID,
+    ]
+    assert consumed == [event.metadata.event_id for event in events]
+    assert monitor.status(IDENTITY, now=NOW).last_sequence == 101

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -32,6 +33,7 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBookLevel,
     Ticker,
 )
+from funding_arbitrage.exchanges.base.stream_batches import message_batches, publish_events
 from funding_arbitrage.exchanges.gate.orderbook import (
     GateBookUpdate,
     GateOrderBookNormalizer,
@@ -760,44 +762,86 @@ class GatePublicAdapter(ExchangeAdapter):
                                 }
                             )
                         )
-                    async for message in socket:
-                        payload = json.loads(
-                            message.decode() if isinstance(message, bytes) else message
-                        )
-                        if not isinstance(payload, dict):
-                            raise InvalidResponseError(
-                                "invalid Gate WebSocket orderbook payload"
+                    async with aclosing(message_batches(socket)) as batches:
+                        async for messages in batches:
+                            (
+                                books,
+                                progressed,
+                                failure,
+                            ) = await self._consume_ws_orderbook_messages(
+                                messages, states, instrument_type, depth, channel
                             )
-                        if payload.get("error"):
-                            raise InvalidResponseError(
-                                f"Gate orderbook subscription failed: {payload}"
-                            )
-                        valid_event = (
-                            payload.get("event") == "update"
-                            if instrument_type is InstrumentType.SPOT
-                            else payload.get("event") == "all"
-                        )
-                        if payload.get("channel") != channel or not valid_event:
-                            continue
-                        update = await self._process_ws_orderbook_update(
-                            payload.get("result"),
-                            states,
-                            instrument_type,
-                            depth,
-                        )
-                        if update is None:
-                            continue
-                        symbol = update.event.payload.instrument.exchange_symbol
-                        book = states[symbol].legacy_book(update, instrument_type)
-                        reconnects = 0
-                        if book is not None:
-                            yield book
+                            if progressed:
+                                reconnects = 0
+                            for book in books:
+                                yield book
+                            if failure is not None:
+                                raise failure
             except (TimeoutError, OSError, websockets.WebSocketException) as exc:
                 websocket_reconnects_total.labels(self.name).inc()
                 reconnects += 1
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("Gate orderbook WebSocket reconnect limit reached") from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    async def _consume_ws_orderbook_messages(
+        self,
+        messages: list[Any],
+        states: dict[str, GateOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+        channel: str,
+    ) -> tuple[list[OrderBook], bool, Exception | None]:
+        """Apply received messages in order and journal them as one batch.
+
+        Processing stops at a failed message. Everything applied before it is
+        still journaled; its books come back with whether any update was applied
+        and the error to raise.
+        """
+
+        applied: list[GateBookUpdate] = []
+        failure: Exception | None = None
+        for message in messages:
+            try:
+                payload = json.loads(
+                    message.decode() if isinstance(message, bytes) else message
+                )
+                if not isinstance(payload, dict):
+                    raise InvalidResponseError("invalid Gate WebSocket orderbook payload")
+                if payload.get("error"):
+                    raise InvalidResponseError(
+                        f"Gate orderbook subscription failed: {payload}"
+                    )
+                valid_event = (
+                    payload.get("event") == "update"
+                    if instrument_type is InstrumentType.SPOT
+                    else payload.get("event") == "all"
+                )
+                if payload.get("channel") != channel or not valid_event:
+                    continue
+                update = self._apply_ws_orderbook_update(
+                    payload.get("result"), states, instrument_type, depth
+                )
+            except Exception as error:
+                failure = error
+                break
+            if update is not None:
+                applied.append(update)
+        if self.canonical_book_event_sink is not None:
+            await publish_events(
+                self.canonical_book_event_sink, [update.event for update in applied]
+            )
+        books = [
+            book
+            for update in applied
+            if (
+                book := states[update.event.payload.instrument.exchange_symbol].legacy_book(
+                    update, instrument_type
+                )
+            )
+            is not None
+        ]
+        return books, bool(applied), failure
 
     async def _process_ws_orderbook_update(
         self,

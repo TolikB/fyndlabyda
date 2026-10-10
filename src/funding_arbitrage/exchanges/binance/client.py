@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -31,6 +32,7 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBookLevel,
     Ticker,
 )
+from funding_arbitrage.exchanges.base.stream_batches import message_batches, publish_events
 from funding_arbitrage.exchanges.binance.orderbook import (
     BinanceBookUpdate,
     BinanceOrderBookNormalizer,
@@ -720,21 +722,24 @@ class BinancePublicAdapter(ExchangeAdapter):
                         )
                     )
                     states.update(zip(symbols, bootstrapped, strict=True))
-                    for payload in buffered_payloads:
-                        book = await self._consume_ws_orderbook_payload(
-                            payload, states, instrument_type
-                        )
-                        if book is not None:
-                            reconnects = 0
-                            yield book
-                    async for message in socket:
-                        decoded_payload = self._decode_ws_payload(message)
-                        book = await self._consume_ws_orderbook_payload(
-                            decoded_payload, states, instrument_type
-                        )
-                        if book is not None:
-                            reconnects = 0
-                            yield book
+                    books, failure = await self._consume_ws_orderbook_messages(
+                        buffered_payloads, states, instrument_type
+                    )
+                    for book in books:
+                        reconnects = 0
+                        yield book
+                    if failure is not None:
+                        raise failure
+                    async with aclosing(message_batches(socket)) as batches:
+                        async for messages in batches:
+                            books, failure = await self._consume_ws_orderbook_messages(
+                                messages, states, instrument_type
+                            )
+                            for book in books:
+                                reconnects = 0
+                                yield book
+                            if failure is not None:
+                                raise failure
             except (
                 BinanceOrderBookSequenceGap,
                 NetworkError,
@@ -779,6 +784,54 @@ class BinancePublicAdapter(ExchangeAdapter):
         if isinstance(payload.get("data"), dict):
             return dict(payload["data"])
         return payload
+
+    async def _consume_ws_orderbook_messages(
+        self,
+        messages: list[Any],
+        states: dict[str, BinanceOrderBookNormalizer],
+        instrument_type: InstrumentType,
+    ) -> tuple[list[OrderBook], Exception | None]:
+        """Apply received messages in order and journal them as one batch.
+
+        Processing stops at a gap or a failed message. Everything applied before
+        it is still journaled, and its books come back with the error to raise.
+        """
+
+        applied: list[tuple[BinanceOrderBookNormalizer, BinanceBookUpdate]] = []
+        failure: Exception | None = None
+        for message in messages:
+            try:
+                payload = self._decode_ws_payload(message)
+            except Exception as error:
+                failure = error
+                break
+            if payload is None or payload.get("e") != "depthUpdate":
+                continue
+            state = states.get(str(payload.get("s", "")).upper())
+            if state is None:
+                continue
+            try:
+                update = state.apply(payload)
+            except Exception as error:
+                failure = error
+                break
+            applied.append((state, update))
+            if update.result.status in {BookApplyStatus.GAP, BookApplyStatus.REJECTED}:
+                failure = BinanceOrderBookSequenceGap(
+                    update.result.reason or "orderbook_sequence_gap"
+                )
+                break
+        if self.canonical_book_event_sink is not None:
+            await publish_events(
+                self.canonical_book_event_sink, [update.event for _, update in applied]
+            )
+        books = [
+            book
+            for state, update in applied
+            if update.result.status not in {BookApplyStatus.GAP, BookApplyStatus.REJECTED}
+            and (book := state.legacy_book(update, instrument_type)) is not None
+        ]
+        return books, failure
 
     async def _consume_ws_orderbook_payload(
         self,

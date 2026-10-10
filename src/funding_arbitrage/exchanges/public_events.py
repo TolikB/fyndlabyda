@@ -40,6 +40,7 @@ from funding_arbitrage.domain.events import (
     snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
+from funding_arbitrage.exchanges.base.stream_batches import publish_events
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.market_data.quality import StreamIdentity
 from funding_arbitrage.market_data.venue_metadata import (
@@ -1000,9 +1001,9 @@ class PublicEventSupervisor:
         stream: str,
         source: str,
     ) -> None:
-        for event in events:
-            await self.event_sink(event)
-            public_events_total.labels(profile.venue, stream, source).inc()
+        # ccxt delivers trades in bursts; journal a burst behind one commit.
+        await publish_events(self.event_sink, events)
+        public_events_total.labels(profile.venue, stream, source).inc(len(events))
 
     async def _wait(self, seconds: float) -> None:
         try:

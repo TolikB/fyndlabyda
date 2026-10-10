@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -36,6 +37,7 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBookLevel,
     Ticker,
 )
+from funding_arbitrage.exchanges.base.stream_batches import message_batches, publish_events
 from funding_arbitrage.exchanges.bybit.orderbook import (
     BybitBookEvent,
     BybitBookUpdate,
@@ -878,36 +880,16 @@ class BybitPublicAdapter(ExchangeAdapter):
                             }
                         )
                     )
-                    async for message in socket:
-                        payload = json.loads(
-                            message.decode() if isinstance(message, bytes) else message
-                        )
-                        if isinstance(payload, dict) and payload.get("success") is False:
-                            raise InvalidResponseError(
-                                f"Bybit WebSocket subscription failed: {payload}"
+                    async with aclosing(message_batches(socket)) as batches:
+                        async for messages in batches:
+                            books, failure = await self._consume_ws_orderbook_messages(
+                                messages, states, instrument_type, depth
                             )
-                        if not (
-                            isinstance(payload, dict)
-                            and str(payload.get("topic", "")).startswith("orderbook.")
-                        ):
-                            continue
-                        update = await self._process_ws_orderbook_update(
-                            payload, states, instrument_type, depth
-                        )
-                        if update is not None and update.result.status.value == "GAP":
-                            raise BybitOrderBookSequenceGap(
-                                update.result.reason or "orderbook_sequence_gap"
-                            )
-                        book = (
-                            states[str(payload["data"]["s"])].legacy_book(
-                                update, instrument_type
-                            )
-                            if update is not None
-                            else None
-                        )
-                        if book is not None:
-                            reconnects = 0
-                            yield book
+                            for book in books:
+                                reconnects = 0
+                                yield book
+                            if failure is not None:
+                                raise failure
             except (
                 BybitOrderBookSequenceGap,
                 TimeoutError,
@@ -937,6 +919,61 @@ class BybitPublicAdapter(ExchangeAdapter):
             return None
         state = states[str(data.get("s", ""))]
         return state.legacy_book(update, instrument_type)
+
+    async def _consume_ws_orderbook_messages(
+        self,
+        messages: list[Any],
+        states: dict[str, BybitOrderBookNormalizer],
+        instrument_type: InstrumentType,
+        depth: int,
+    ) -> tuple[list[OrderBook], Exception | None]:
+        """Apply received messages in order and journal them as one batch.
+
+        Processing stops at a gap or a failed message. Everything applied before
+        it is still journaled, and its books come back with the error to raise.
+        """
+
+        applied: list[tuple[str, BybitBookUpdate]] = []
+        failure: Exception | None = None
+        for message in messages:
+            try:
+                payload = json.loads(
+                    message.decode() if isinstance(message, bytes) else message
+                )
+                if isinstance(payload, dict) and payload.get("success") is False:
+                    raise InvalidResponseError(
+                        f"Bybit WebSocket subscription failed: {payload}"
+                    )
+                if not (
+                    isinstance(payload, dict)
+                    and str(payload.get("topic", "")).startswith("orderbook.")
+                ):
+                    continue
+                update = self._apply_ws_orderbook_update(
+                    payload, states, instrument_type, depth
+                )
+            except Exception as error:
+                failure = error
+                break
+            if update is None:
+                continue
+            applied.append((str(payload["data"]["s"]), update))
+            if update.result.status.value == "GAP":
+                failure = BybitOrderBookSequenceGap(
+                    update.result.reason or "orderbook_sequence_gap"
+                )
+                break
+        if self.canonical_book_event_sink is not None:
+            await publish_events(
+                self.canonical_book_event_sink, [update.event for _, update in applied]
+            )
+        books = [
+            book
+            for symbol, update in applied
+            if update.result.status.value != "GAP"
+            and (book := states[symbol].legacy_book(update, instrument_type)) is not None
+        ]
+        return books, failure
 
     async def _process_ws_orderbook_update(
         self,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from typing import Any
 
@@ -40,27 +41,60 @@ class CanonicalEventRouter:
             raise ValueError("canonical event consumer already subscribed")
         self._consumers.append(consumer)
 
+    async def __call__(self, event: EventEnvelope[Any]) -> None:
+        await self.publish(event)
+
     async def publish(self, event: EventEnvelope[Any]) -> None:
-        identity = identity_for_event(event)
-        lock = self._stream_locks.setdefault(identity, asyncio.Lock())
-        async with lock:
-            quality = self.quality_monitor.preview(event, identity=identity)
-            routed = event.model_copy(
-                update={
-                    "metadata": event.metadata.model_copy(
-                        update={"quality": quality.quality}
-                    )
-                }
+        await self.publish_many((event,))
+
+    async def publish_many(self, events: Sequence[EventEnvelope[Any]]) -> None:
+        """Publish events in order behind one durability wait.
+
+        Every stream involved stays locked from preview to consumers, so no other
+        event of those streams can be observed in between and the post-commit
+        observations reproduce the previews exactly.
+        """
+
+        if not events:
+            return
+        identities = [identity_for_event(event) for event in events]
+        async with AsyncExitStack() as stack:
+            # A fixed lock order keeps concurrent batches from deadlocking.
+            for identity in sorted(set(identities)):
+                lock = self._stream_locks.setdefault(identity, asyncio.Lock())
+                await stack.enter_async_context(lock)
+            previews = self.quality_monitor.preview_many(
+                list(zip(events, identities, strict=True))
             )
-            await self.writer.publish(routed)
-            committed = self.quality_monitor.observe(event, identity=identity)
-            if committed != quality:
-                raise RuntimeError(
-                    "canonical stream quality changed during durable publication"
+            routed = [
+                event.model_copy(
+                    update={
+                        "metadata": event.metadata.model_copy(
+                            update={"quality": preview.quality}
+                        )
+                    }
                 )
-            self._set_metric(committed)
-            for consumer in tuple(self._consumers):
-                await consumer(routed)
+                for event, preview in zip(events, previews, strict=True)
+            ]
+            publish_many = getattr(self.writer, "publish_many", None)
+            if publish_many is not None:
+                await publish_many(routed)
+            else:
+                # Writers that only take single events (test and load harness
+                # stubs) are fed one at a time, as before.
+                for item in routed:
+                    await self.writer.publish(item)
+            for event, identity, preview, item in zip(
+                events, identities, previews, routed, strict=True
+            ):
+                committed = self.quality_monitor.observe(event, identity=identity)
+                if committed != preview:
+                    raise RuntimeError(
+                        "canonical stream quality changed during durable publication"
+                    )
+                self._set_metric(committed)
+                for consumer in tuple(self._consumers):
+                    await consumer(item)
 
     def required_streams_usable(
         self,

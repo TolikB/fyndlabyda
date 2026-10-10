@@ -271,7 +271,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     event_router = CanonicalEventRouter(event_writer, event_quality_monitor)
     canonical_high_frequency_event_sink = _canonical_high_frequency_event_sink(
         active_settings,
-        event_router.publish,
+        # The router itself, not its bound publish, so streams can reach
+        # publish_many and journal what they received behind one commit.
+        event_router,
     )
     if canonical_high_frequency_event_sink is None:
         logger.warning(
@@ -306,7 +308,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     public_events = (
         create_public_event_supervisor(
             active_settings,
-            canonical_high_frequency_event_sink or event_router.publish,
+            canonical_high_frequency_event_sink or event_router,
         )
         if active_settings.market_data_mode == "live_public"
         and active_settings.run_mode in {"paper_test", "live"}

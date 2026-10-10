@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -93,9 +93,27 @@ class DataQualityMonitor:
         """Evaluate an event against a copy without advancing authoritative state."""
 
         key = identity or identity_for_event(event)
-        current = self._states.get(key)
-        prospective = replace(current) if current is not None else _StreamState()
-        return self._observe_state(key, prospective, event)
+        return self.preview_many(((event, key),))[0]
+
+    def preview_many(
+        self, events: Sequence[tuple[EventEnvelope[Any], StreamIdentity]]
+    ) -> list[StreamQualitySnapshot]:
+        """Evaluate events in order against copies; each sees the ones before it.
+
+        Observing the same events in the same order after they are durable then
+        reproduces these snapshots exactly.
+        """
+
+        prospective: dict[StreamIdentity, _StreamState] = {}
+        snapshots: list[StreamQualitySnapshot] = []
+        for event, key in events:
+            state = prospective.get(key)
+            if state is None:
+                current = self._states.get(key)
+                state = replace(current) if current is not None else _StreamState()
+                prospective[key] = state
+            snapshots.append(self._observe_state(key, state, event))
+        return snapshots
 
     def observe(
         self,

@@ -141,32 +141,36 @@ class CanonicalEventWriter:
     async def publish(self, event: EventEnvelope[Any]) -> None:
         """Return only after the event is committed or an existing ID is verified."""
 
+        await self.publish_many((event,))
+
+    async def publish_many(self, events: Sequence[EventEnvelope[Any]]) -> None:
+        """Return only after every event is committed or its existing ID verified.
+
+        The events enter the queue together and in order, so they share commits:
+        a stream that waited for one commit per event fell tens of seconds behind
+        a busy venue.
+        """
+
+        if not events:
+            return
         loop = asyncio.get_running_loop()
-        durable: asyncio.Future[None] = loop.create_future()
-        queued = _QueuedEvent(event=event, durable=durable)
+        queued = [
+            _QueuedEvent(event=event, durable=loop.create_future()) for event in events
+        ]
         async with self._publish_lock:
             self._raise_if_failed()
             task = self._task
             if not self._accepting or task is None:
                 raise RuntimeError("canonical event writer is not accepting events")
-            put_task = asyncio.create_task(self.queue.put(queued))
-            try:
-                done, _ = await asyncio.wait(
-                    {put_task, task}, return_when=asyncio.FIRST_COMPLETED
-                )
-                if task in done:
-                    await _cancel(put_task)
-                    self._raise_if_failed()
-                    raise EventWriterFailed("canonical event writer stopped unexpectedly")
-                await put_task
-            except BaseException:
-                await _cancel(put_task)
-                raise
+            for item in queued:
+                await self._enqueue(item, task)
 
         task = self._task
         if task is None:
             raise EventWriterFailed("canonical event writer stopped before durability ACK")
-        durable_task = asyncio.create_task(_await_durable(durable))
+        durable_task = asyncio.create_task(
+            _await_durable([item.durable for item in queued])
+        )
         try:
             done, _ = await asyncio.wait(
                 {durable_task, task}, return_when=asyncio.FIRST_COMPLETED
@@ -178,7 +182,7 @@ class CanonicalEventWriter:
             try:
                 await durable_task
             except asyncio.CancelledError:
-                if not durable.cancelled():
+                if not any(item.durable.cancelled() for item in queued):
                     self._raise_if_failed()
                 raise
             except BaseException:
@@ -188,6 +192,26 @@ class CanonicalEventWriter:
         await _cancel(durable_task)
         self._raise_if_failed()
         raise EventWriterFailed("canonical event writer stopped before durability ACK")
+
+    async def _enqueue(self, item: _QueuedEvent, task: asyncio.Task[None]) -> None:
+        if not self.queue.full():
+            # Completes without suspending; only a full queue must also watch the
+            # worker, which may die while the producer waits for space.
+            await self.queue.put(item)
+            return
+        put_task = asyncio.create_task(self.queue.put(item))
+        try:
+            done, _ = await asyncio.wait(
+                {put_task, task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if task in done:
+                await _cancel(put_task)
+                self._raise_if_failed()
+                raise EventWriterFailed("canonical event writer stopped unexpectedly")
+            await put_task
+        except BaseException:
+            await _cancel(put_task)
+            raise
 
     async def stop(self) -> None:
         task = self._task
@@ -387,8 +411,9 @@ def _is_retryable_storage_error(error: BaseException) -> bool:
     return False
 
 
-async def _await_durable(future: asyncio.Future[None]) -> None:
-    await future
+async def _await_durable(futures: Sequence[asyncio.Future[None]]) -> None:
+    for future in futures:
+        await future
 
 
 async def _cancel(task: asyncio.Task[object]) -> None:

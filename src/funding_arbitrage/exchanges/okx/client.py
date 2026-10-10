@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -33,6 +34,7 @@ from funding_arbitrage.exchanges.base.models import (
     OrderBookLevel,
     Ticker,
 )
+from funding_arbitrage.exchanges.base.stream_batches import message_batches, publish_events
 from funding_arbitrage.exchanges.okx.orderbook import (
     OkxBookUpdate,
     OkxOrderBookNormalizer,
@@ -876,42 +878,21 @@ class OkxPublicAdapter(ExchangeAdapter):
                             }
                         )
                     )
-                    async for message in socket:
-                        payload = json.loads(
-                            message.decode() if isinstance(message, bytes) else message
-                        )
-                        if isinstance(payload, dict) and payload.get("event") == "error":
-                            raise InvalidResponseError(
-                                f"OKX orderbook subscription failed: {payload}"
+                    async with aclosing(message_batches(socket)) as batches:
+                        async for messages in batches:
+                            (
+                                books,
+                                progressed,
+                                failure,
+                            ) = await self._consume_ws_orderbook_messages(
+                                messages, states, instrument_types, depth
                             )
-                        if not (
-                            isinstance(payload, dict)
-                            and payload.get("arg", {}).get("channel") == "books"
-                        ):
-                            continue
-                        symbol = str(payload.get("arg", {}).get("instId", ""))
-                        instrument_type = instrument_types.get(symbol)
-                        if instrument_type is None:
-                            continue
-                        for row in payload.get("data", []):
-                            update = await self._process_ws_orderbook_update(
-                                symbol,
-                                row,
-                                payload.get("action"),
-                                states,
-                                instrument_type,
-                                depth,
-                            )
-                            if update is None:
-                                continue
-                            if update.result.status.value == "GAP":
-                                raise OkxOrderBookSequenceGap(
-                                    update.result.reason or "orderbook_sequence_gap"
-                                )
-                            book = states[symbol].legacy_book(update, instrument_type)
-                            reconnects = 0
-                            if book is not None:
+                            if progressed:
+                                reconnects = 0
+                            for book in books:
                                 yield book
+                            if failure is not None:
+                                raise failure
             except (
                 OkxOrderBookSequenceGap,
                 TimeoutError,
@@ -923,6 +904,74 @@ class OkxPublicAdapter(ExchangeAdapter):
                 if self.max_reconnects is not None and reconnects > self.max_reconnects:
                     raise NetworkError("OKX orderbook WebSocket reconnect limit reached") from exc
                 await self._sleep(min(30.0, 2.0 ** min(reconnects - 1, 5)))
+
+    async def _consume_ws_orderbook_messages(
+        self,
+        messages: list[Any],
+        states: dict[str, OkxOrderBookNormalizer],
+        instrument_types: dict[str, InstrumentType],
+        depth: int,
+    ) -> tuple[list[OrderBook], bool, Exception | None]:
+        """Apply received messages in order and journal them as one batch.
+
+        Processing stops at a gap or a failed message. Everything applied before
+        it is still journaled; its books come back with whether the stream made
+        progress (an update without a gap) and the error to raise.
+        """
+
+        applied: list[tuple[str, InstrumentType, OkxBookUpdate]] = []
+        failure: Exception | None = None
+        for message in messages:
+            try:
+                payload = json.loads(
+                    message.decode() if isinstance(message, bytes) else message
+                )
+                if isinstance(payload, dict) and payload.get("event") == "error":
+                    raise InvalidResponseError(
+                        f"OKX orderbook subscription failed: {payload}"
+                    )
+            except Exception as error:
+                failure = error
+                break
+            if not (
+                isinstance(payload, dict)
+                and payload.get("arg", {}).get("channel") == "books"
+            ):
+                continue
+            symbol = str(payload.get("arg", {}).get("instId", ""))
+            instrument_type = instrument_types.get(symbol)
+            if instrument_type is None:
+                continue
+            for row in payload.get("data", []):
+                try:
+                    update = self._apply_ws_orderbook_update(
+                        symbol, row, payload.get("action"), states, instrument_type, depth
+                    )
+                except Exception as error:
+                    failure = error
+                    break
+                if update is None:
+                    continue
+                applied.append((symbol, instrument_type, update))
+                if update.result.status.value == "GAP":
+                    failure = OkxOrderBookSequenceGap(
+                        update.result.reason or "orderbook_sequence_gap"
+                    )
+                    break
+            if failure is not None:
+                break
+        if self.canonical_book_event_sink is not None:
+            await publish_events(
+                self.canonical_book_event_sink, [update.event for *_, update in applied]
+            )
+        books = [
+            book
+            for symbol, instrument_type, update in applied
+            if update.result.status.value != "GAP"
+            and (book := states[symbol].legacy_book(update, instrument_type)) is not None
+        ]
+        progressed = any(update.result.status.value != "GAP" for *_, update in applied)
+        return books, progressed, failure
 
     async def _process_ws_orderbook_update(
         self,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -9,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from funding_arbitrage.database.models import Base, CanonicalEventRecord
 from funding_arbitrage.exchanges.base.models import InstrumentType
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
+from funding_arbitrage.exchanges.bybit.orderbook import BybitOrderBookSequenceGap
 from funding_arbitrage.services.event_writer import CanonicalEventWriter
 
 FRAME = {
@@ -59,3 +62,41 @@ async def test_storage_failure_prevents_book_update_publication() -> None:
 
     with pytest.raises(OSError, match="synthetic journal outage"):
         await adapter._process_ws_orderbook_update(FRAME, {}, InstrumentType.PERPETUAL, 50)
+
+
+async def test_bybit_frames_received_together_are_journaled_as_one_batch() -> None:
+    # Everything up to and including the gap is journaled in one commit; nothing
+    # after it is applied, and no book is handed on for the gap itself.
+    class BatchSink:
+        def __init__(self) -> None:
+            self.batches: list[list[object]] = []
+
+        async def __call__(self, event: object) -> None:
+            self.batches.append([event])
+
+        async def publish_many(self, events: list[object]) -> None:
+            self.batches.append(list(events))
+
+    sink = BatchSink()
+    adapter = BybitPublicAdapter(canonical_book_event_sink=sink)
+    delta = {
+        **FRAME,
+        "type": "delta",
+        "ts": FRAME["ts"] + 10,
+        "cts": FRAME["cts"] + 10,
+        "data": {**FRAME["data"], "u": 11, "seq": 1001, "b": [["100", "3"]], "a": []},
+    }
+    gap = {**delta, "data": {**delta["data"], "u": 13, "seq": 1003}}
+    after_gap = {**delta, "data": {**delta["data"], "u": 14, "seq": 1004}}
+
+    books, failure = await adapter._consume_ws_orderbook_messages(
+        [json.dumps(frame) for frame in (FRAME, delta, gap, after_gap)],
+        {},
+        InstrumentType.PERPETUAL,
+        50,
+    )
+
+    assert len(sink.batches) == 1
+    assert len(sink.batches[0]) == 3
+    assert [book.bids[0].quantity for book in books] == [Decimal("2"), Decimal("3")]
+    assert isinstance(failure, BybitOrderBookSequenceGap)
