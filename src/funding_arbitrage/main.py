@@ -74,6 +74,7 @@ from funding_arbitrage.services.event_sampling import (
     CanonicalHighFrequencyEventSampler,
 )
 from funding_arbitrage.services.event_writer import CanonicalEventWriter
+from funding_arbitrage.services.failure_exit import FailClosedComponent, exit_when_failed
 from funding_arbitrage.services.live_runner import LiveTradingRunner
 from funding_arbitrage.services.multi_regime import (
     MultiRegimeEngine,
@@ -776,6 +777,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             if multi_regime_runtime is not None:
                 multi_regime_runtime.start()
+            if active_settings.paper_exit_on_pipeline_failure:
+                fail_closed: list[tuple[str, FailClosedComponent]] = [
+                    ("canonical_event_writer", event_writer)
+                ]
+                if multi_regime_runtime is not None:
+                    fail_closed.append(("multi_regime_runtime", multi_regime_runtime))
+                failure_exit_task = asyncio.create_task(
+                    exit_when_failed(fail_closed), name="paper-pipeline-failure-exit"
+                )
+                runtime.background_tasks.add(failure_exit_task)
+                failure_exit_task.add_done_callback(runtime.background_tasks.discard)
             yield
         except BaseException as error:
             primary_error = error

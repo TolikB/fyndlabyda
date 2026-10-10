@@ -557,6 +557,12 @@ class Settings(BaseSettings):
     paper_stream_discovery_books: bool = Field(
         default=True, alias="PAPER_STREAM_DISCOVERY_BOOKS"
     )
+    # True exits the process once the journal writer or multi-regime runtime fails
+    # closed, so a paper stack under a restart policy recovers from the journal
+    # instead of rejecting every publish until someone restarts it.
+    paper_exit_on_pipeline_failure: bool = Field(
+        default=False, alias="PAPER_EXIT_ON_PIPELINE_FAILURE"
+    )
     paper_market_asset_limit: int = Field(default=12, alias="PAPER_MARKET_ASSET_LIMIT")
     paper_history_symbol_limit: int = Field(default=5, alias="PAPER_HISTORY_SYMBOL_LIMIT")
     paper_market_persist_interval_seconds: int = Field(
@@ -1377,6 +1383,8 @@ def _validate_safe_values(settings: Settings) -> None:
         or settings.canonical_high_frequency_market_event_min_interval_seconds > 0
     ):
         raise ValueError("MULTI_REGIME_ENABLED requires the complete canonical market journal")
+    if settings.paper_exit_on_pipeline_failure and settings.run_mode != "paper_test":
+        raise ValueError("PAPER_EXIT_ON_PIPELINE_FAILURE requires RUN_MODE=paper_test")
     if mode in {
         TradingMode.BACKTEST,
         TradingMode.REPLAY,
