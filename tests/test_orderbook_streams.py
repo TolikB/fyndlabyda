@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -288,18 +289,15 @@ async def test_collector_uses_websocket_book_before_rest_revalidation() -> None:
         [adapter], enable_streams=True, rest_validation_seconds=60
     )
     request = {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
-    await collector.collect_once(request)
-    initial_rest_books = adapter.rest_books
-    for _ in range(20):
-        if collector._stream_orderbook_cache:
-            break
-        await asyncio.sleep(0)
+    # A new stream gets a moment to deliver its first book, so not even the
+    # first pass puts a REST snapshot in front of it.
+    first = await collector.collect_once(request)
     await collector.collect_once(request)
     await collector.close()
 
     assert collector._stream_orderbook_cache
-    assert initial_rest_books > 0
-    assert adapter.rest_books == initial_rest_books
+    assert first.orderbook("bybit", "BTCUSDT", InstrumentType.PERPETUAL) is not None
+    assert adapter.rest_books == 0
 
 
 @pytest.mark.asyncio
@@ -317,12 +315,14 @@ async def test_collector_publishes_fresh_rest_book_once_without_replaying_cache(
             symbols: list[tuple[str, InstrumentType]],
             depth: int,
         ) -> AsyncIterator[OrderBook]:
+            await stream_may_deliver.wait()
             for symbol, instrument_type in symbols:
                 yield await MockExchangeAdapter.get_orderbook(
                     self, symbol, depth, instrument_type
                 )
             await asyncio.Event().wait()
 
+    stream_may_deliver = asyncio.Event()
     events: list[BookEvent] = []
 
     async def capture(event: BookEvent) -> None:
@@ -335,11 +335,13 @@ async def test_collector_publishes_fresh_rest_book_once_without_replaying_cache(
         enable_streams=True,
         rest_validation_seconds=60,
         canonical_book_event_sink=capture,
+        first_stream_book_wait_seconds=0,
     )
     request = {"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}
 
     await collector.collect_once(request)
     first_event_count = len(events)
+    stream_may_deliver.set()
     for _ in range(100):
         if collector._stream_orderbook_cache:
             break
@@ -1578,3 +1580,114 @@ def test_a_fresh_streamed_book_is_never_revalidated_over_rest() -> None:
     assert collector._book_needs_rest_validation(
         "bybit", ("ETHUSDT", InstrumentType.PERPETUAL), now
     )
+
+
+async def test_a_rest_book_overtaken_by_the_stream_is_not_journaled() -> None:
+    # The stream delivered while the REST request was in flight. A REST snapshot
+    # journaled after the stream's own snapshot left Bybit ETHUSDT alternating
+    # GAP/RECOVERING until the stream reconnected, even though it was newer.
+    class LateRestMock(MockExchangeAdapter):
+        def __init__(self) -> None:
+            super().__init__("bybit", sleep=0)
+            self.stream_emitted = asyncio.Event()
+            now = datetime.now(UTC)
+            self.streamed = OrderBook(
+                exchange=self.name,
+                symbol="BTCUSDT",
+                instrument_type=InstrumentType.PERPETUAL,
+                bids=(OrderBookLevel(price=Decimal("99"), quantity=Decimal("2")),),
+                asks=(OrderBookLevel(price=Decimal("101"), quantity=Decimal("3")),),
+                timestamp=now,
+                sequence=7,
+            )
+            self.rest = self.streamed.model_copy(
+                update={"timestamp": now + timedelta(seconds=1), "sequence": 900}
+            )
+
+        async def get_tickers(self) -> list[Ticker]:
+            return [
+                item
+                for item in await super().get_tickers()
+                if item.instrument_type is InstrumentType.PERPETUAL
+            ]
+
+        async def get_orderbook(
+            self,
+            symbol: str,
+            depth: int,
+            instrument_type: InstrumentType = InstrumentType.PERPETUAL,
+        ) -> OrderBook:
+            del symbol, depth, instrument_type
+            await self.stream_emitted.wait()
+            await asyncio.sleep(0.01)
+            return self.rest
+
+        def stream_orderbooks(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int = 20,
+        ) -> AsyncIterator[OrderBook]:
+            del symbols, depth
+            return self._stream()
+
+        async def _stream(self) -> AsyncIterator[OrderBook]:
+            await asyncio.sleep(0.02)
+            self.stream_emitted.set()
+            yield self.streamed
+            await asyncio.Event().wait()
+
+    published: list[BookEvent] = []
+
+    async def capture(event: BookEvent) -> None:
+        published.append(event)
+
+    collector = MarketDataCollector(
+        [LateRestMock()],
+        orderbook_symbol_limit=1,
+        enable_streams=True,
+        canonical_book_event_sink=capture,
+        first_stream_book_wait_seconds=0,
+    )
+    snapshot = await asyncio.wait_for(
+        collector.collect_once({"bybit": [("BTCUSDT", InstrumentType.PERPETUAL)]}),
+        timeout=2,
+    )
+    await collector.close()
+
+    selected = snapshot.orderbook("bybit", "BTCUSDT", InstrumentType.PERPETUAL)
+    assert selected is not None
+    assert selected.sequence == 7
+    assert published == []
+
+
+async def test_only_a_new_book_stream_is_waited_for() -> None:
+    class SilentStreamMock(MockExchangeAdapter):
+        def stream_orderbooks(
+            self,
+            symbols: list[tuple[str, InstrumentType]],
+            depth: int = 20,
+        ) -> AsyncIterator[OrderBook]:
+            del symbols, depth
+            return self._silent()
+
+        async def _silent(self) -> AsyncIterator[OrderBook]:
+            await asyncio.Event().wait()
+            yield await MockExchangeAdapter.get_orderbook(self, "BTCUSDT", 20)
+
+    collector = MarketDataCollector(
+        [SilentStreamMock("bybit", sleep=0)],
+        enable_streams=True,
+        first_stream_book_wait_seconds=0.2,
+    )
+    btc = [("BTCUSDT", InstrumentType.PERPETUAL)]
+    collector._ensure_orderbook_stream(collector.adapters[0], btc)
+    try:
+        started = time.monotonic()
+        await collector._await_first_stream_books("bybit", btc)
+        assert time.monotonic() - started >= 0.15
+        # A book the stream never sends costs no later pass.
+        started = time.monotonic()
+        await collector._await_first_stream_books("bybit", btc)
+        assert time.monotonic() - started < 0.05
+    finally:
+        await collector.close()

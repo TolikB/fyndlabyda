@@ -199,11 +199,15 @@ class MarketDataCollector:
         canonical_book_event_sink: CanonicalBookEventSink | None = None,
         canonical_option_event_sink: CanonicalOptionEventSink | None = None,
         canonical_book_snapshot_from_selected: bool = False,
+        first_stream_book_wait_seconds: float = 5.0,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.adapters = tuple(adapters)
         if orderbook_symbol_limit <= 0:
             raise ValueError("orderbook_symbol_limit must be positive")
+        if first_stream_book_wait_seconds < 0:
+            raise ValueError("first_stream_book_wait_seconds cannot be negative")
+        self.first_stream_book_wait_seconds = first_stream_book_wait_seconds
         if market_asset_limit is not None and market_asset_limit <= 0:
             raise ValueError("market_asset_limit must be positive")
         if history_symbol_limit <= 0:
@@ -292,6 +296,7 @@ class MarketDataCollector:
             tuple[str, str, InstrumentType], OrderBook
         ] = {}
         self._orderbook_stream_tasks: dict[str, asyncio.Task[None]] = {}
+        self._orderbook_stream_started_at: dict[str, float] = {}
         self._orderbook_stream_requests: dict[
             str, frozenset[tuple[str, InstrumentType]]
         ] = {}
@@ -305,6 +310,7 @@ class MarketDataCollector:
         self._stream_tasks.clear()
         self._stream_ticker_requests.clear()
         self._orderbook_stream_tasks.clear()
+        self._orderbook_stream_started_at.clear()
         self._orderbook_stream_requests.clear()
         for adapter in self.adapters:
             exchange_stream_last_message_timestamp.labels(
@@ -860,12 +866,13 @@ class MarketDataCollector:
             )
             # A book left out of the streams has no stream cache entry, so it is
             # fetched over REST on every pass below.
-            self._ensure_orderbook_stream(
-                adapter,
+            stream_book_requests = (
                 book_requests
                 if self.stream_discovery_books
-                else list(dict.fromkeys([*requested_books, *pinned_asset_books])),
+                else list(dict.fromkeys([*requested_books, *pinned_asset_books]))
             )
+            self._ensure_orderbook_stream(adapter, stream_book_requests)
+            await self._await_first_stream_books(adapter.name, stream_book_requests)
             for symbol, instrument_type in book_requests:
                 key = (adapter.name, symbol, instrument_type)
                 streamed = self._stream_orderbook_cache.get(key)
@@ -911,6 +918,15 @@ class MarketDataCollector:
                 key = (adapter.name, symbol, instrument_type)
                 current = orderbooks.get(key)
                 latest_streamed = self._stream_orderbook_cache.get(key)
+                if (
+                    latest_streamed is not None
+                    and (now - latest_streamed.timestamp).total_seconds()
+                    <= self.book_usable_seconds
+                ):
+                    # The stream delivered while REST was in flight; journaling
+                    # the REST snapshot now would break the stream's sequence.
+                    orderbooks[key] = latest_streamed
+                    continue
                 if (
                     latest_streamed is not None
                     and (
@@ -1337,6 +1353,7 @@ class MarketDataCollector:
         if not target:
             self._orderbook_stream_tasks.pop(adapter.name, None)
             return
+        self._orderbook_stream_started_at[adapter.name] = time.monotonic()
         self._orderbook_stream_tasks[adapter.name] = asyncio.create_task(
             self._consume_orderbook_stream(adapter, list(target)),
             name=f"market-orderbooks-{adapter.name}",
@@ -1389,6 +1406,39 @@ class MarketDataCollector:
         for key in tuple(self._stream_orderbook_cache):
             if key[0] == exchange and (key[1], key[2]) not in target:
                 self._stream_orderbook_cache.pop(key, None)
+
+    async def _await_first_stream_books(
+        self,
+        exchange: str,
+        requests: list[tuple[str, InstrumentType]],
+    ) -> None:
+        """Give a new book stream a moment to deliver before REST stands in.
+
+        A REST snapshot journaled after the stream's own snapshot joins the same
+        canonical book stream with a sequence the next delta cannot follow (Bybit
+        REST numbers updates like its 500-level stream). After a restart, Bybit
+        ETHUSDT stayed GAP/RECOVERING until the stream reconnected. Only a stream's
+        first seconds are waited for, so a book it never sends costs no later pass.
+        """
+
+        if not requests:
+            return
+        deadline = (
+            self._orderbook_stream_started_at.get(exchange, float("-inf"))
+            + self.first_stream_book_wait_seconds
+        )
+        while True:
+            stream = self._orderbook_stream_tasks.get(exchange)
+            if stream is None or stream.done():
+                return
+            if all(
+                (exchange, symbol, instrument_type) in self._stream_orderbook_cache
+                for symbol, instrument_type in requests
+            ):
+                return
+            if time.monotonic() >= deadline:
+                return
+            await asyncio.sleep(0.05)
 
     def _book_needs_rest_validation(
         self,
