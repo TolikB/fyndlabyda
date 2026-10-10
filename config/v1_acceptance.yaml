@@ -1320,14 +1320,14 @@ requirements:
       docker/redis/secure-entrypoint.sh: ac71f525469dbfd595420504c948629fba50fbac85ee2536ea34e2bc424220f7
       docs/V1_INTERNAL_SERVICE_SECURITY.md: 924f052a380404fff7374e7aebbcf4c6f5245f3bded35bdd2d7923cbc7b59ecf
       migrations/env.py: 3beb919fb694e1c848f2e605ffb1d935721d7c8167db4b9b797fc1bcf643e5e5
-      src/funding_arbitrage/database/session.py: abaa0345e41bd465594dce3c156599b1042a39277a881c80f681e5abf5e44b03
+      src/funding_arbitrage/database/session.py: 9ec3510afa9dcf1be9f85b6851c979ec3853ef1a06cf0c378b90a997e289c930
       src/funding_arbitrage/internal_tls.py: db143ad6773ec5b1c5841a67770a4384abbc23f3ac91355d14923becad8ed5ca
       src/funding_arbitrage/security/rate_limit.py: b04ecbc193e1905565acc7170da5bdd312d9c8cfae0209e25bc7d675b018c5d7
       src/funding_arbitrage/security/revocation.py: 0f7ff1b4afcb11464423fb734d93c51c2b3d2be853ca31bae53ec65f983ab363
       src/funding_arbitrage/storage/clickhouse.py: 00edfc197bfd0956dda3851eecebf2533e82ad02886e9db3c9a7c1df575daab7
       tests/test_analytics_storage.py: d6c85dc22827d114bafd0abf703974535ea76eb96b359df497480a360dce9405
       tests/test_deployment_safety.py: 55c4fff3a789c95d1ca0f873551f3ee1378a7dd6f2e673ae1d7e7e5ebc5bcdbc
-      tests/test_internal_tls.py: b6991fcb4868eb7bd13c2f78ec4b20b7e7ab45bbb51f64ed9494541771639a34
+      tests/test_internal_tls.py: 7374a14d27803e4cd34d828e1a6c331d6f5647a8182653a1f455f2c316f74af7
   - id: OBS-001
     category: monitoring
     title: Prometheus and Grafana expose market, strategy, risk, OMS, portfolio, reconciliation, and latency telemetry
@@ -1628,7 +1628,7 @@ requirements:
       tests/test_hyperliquid_canonical_orderbook.py: 7f80c4e17e5906bfe7b3808167656b6646e581f69fb1a32c6b8e8b870c2ebc0b
       tests/test_immutable_retention.py: 0b03cec1edc1a92886cf86228470e3464e51764f1400af2feb7a29efe002f8c0
       tests/test_infrastructure_delivery.py: 7fa6963e9c4214020849fae16672e9dc61e59d7b4ce34631f97eaef2e6675ec3
-      tests/test_internal_tls.py: b6991fcb4868eb7bd13c2f78ec4b20b7e7ab45bbb51f64ed9494541771639a34
+      tests/test_internal_tls.py: 7374a14d27803e4cd34d828e1a6c331d6f5647a8182653a1f455f2c316f74af7
       tests/test_journal_profiles.py: de49c738a4aba2e2e4d373a21b89e3cd33e6a3f6598d7f01004ee350f914ff88
       tests/test_kucoin_htx_adapters.py: 10e026a57b8d36e45ca981ad24f82f8366c87d5f711f558480ab64e563966c90
       tests/test_kucoin_htx_trading.py: 830aba5b2d0816800d405182ec0054573f26dd6293b82aa2242d9e6837dcb598

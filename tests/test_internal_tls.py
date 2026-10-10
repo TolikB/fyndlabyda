@@ -122,6 +122,7 @@ def test_database_engine_receives_strict_ssl_context(
         "url": settings.database_url,
         "connect_args": {"ssl": fake_context},
         "pool_pre_ping": True,
+        "pool_recycle": 1800,
         "future": True,
     }
 

@@ -16,6 +16,8 @@ from funding_arbitrage.internal_tls import create_internal_ssl_context
 
 from .models import Base
 
+_POOL_RECYCLE_SECONDS = 1800
+
 
 def create_database(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     ssl_context = create_internal_ssl_context(settings)
@@ -24,6 +26,11 @@ def create_database(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker
         settings.database_url,
         connect_args=connect_args,
         pool_pre_ping=True,
+        # PostgreSQL keeps every statement a connection prepares until that
+        # connection closes, and batch inserts of varying length prepare new ones.
+        # Recycling bounds the cache: on 2026-10-10 the V1 paper database was
+        # still OOM-killed after seven hours of them.
+        pool_recycle=_POOL_RECYCLE_SECONDS,
         future=True,
     )
     return engine, async_sessionmaker(engine, expire_on_commit=False)
