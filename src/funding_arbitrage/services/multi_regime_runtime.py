@@ -93,6 +93,8 @@ from funding_arbitrage.strategies import (
 
 logger = logging.getLogger(__name__)
 
+_RESTORE_BATCH_PAGE = 500
+
 BPS = Decimal("10000")
 ZERO = Decimal("0")
 
@@ -1039,17 +1041,30 @@ class DurableMultiRegimeRuntime:
                     after_row_id=compatible_after_row_id,
                 )
                 if isinstance(self.engine, MultiRegimeEngine):
-                    async with self.session_factory() as session:
-                        persisted_batches = await load_multi_regime_batches(
-                            session,
-                            mode=self.engine.config.mode,
-                            source_event_start=start,
-                            source_event_row_id_after=compatible_after_row_id,
-                            source_event_row_id_up_to=journal_tip,
-                        )
-                    self.engine.restore_orchestration(persisted_batches)
-                    for batch in persisted_batches:
-                        self.latest_by_instrument[batch.instrument.canonical_id] = batch
+                    # Paged: a week of decision batches loaded at once took the V1
+                    # paper process past its 3 GiB limit on every restart, so it
+                    # was OOM-killed every ~7.5 hours from 2026-10-22 to 10-25.
+                    after: tuple[datetime, str, str] | None = None
+                    while True:
+                        async with self.session_factory() as session:
+                            persisted_batches = await load_multi_regime_batches(
+                                session,
+                                mode=self.engine.config.mode,
+                                source_event_start=start,
+                                source_event_row_id_after=compatible_after_row_id,
+                                source_event_row_id_up_to=journal_tip,
+                                after=after,
+                                limit=_RESTORE_BATCH_PAGE,
+                            )
+                        if not persisted_batches:
+                            break
+                        self.engine.restore_orchestration(persisted_batches)
+                        for batch in persisted_batches:
+                            self.latest_by_instrument[batch.instrument.canonical_id] = batch
+                        last = persisted_batches[-1]
+                        after = (last.timestamp, last.source_event_id, last.batch_id)
+                        if len(persisted_batches) < _RESTORE_BATCH_PAGE:
+                            break
                 if self.paper_broker is not None:
                     self.paper_broker.restore(positions)
                 if self.advanced_paper_broker is not None:

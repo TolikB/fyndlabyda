@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, literal, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,8 +99,15 @@ async def load_multi_regime_batches(
     source_event_start: datetime | None = None,
     source_event_row_id_after: int | None = None,
     source_event_row_id_up_to: int | None = None,
+    after: tuple[datetime, str, str] | None = None,
+    limit: int | None = None,
 ) -> tuple[MultiRegimeDecisionBatch, ...]:
-    """Load verified decision batches in deterministic source-event order."""
+    """Load verified decision batches in deterministic source-event order.
+
+    ``after`` (timestamp, source event ID, batch ID of the last batch already read)
+    and ``limit`` page through that order, so a restore never holds a week of
+    batches at once.
+    """
 
     from funding_arbitrage.services.multi_regime import MultiRegimeDecisionBatch
 
@@ -140,15 +147,23 @@ async def load_multi_regime_batches(
         statement = statement.where(CanonicalEventRecord.id > source_event_row_id_after)
     if source_event_row_id_up_to is not None:
         statement = statement.where(CanonicalEventRecord.id <= source_event_row_id_up_to)
-    records = (
-        await session.scalars(
-            statement.order_by(
+    if after is not None:
+        statement = statement.where(
+            tuple_(
                 MultiRegimeDecisionRecord.created_at,
                 MultiRegimeDecisionRecord.source_event_id,
                 MultiRegimeDecisionRecord.batch_id,
             )
+            > tuple_(literal(after[0]), literal(after[1]), literal(after[2]))
         )
-    ).all()
+    statement = statement.order_by(
+        MultiRegimeDecisionRecord.created_at,
+        MultiRegimeDecisionRecord.source_event_id,
+        MultiRegimeDecisionRecord.batch_id,
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+    records = (await session.scalars(statement)).all()
     batches: list[MultiRegimeDecisionBatch] = []
     for record in records:
         if _hash(record.payload) != record.payload_hash:

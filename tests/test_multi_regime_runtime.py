@@ -17,7 +17,10 @@ from funding_arbitrage.database.repositories.directional_paper import (
     load_advanced_paper_positions,
 )
 from funding_arbitrage.database.repositories.events import append_events
-from funding_arbitrage.database.repositories.multi_regime import save_multi_regime_batch
+from funding_arbitrage.database.repositories.multi_regime import (
+    load_multi_regime_batches,
+    save_multi_regime_batch,
+)
 from funding_arbitrage.domain.decisions import (
     MarketRegime,
     SignalIntent,
@@ -831,6 +834,49 @@ async def test_advanced_paper_runtime_persists_and_restores_without_reexecution(
         item.position_id: item for item in broker.positions
     }
 
+
+
+async def test_restore_pages_through_persisted_batches_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A week of batches loaded at once OOM-killed the V1 paper stack on every
+    # restart; the pages must still restore exactly the batches, in order.
+    from funding_arbitrage.services import multi_regime_runtime as runtime_module
+
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    async with factory() as session:
+        await append_events(session, tuple(_events()))
+    await DurableMultiRegimeRuntime(_engine(mode=TradingMode.PAPER), factory).flush()
+
+    async with factory() as session:
+        everything = await load_multi_regime_batches(session, mode=TradingMode.PAPER)
+        paged = []
+        after = None
+        while True:
+            page = await load_multi_regime_batches(
+                session, mode=TradingMode.PAPER, after=after, limit=2
+            )
+            if not page:
+                break
+            paged.extend(page)
+            after = (page[-1].timestamp, page[-1].source_event_id, page[-1].batch_id)
+    assert len(everything) > 2
+    assert [batch.batch_id for batch in paged] == [batch.batch_id for batch in everything]
+
+    whole = DurableMultiRegimeRuntime(_engine(mode=TradingMode.PAPER), factory)
+    await whole.restore_features(start=START)
+    monkeypatch.setattr(runtime_module, "_RESTORE_BATCH_PAGE", 1)
+    paged_runtime = DurableMultiRegimeRuntime(_engine(mode=TradingMode.PAPER), factory)
+    await paged_runtime.restore_features(start=START)
+    await database.dispose()
+
+    assert paged_runtime.latest_by_instrument == whole.latest_by_instrument
+    assert paged_runtime.engine.orchestrator.last_timestamp == (
+        whole.engine.orchestrator.last_timestamp
+    )
 
 def test_ai_decision_support_can_only_reduce_portfolio_risk_size() -> None:
     events = _events()
