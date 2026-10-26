@@ -125,6 +125,15 @@ class Settings(BaseSettings):
         le=900,
         alias="CANONICAL_HIGH_FREQUENCY_MARKET_EVENT_MIN_INTERVAL_SECONDS",
     )
+    # Paper only: journal each streamed order book as a top-20 snapshot at most this
+    # often instead of every venue delta. Deltas filled ~20 GB of journal a day on
+    # the V1 paper stack; trades, funding and open interest stay complete.
+    canonical_book_snapshot_interval_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        le=60,
+        alias="CANONICAL_BOOK_SNAPSHOT_INTERVAL_SECONDS",
+    )
     multi_regime_enabled: bool = Field(default=True, alias="MULTI_REGIME_ENABLED")
     multi_regime_assets: str = Field(default="BTC,ETH", alias="MULTI_REGIME_ASSETS")
     multi_regime_dynamic_universe_enabled: bool = Field(
@@ -1383,6 +1392,27 @@ def _validate_safe_values(settings: Settings) -> None:
         or settings.canonical_high_frequency_market_event_min_interval_seconds > 0
     ):
         raise ValueError("MULTI_REGIME_ENABLED requires the complete canonical market journal")
+    book_snapshot_interval = settings.canonical_book_snapshot_interval_seconds
+    if book_snapshot_interval > 0:
+        if settings.run_mode != "paper_test":
+            raise ValueError(
+                "CANONICAL_BOOK_SNAPSHOT_INTERVAL_SECONDS requires RUN_MODE=paper_test"
+            )
+        if (
+            not settings.canonical_high_frequency_market_events_enabled
+            or settings.canonical_high_frequency_market_event_min_interval_seconds > 0
+        ):
+            raise ValueError(
+                "CANONICAL_BOOK_SNAPSHOT_INTERVAL_SECONDS needs the unsampled market journal"
+            )
+        if (
+            settings.multi_regime_enabled
+            and book_snapshot_interval * 2 > settings.multi_regime_stale_after_seconds
+        ):
+            raise ValueError(
+                "CANONICAL_BOOK_SNAPSHOT_INTERVAL_SECONDS must be at most half of "
+                "MULTI_REGIME_STALE_AFTER_SECONDS"
+            )
     if settings.paper_exit_on_pipeline_failure and settings.run_mode != "paper_test":
         raise ValueError("PAPER_EXIT_ON_PIPELINE_FAILURE requires RUN_MODE=paper_test")
     if mode in {

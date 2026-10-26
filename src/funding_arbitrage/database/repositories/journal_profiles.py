@@ -25,7 +25,7 @@ from funding_arbitrage.database.models import (
     CanonicalJournalProfileRecord,
 )
 
-CanonicalJournalProfileName = Literal["full", "sampled", "disabled"]
+CanonicalJournalProfileName = Literal["full", "sampled", "book_snapshots", "disabled"]
 _CANONICAL_JOURNAL_WRITER_LOCK_ID = 5_068_047_852_292_196_166
 _LOCAL_WRITER_LOCKS: dict[int, asyncio.Lock] = {}
 
@@ -236,6 +236,8 @@ def canonical_journal_profile_spec(settings: Settings) -> CanonicalJournalProfil
         profile: CanonicalJournalProfileName = "disabled"
     elif Decimal(interval) > 0:
         profile = "sampled"
+    elif settings.canonical_book_snapshot_interval_seconds > 0:
+        profile = "book_snapshots"
     else:
         profile = "full"
     simulation_versions = (
@@ -256,6 +258,9 @@ def canonical_journal_profile_spec(settings: Settings) -> CanonicalJournalProfil
         "profile": profile,
         "high_frequency_events_enabled": (settings.canonical_high_frequency_market_events_enabled),
         "minimum_interval_seconds": interval,
+        "book_snapshot_interval_seconds": _decimal_text(
+            settings.canonical_book_snapshot_interval_seconds
+        ),
         "run_mode": settings.run_mode,
         "trading_mode": settings.effective_trading_mode.value,
         "market_data_mode": settings.market_data_mode,

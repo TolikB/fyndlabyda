@@ -174,6 +174,7 @@ def _canonical_stream_stale_seconds(settings: Settings, base_seconds: int) -> fl
     return max(
         float(base_seconds),
         settings.canonical_high_frequency_market_event_min_interval_seconds * 2,
+        settings.canonical_book_snapshot_interval_seconds * 2,
     )
 
 
@@ -197,6 +198,9 @@ def _canonical_native_book_event_sink(
     high_frequency_sink: CanonicalEventSink | None,
 ) -> CanonicalEventSink | None:
     if settings.canonical_high_frequency_market_event_min_interval_seconds > 0:
+        return None
+    if settings.canonical_book_snapshot_interval_seconds > 0:
+        # The collector journals throttled snapshots of the streamed books instead.
         return None
     return high_frequency_sink
 

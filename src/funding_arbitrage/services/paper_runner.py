@@ -215,6 +215,7 @@ class PaperTestRunner:
             canonical_book_snapshot_from_selected=(
                 settings.canonical_high_frequency_market_event_min_interval_seconds > 0
             ),
+            stream_book_snapshot_seconds=settings.canonical_book_snapshot_interval_seconds,
         )
         self.executor = PaperTradingExecutor(
             fees={venue: schedule[1] for venue, schedule in settings.fee_schedules.items()},

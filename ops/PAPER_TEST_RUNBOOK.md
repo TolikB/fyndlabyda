@@ -366,11 +366,26 @@ docker compose -p funding_arbitrage_v1paper --env-file ../app.env --env-file ../
 curl -s 127.0.0.1:8002/health
 ```
 
-The canonical journal is authoritative and never pruned, and the multi-regime
-runtime needs it complete. Measure its growth in the first hour
-(`pg_total_relation_size('canonical_events')`) and keep enough free disk for the
-planned run; lower `MULTI_REGIME_UNIVERSE_MAXIMUM_ASSETS` or the venue list if it
-does not fit.
+This stack's journal is paper data and keeps 7 days. This is an exception to the
+730-day retention contract in `docs/V1_DATA_RETENTION.md`, which still governs live
+and acceptance journals; the user approved it on 2026-10-26 after the V1 paper
+journal reached 97 GB in 17 days.
+
+- `CANONICAL_BOOK_SNAPSHOT_INTERVAL_SECONDS=1` journals each streamed book as a top-20
+  snapshot once a second per instrument instead of every venue delta (~20 GB/day
+  before); trades, funding and open interest stay complete.
+- `/etc/cron.d/funding_arbitrage_v1paper_retention` runs
+  `docker exec funding_arbitrage_v1paper-app-1 funding-arbitrage journal-retention --days 7`
+  daily at 03:30 UTC under `flock`, logging to
+  `/opt/funding_arbitrage_v1paper/retention.log`. It deletes journal rows and decision
+  batches older than the window in 50k-row primary-key batches, each in its own
+  transaction with `SET LOCAL session_replication_role = replica`, so the append-only
+  triggers stay on for every other session. It refuses outside `paper_test`, refuses a
+  window shorter than `MULTI_REGIME_RESTORE_HOURS` + 24 h, skips a journal that
+  received no row for an hour (the app is down), and never deletes the newest row.
+  Journal profiles and paper checkpoints are never touched.
+- Add `--dry-run` to only count. Measure growth in the first hour
+  (`pg_total_relation_size('canonical_events')`).
 
 A cron guard (`/etc/cron.d/funding_arbitrage_v1paper_diskguard`, every 5 minutes)
 stops `funding_arbitrage_v1paper-app-1` once less than 15 GiB remain on `/`, so the

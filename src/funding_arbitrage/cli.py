@@ -26,6 +26,10 @@ from funding_arbitrage.database.session import create_database, init_database
 from funding_arbitrage.exchanges.factory import create_public_adapters
 from funding_arbitrage.market_data.collector import MarketDataCollector
 from funding_arbitrage.services.runtime import RuntimeState
+from funding_arbitrage.storage.journal_retention import (
+    apply_journal_retention,
+    plan_journal_retention,
+)
 
 
 def read_monthly_pnl(path: str) -> dict[str, Decimal]:
@@ -110,10 +114,51 @@ def paper_status() -> None:
     print(json.dumps(portfolio.snapshot().model_dump(mode="json"), indent=2))
 
 
+async def journal_retention(days: int, dry_run: bool, max_idle_seconds: float) -> int:
+    """Trim a paper stack's canonical journal to its last ``days`` days."""
+
+    settings = get_settings()
+    if settings.run_mode != "paper_test":
+        print(json.dumps({"refused": "journal retention is for paper_test stacks only"}))
+        return 2
+    if days * 24 < settings.multi_regime_restore_hours + 24:
+        print(json.dumps({"refused": "window is shorter than the restore window plus a day"}))
+        return 2
+    engine, _ = create_database(settings)
+    try:
+        plan = await plan_journal_retention(
+            engine, keep_days=days, max_idle_seconds=max_idle_seconds
+        )
+        report: dict[str, object] = {
+            "cutoff": plan.cutoff.isoformat(),
+            "skipped": plan.skipped_reason,
+            "event_rows_at_most": plan.event_rows_at_most,
+            "dry_run": dry_run,
+        }
+        if not dry_run:
+            events, batches = await apply_journal_retention(engine, plan)
+            report.update({"events_removed": events, "decision_batches_removed": batches})
+        print(json.dumps(report))
+        return 0
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="funding-arbitrage")
     parser.add_argument(
-        "command", choices=("api", "collect", "scan", "backtest", "paper"), default="api", nargs="?"
+        "command",
+        choices=("api", "collect", "scan", "backtest", "paper", "journal-retention"),
+        default="api",
+        nargs="?",
+    )
+    parser.add_argument("--days", type=int, default=7, help="journal-retention window")
+    parser.add_argument("--dry-run", action="store_true", help="journal-retention: count only")
+    parser.add_argument(
+        "--max-idle-seconds",
+        type=float,
+        default=3600.0,
+        help="journal-retention skips a journal that received no row for this long",
     )
     parser.add_argument(
         "--monthly-pnl",
@@ -129,5 +174,9 @@ def main() -> None:
         asyncio.run(backtest_once(args.monthly_pnl))
     elif args.command == "paper":
         paper_status()
+    elif args.command == "journal-retention":
+        raise SystemExit(
+            asyncio.run(journal_retention(args.days, args.dry_run, args.max_idle_seconds))
+        )
     else:
         uvicorn.run("funding_arbitrage.main:app", host="0.0.0.0", port=8000, reload=False)

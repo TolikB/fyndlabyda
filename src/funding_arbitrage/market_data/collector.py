@@ -200,9 +200,15 @@ class MarketDataCollector:
         canonical_option_event_sink: CanonicalOptionEventSink | None = None,
         canonical_book_snapshot_from_selected: bool = False,
         first_stream_book_wait_seconds: float = 5.0,
+        stream_book_snapshot_seconds: float = 0.0,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.adapters = tuple(adapters)
+        if stream_book_snapshot_seconds < 0:
+            raise ValueError("stream_book_snapshot_seconds cannot be negative")
+        # Above zero, streamed books are journaled as top-20 snapshots at most this
+        # often per instrument; the adapters then journal no deltas.
+        self.stream_book_snapshot_seconds = stream_book_snapshot_seconds
         if orderbook_symbol_limit <= 0:
             raise ValueError("orderbook_symbol_limit must be positive")
         if first_stream_book_wait_seconds < 0:
@@ -297,12 +303,18 @@ class MarketDataCollector:
         ] = {}
         self._orderbook_stream_tasks: dict[str, asyncio.Task[None]] = {}
         self._orderbook_stream_started_at: dict[str, float] = {}
+        self._stream_book_journaled_at: dict[tuple[str, str, InstrumentType], float] = {}
+        self._stream_book_publishes: dict[str, asyncio.Task[None]] = {}
         self._orderbook_stream_requests: dict[
             str, frozenset[tuple[str, InstrumentType]]
         ] = {}
 
     async def close(self) -> None:
-        tasks = [*self._stream_tasks.values(), *self._orderbook_stream_tasks.values()]
+        tasks = [
+            *self._stream_tasks.values(),
+            *self._orderbook_stream_tasks.values(),
+            *self._stream_book_publishes.values(),
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -312,6 +324,8 @@ class MarketDataCollector:
         self._orderbook_stream_tasks.clear()
         self._orderbook_stream_started_at.clear()
         self._orderbook_stream_requests.clear()
+        self._stream_book_publishes.clear()
+        self._stream_book_journaled_at.clear()
         for adapter in self.adapters:
             exchange_stream_last_message_timestamp.labels(
                 adapter.name, "ticker"
@@ -1194,17 +1208,7 @@ class MarketDataCollector:
                     },
                 )
                 continue
-            canonical_instrument = InstrumentKey(
-                venue=instrument.exchange,
-                exchange_symbol=instrument.exchange_symbol,
-                base_asset=instrument.base_asset,
-                quote_asset=instrument.quote_asset,
-                instrument_type=CanonicalInstrumentType(
-                    instrument.instrument_type.value
-                ),
-                settlement_asset=instrument.settlement_asset or None,
-                expiry=instrument.expiry,
-            )
+            canonical_instrument = _canonical_instrument_key(instrument)
             try:
                 events.append(
                     canonical_snapshot_event(
@@ -1376,6 +1380,8 @@ class MarketDataCollector:
                 exchange_stream_last_message_timestamp.labels(
                     adapter.name, "orderbook"
                 ).set(datetime.now(UTC).timestamp())
+                if self.stream_book_snapshot_seconds > 0:
+                    self._journal_stream_book(adapter.name, book)
         except asyncio.CancelledError:
             raise
         except NotImplementedError:
@@ -1406,6 +1412,73 @@ class MarketDataCollector:
         for key in tuple(self._stream_orderbook_cache):
             if key[0] == exchange and (key[1], key[2]) not in target:
                 self._stream_orderbook_cache.pop(key, None)
+        for key in tuple(self._stream_book_journaled_at):
+            if key[0] == exchange and (key[1], key[2]) not in target:
+                self._stream_book_journaled_at.pop(key, None)
+
+    def _journal_stream_book(self, exchange: str, book: OrderBook) -> None:
+        """Journal a streamed book as a snapshot, at most once per interval.
+
+        The stream never waits for the commit: while a venue's previous snapshot
+        is still being written, newer books are skipped and the next one after it
+        goes out. A failure is counted and logged and never ends the stream,
+        because a fresh stream book is not re-read over REST and the venue would
+        otherwise journal no book at all.
+        """
+
+        sink = self.canonical_book_event_sink
+        if sink is None:
+            return
+        key = (book.exchange, book.symbol, book.instrument_type)
+        now = time.monotonic()
+        last = self._stream_book_journaled_at.get(key)
+        if last is not None and now - last < self.stream_book_snapshot_seconds:
+            return
+        pending = self._stream_book_publishes.get(exchange)
+        if pending is not None and not pending.done():
+            return
+        instrument = next(
+            (
+                item
+                for item in self._instrument_cache.get(exchange, ())
+                if item.exchange_symbol == book.symbol
+                and item.instrument_type is book.instrument_type
+            ),
+            None,
+        )
+        if instrument is None:
+            market_data_dropped_total.labels(exchange, "incomplete_orderbook_snapshot").inc()
+            return
+        try:
+            event = canonical_snapshot_event(
+                book,
+                _canonical_instrument_key(instrument),
+                source=f"{exchange.upper()}.PUBLIC.ORDERBOOK.STREAM_SNAPSHOT",
+                receive_timestamp=datetime.now(UTC),
+            )
+        except InvalidResponseError:
+            market_data_dropped_total.labels(exchange, "uncanonical_orderbook_snapshot").inc()
+            return
+        self._stream_book_journaled_at[key] = now
+        self._stream_book_publishes[exchange] = asyncio.create_task(
+            self._publish_stream_book(exchange, sink, event),
+            name=f"market-orderbook-snapshot-{exchange}",
+        )
+
+    @staticmethod
+    async def _publish_stream_book(
+        exchange: str, sink: CanonicalBookEventSink, event: BookEvent
+    ) -> None:
+        try:
+            await sink(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            market_data_dropped_total.labels(exchange, "orderbook_snapshot_journal_error").inc()
+            logger.exception(
+                "canonical_stream_orderbook_journal_failed",
+                extra={"exchange": exchange},
+            )
 
     async def _await_first_stream_books(
         self,
@@ -1581,6 +1654,18 @@ def _required_tickers_are_fresh(
         (ticker := ticker_by_market.get((symbol, instrument_type))) is not None
         and (now - ticker.timestamp).total_seconds() <= stale_after_seconds
         for symbol, instrument_type in required_markets or ()
+    )
+
+
+def _canonical_instrument_key(instrument: NormalizedInstrument) -> InstrumentKey:
+    return InstrumentKey(
+        venue=instrument.exchange,
+        exchange_symbol=instrument.exchange_symbol,
+        base_asset=instrument.base_asset,
+        quote_asset=instrument.quote_asset,
+        instrument_type=CanonicalInstrumentType(instrument.instrument_type.value),
+        settlement_asset=instrument.settlement_asset or None,
+        expiry=instrument.expiry,
     )
 
 
