@@ -375,8 +375,8 @@ journal reached 97 GB in 17 days.
   snapshot once a second per instrument instead of every venue delta (~20 GB/day
   before); trades, funding and open interest stay complete.
 - `/etc/cron.d/funding_arbitrage_v1paper_retention` runs
-  `docker exec funding_arbitrage_v1paper-app-1 funding-arbitrage journal-retention --days 7`
-  daily at 03:30 UTC under `flock`, logging to
+  `docker exec funding_arbitrage_v1paper-app-1 python -m funding_arbitrage journal-retention --days 7`
+  daily at 03:30 UTC under `flock` (the image has no `funding-arbitrage` script), logging to
   `/opt/funding_arbitrage_v1paper/retention.log`. It deletes journal rows and decision
   batches older than the window in 50k-row primary-key batches, each in its own
   transaction with `SET LOCAL session_replication_role = replica`, so the append-only
@@ -384,7 +384,8 @@ journal reached 97 GB in 17 days.
   window shorter than `MULTI_REGIME_RESTORE_HOURS` + 24 h, skips a journal that
   received no row for an hour (the app is down), and never deletes the newest row.
   Journal profiles and paper checkpoints are never touched.
-- Add `--dry-run` to only count. Measure growth in the first hour
+- Add `--dry-run` to only count. The cron runs dry until 2026-11-03, the first day
+  the journal (reset 2026-10-26) holds rows older than 7 days. Measure growth in the first hour
   (`pg_total_relation_size('canonical_events')`).
 
 A cron guard (`/etc/cron.d/funding_arbitrage_v1paper_diskguard`, every 5 minutes)
