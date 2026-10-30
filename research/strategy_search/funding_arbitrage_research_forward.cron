@@ -1,0 +1,4 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Forward paper test of the research combination (no orders); approved by the user on 2026-10-30.
+20 0 * * * root flock -n /opt/funding_arbitrage_research/fwd/daily.lock nice -n 10 /opt/funding_arbitrage_research/fwd/daily.sh >> /opt/funding_arbitrage_research/fwd/daily.log 2>&1
