@@ -97,3 +97,30 @@ These use the daily metrics from `download_metrics.py`. The holdout is opened on
 trials that pass the development bar written in the module docstring. A trial that
 passes the holdout joins the forward test as a new series, never inside `combo5` or
 `combo45`.
+
+**Data checks before the first run.** The daily metrics cover 2021-01..2026-09, 477
+symbols. Two problems were fixed before any result was seen:
+- Binance has no top-trader ratios for most of 2022. Each family is now gated on its
+  own metric, not on the top-trader ratio.
+- Zero values, such as OI = 0 on 193 rows, are treated as missing.
+
+**Result (2026-10-30): no trial passes, and the holdout stays closed.**
+
+| Trial | Monthly mean 1x / 2x | Sharpe 1x | Max DD 1x | Positive quarters |
+|---|---|---|---|---|
+| `crowd\|level` | +1.76% / +0.69% | 0.57 | 27.5% | 62% |
+| `retail\|level` | +0.40% / −0.67% | 0.23 | 26.3% | 52% |
+| `lowvol\|30` | +0.03% / −0.59% | 0.00 | 54.6% | 52% |
+| `lowvol\|90` | −0.08% / −0.50% | −0.04 | 46.9% | 57% |
+| `taker\|mom` | −2.12% / −4.16% | −1.21 | 80.0% | 19% |
+| `taker\|rev` | −2.13% / −4.16% | −1.21 | 79.4% | 24% |
+| `crowd\|chg7` | −2.85% / −5.50% | −1.46 | 91.6% | 33% |
+| `oi\|chg7` | −3.80% / −6.91% | −2.19 | 92.3% | 10% |
+
+- `crowd|level` is the best, but almost all of it is 2022 (+144%). That year the
+  top-trader data covers only a handful of symbols. The other years compound to about −14%.
+- The taker trials lose the same amount in both directions, so the signal is about zero
+  and costs take about 2% a month.
+
+The registry now holds 342 trials. The best is still the listing short: deflated Sharpe
+0.000, PBO 0.51.

@@ -15,6 +15,10 @@ The holdout (2026-03-30..2026-09-30) is not printed here. It is opened once, onl
 trials whose development run has Sharpe >= 1.0 at 1x costs, >= 0.7 at 2x costs and at
 least 60% positive quarters; anything that passes there goes to the forward paper test
 as a new series, never into the frozen combo5/combo45.
+Data hygiene fixed on 2026-10-30 after inspecting metrics_1d.parquet, before the first run:
+values <= 0 are missing (OI is 0 on 193 rows), infinite scores are dropped, and each family
+is gated on its own metric; the top-trader ratios are missing for most of 2022 in the
+archive, so the crowd trials are flat there while the others are not.
 """
 
 from __future__ import annotations
@@ -33,11 +37,11 @@ ROOT = "/w"
 def metric(frame, column, index, columns):
     wide = frame.pivot_table(index="date", columns="symbol", values=column, aggfunc="last")
     wide.index = pd.to_datetime(wide.index)
-    return wide.reindex(index=index, columns=columns)
+    return wide.where(wide > 0).reindex(index=index, columns=columns)
 
 
 def xs_book(score, live, opn, quantile=0.2, long_high=True):
-    score = score.where(live)
+    score = score.replace([np.inf, -np.inf], np.nan).where(live)
     rank = score.rank(axis=1, pct=True)
     top, bottom = rank >= 1 - quantile, rank <= quantile
     raw = (top.astype(float) - bottom.astype(float)) * (1 if long_high else -1)
@@ -55,18 +59,17 @@ def main():
     accounts = get("count_long_short_ratio")
     taker = get("sum_taker_long_short_vol_ratio")
     oi = get("oi_value")
-    has_metrics = top_ratio.notna()
-    live_m = live & has_metrics
+    live_top, live_acc, live_tak, live_oi = (live & x.notna() for x in (top_ratio, accounts, taker, oi))
     books = {
         "lowvol|30": xs_book(bt.asset_vol(opn, 30), live, opn, long_high=False),
         "lowvol|90": xs_book(bt.asset_vol(opn, 90).where(close.notna().cumsum() >= 90), live, opn,
                              long_high=False),
-        "crowd|level": xs_book(top_ratio.rolling(3, min_periods=2).mean(), live_m, opn, long_high=False),
-        "crowd|chg7": xs_book(np.log(top_ratio / top_ratio.shift(7)), live_m, opn, long_high=False),
-        "retail|level": xs_book(accounts.rolling(3, min_periods=2).mean(), live_m, opn, long_high=False),
-        "taker|mom": xs_book(taker.rolling(3, min_periods=2).mean(), live_m, opn, long_high=True),
-        "taker|rev": xs_book(taker.rolling(3, min_periods=2).mean(), live_m, opn, long_high=False),
-        "oi|chg7": xs_book(np.log(oi / oi.shift(7)), live_m, opn, long_high=False),
+        "crowd|level": xs_book(top_ratio.rolling(3, min_periods=2).mean(), live_top, opn, long_high=False),
+        "crowd|chg7": xs_book(np.log(top_ratio / top_ratio.shift(7)), live_top, opn, long_high=False),
+        "retail|level": xs_book(accounts.rolling(3, min_periods=2).mean(), live_acc, opn, long_high=False),
+        "taker|mom": xs_book(taker.rolling(3, min_periods=2).mean(), live_tak, opn, long_high=True),
+        "taker|rev": xs_book(taker.rolling(3, min_periods=2).mean(), live_tak, opn, long_high=False),
+        "oi|chg7": xs_book(np.log(oi / oi.shift(7)), live_oi, opn, long_high=False),
     }
     end = opn.index.max()
     holdout_start = (end - pd.DateOffset(months=bt.HOLDOUT_MONTHS)).normalize()
