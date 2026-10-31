@@ -1,0 +1,37 @@
+all signals before the book, 1x costs, basis points per trade
+k12_h15  n  67831  gross  -34.1  fees+slip  14.9  funding  0.00  net  -49.0
+          stop in entry minute      16.5%  gross  -254.5
+          stop or timeout later     30.5%  gross  -132.1
+          take-profit               53.0%  gross    90.8
+          long   take-profit rate  52.1% (a random walk gives 66.7%)  gross  -39.0
+          short  take-profit rate  54.5% (a random walk gives 66.7%)  gross  -26.2
+k12_h60  n  67739  gross  -34.3  fees+slip  14.0  funding  0.00  net  -48.3
+          stop in entry minute      16.5%  gross  -254.5
+          stop or timeout later     26.5%  gross  -165.3
+          take-profit               57.0%  gross    90.3
+          long   take-profit rate  55.5% (a random walk gives 66.7%)  gross  -39.0
+          short  take-profit rate  59.4% (a random walk gives 66.7%)  gross  -26.8
+k16_h15  n  32752  gross  -37.5  fees+slip  14.6  funding  0.01  net  -52.1
+          stop in entry minute      16.8%  gross  -325.5
+          stop or timeout later     29.0%  gross  -167.4
+          take-profit               54.2%  gross   121.3
+          long   take-profit rate  54.0% (a random walk gives 66.7%)  gross  -41.9
+          short  take-profit rate  54.7% (a random walk gives 66.7%)  gross  -28.5
+k16_h60  n  32718  gross  -38.7  fees+slip  13.8  funding  0.01  net  -52.4
+          stop in entry minute      16.8%  gross  -325.4
+          stop or timeout later     25.6%  gross  -208.0
+          take-profit               57.6%  gross   120.4
+          long   take-profit rate  57.0% (a random walk gives 66.7%)  gross  -41.8
+          short  take-profit rate  58.7% (a random walk gives 66.7%)  gross  -32.3
+k8_h15   n 204328  gross  -23.8  fees+slip  14.8  funding  0.01  net  -38.5
+          stop in entry minute      15.3%  gross  -179.7
+          stop or timeout later     30.7%  gross   -92.9
+          take-profit               53.9%  gross    60.0
+          long   take-profit rate  53.6% (a random walk gives 66.7%)  gross  -25.5
+          short  take-profit rate  54.4% (a random walk gives 66.7%)  gross  -21.5
+k8_h60   n 203907  gross  -24.0  fees+slip  13.9  funding  0.01  net  -37.9
+          stop in entry minute      15.3%  gross  -179.8
+          stop or timeout later     27.0%  gross  -114.2
+          take-profit               57.6%  gross    59.7
+          long   take-profit rate  57.0% (a random walk gives 66.7%)  gross  -25.7
+          short  take-profit rate  58.6% (a random walk gives 66.7%)  gross  -21.7
