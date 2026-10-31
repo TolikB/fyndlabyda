@@ -1,0 +1,12 @@
+ins: 32481 trades
+  stop distance, % of price: median 0.33, p10 0.17, p90 0.80
+  3 bp a side in R: mean 0.202, median 0.181
+  entry minute touches the stop 48.2%, closes through it 10.0%
+  mean R with no costs: pessimistic -0.233, bound 0.335
+  entries by 9:45 76.7%
+oos: 11293 trades
+  stop distance, % of price: median 0.37, p10 0.20, p90 0.81
+  3 bp a side in R: mean 0.178, median 0.161
+  entry minute touches the stop 56.2%, closes through it 12.5%
+  mean R with no costs: pessimistic -0.339, bound 0.367
+  entries by 9:45 74.1%
