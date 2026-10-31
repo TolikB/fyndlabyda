@@ -1,0 +1,108 @@
+{
+ "delist|h24": {
+  "1x": {
+   "trades": 21,
+   "announcements": 12,
+   "mean_pct": 5.54,
+   "t_ann": 0.47,
+   "win_pct": 61.9,
+   "worst_pct": -43.7,
+   "funding_mean_pct": -1.621,
+   "book": {
+    "months": 28,
+    "monthly_mean_pct": 0.83,
+    "monthly_median_pct": 0.0,
+    "cagr_pct": 9.7,
+    "vol_pct": 13.3,
+    "sharpe": 0.77,
+    "max_dd_pct": 12.4,
+    "pos_months_pct": 25.0,
+    "p_month_ge_10pct": 4.0,
+    "by_year_pct": {
+     "2023": -0.9,
+     "2024": 7.5,
+     "2025": 16.1
+    }
+   }
+  },
+  "2x": {
+   "trades": 21,
+   "announcements": 12,
+   "mean_pct": 4.94,
+   "t_ann": 0.36,
+   "win_pct": 61.9,
+   "worst_pct": -44.3,
+   "funding_mean_pct": -1.621,
+   "book": {
+    "months": 28,
+    "monthly_mean_pct": 0.74,
+    "monthly_median_pct": 0.0,
+    "cagr_pct": 8.6,
+    "vol_pct": 13.0,
+    "sharpe": 0.7,
+    "max_dd_pct": 12.9,
+    "pos_months_pct": 25.0,
+    "p_month_ge_10pct": 4.0,
+    "by_year_pct": {
+     "2023": -1.0,
+     "2024": 6.0,
+     "2025": 15.1
+    }
+   }
+  },
+  "passes": false
+ },
+ "delist|h72": {
+  "1x": {
+   "trades": 21,
+   "announcements": 12,
+   "mean_pct": -6.45,
+   "t_ann": -0.66,
+   "win_pct": 76.2,
+   "worst_pct": -358.8,
+   "funding_mean_pct": -4.682,
+   "book": {
+    "months": 28,
+    "monthly_mean_pct": -0.97,
+    "monthly_median_pct": 0.0,
+    "cagr_pct": -30.7,
+    "vol_pct": 49.4,
+    "sharpe": -0.24,
+    "max_dd_pct": 71.8,
+    "pos_months_pct": 29.0,
+    "p_month_ge_10pct": 7.0,
+    "by_year_pct": {
+     "2023": 2.0,
+     "2024": 17.4,
+     "2025": -63.9
+    }
+   }
+  },
+  "2x": {
+   "trades": 21,
+   "announcements": 12,
+   "mean_pct": -7.05,
+   "t_ann": -0.68,
+   "win_pct": 71.4,
+   "worst_pct": -359.4,
+   "funding_mean_pct": -4.682,
+   "book": {
+    "months": 28,
+    "monthly_mean_pct": -1.06,
+    "monthly_median_pct": 0.0,
+    "cagr_pct": -31.5,
+    "vol_pct": 49.4,
+    "sharpe": -0.26,
+    "max_dd_pct": 71.9,
+    "pos_months_pct": 29.0,
+    "p_month_ge_10pct": 4.0,
+    "by_year_pct": {
+     "2023": 1.8,
+     "2024": 15.8,
+     "2025": -64.3
+    }
+   }
+  },
+  "passes": false
+ }
+}
