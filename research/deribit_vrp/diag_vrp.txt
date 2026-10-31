@@ -1,0 +1,7 @@
+development weeks, basis points of notional per week
+vrp|BTC|condor       weeks 259  at fills  -28.9  at mark  -20.6 (t -1.28)  spread paid   8.2
+vrp|BTC|straddle     weeks 260  at fills  -25.0  at mark  -13.1 (t -0.32)  spread paid  12.0
+vrp|BTC|strangle     weeks 260  at fills  -23.3  at mark  -17.8 (t -0.64)  spread paid   5.5
+vrp|ETH|condor       weeks 245  at fills  -48.9  at mark  -35.4 (t -1.77)  spread paid  13.4
+vrp|ETH|straddle     weeks 251  at fills  -64.1  at mark  -47.2 (t -0.94)  spread paid  16.9
+vrp|ETH|strangle     weeks 251  at fills  -46.2  at mark  -36.7 (t -1.02)  spread paid   9.5
