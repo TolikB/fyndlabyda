@@ -152,6 +152,20 @@ def test_black_scholes_put_call_parity_greeks_and_implied_volatility() -> None:
         )
 
 
+def test_deep_out_of_the_money_price_is_never_negative() -> None:
+    # Float cancellation priced a stressed option below zero on 2026-10-31; the
+    # failed OptionValuation took the V1 paper runtime down.
+    valuation = BlackScholesModel().value(
+        spot=Decimal("3000"),
+        strike=Decimal("3720"),
+        time_years=Decimal("1") / Decimal("365"),
+        volatility=Decimal("0.5"),
+        right=OptionRight.CALL,
+    )
+
+    assert valuation.price == 0
+
+
 def test_long_volatility_signal_is_delta_hedged_and_risk_gated() -> None:
     result = OptionsVolatilityStrategy().evaluate(_context())
 

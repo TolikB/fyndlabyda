@@ -90,6 +90,10 @@ async def save_multi_regime_batch(session: AsyncSession, batch: MultiRegimeBatch
     return inserted
 
 
+MultiRegimeBatchCursor = tuple[datetime, int]
+"""Timestamp and row ID of the last decision batch read."""
+
+
 async def load_multi_regime_batches(
     session: AsyncSession,
     *,
@@ -99,13 +103,41 @@ async def load_multi_regime_batches(
     source_event_start: datetime | None = None,
     source_event_row_id_after: int | None = None,
     source_event_row_id_up_to: int | None = None,
-    after: tuple[datetime, str, str] | None = None,
-    limit: int | None = None,
 ) -> tuple[MultiRegimeDecisionBatch, ...]:
-    """Load verified decision batches in deterministic source-event order.
+    """Load verified decision batches in the order the runtime decided them."""
 
-    ``after`` (timestamp, source event ID, batch ID of the last batch already read)
-    and ``limit`` page through that order, so a restore never holds a week of
+    batches, _ = await load_multi_regime_batch_page(
+        session,
+        start=start,
+        mode=mode,
+        source_event_ids=source_event_ids,
+        source_event_start=source_event_start,
+        source_event_row_id_after=source_event_row_id_after,
+        source_event_row_id_up_to=source_event_row_id_up_to,
+    )
+    return batches
+
+
+async def load_multi_regime_batch_page(
+    session: AsyncSession,
+    *,
+    start: datetime | None = None,
+    mode: TradingMode | None = None,
+    source_event_ids: Sequence[str] = (),
+    source_event_start: datetime | None = None,
+    source_event_row_id_after: int | None = None,
+    source_event_row_id_up_to: int | None = None,
+    after: MultiRegimeBatchCursor | None = None,
+    limit: int | None = None,
+) -> tuple[tuple[MultiRegimeDecisionBatch, ...], MultiRegimeBatchCursor | None]:
+    """Load verified decision batches in decision order, with the page's cursor.
+
+    The runtime decides source events in journal row order and inserts each
+    batch before deciding the next, so batches sort by timestamp, then by row
+    ID. Ties on the timestamp used to sort by the source event's hash ID, which
+    restored a signal_id_collision rejection before the batch that first
+    accepted the signal. ``after`` (the cursor a previous page returned) and
+    ``limit`` page through that order, so a restore never holds a week of
     batches at once.
     """
 
@@ -149,17 +181,13 @@ async def load_multi_regime_batches(
         statement = statement.where(CanonicalEventRecord.id <= source_event_row_id_up_to)
     if after is not None:
         statement = statement.where(
-            tuple_(
-                MultiRegimeDecisionRecord.created_at,
-                MultiRegimeDecisionRecord.source_event_id,
-                MultiRegimeDecisionRecord.batch_id,
-            )
-            > tuple_(literal(after[0]), literal(after[1]), literal(after[2]))
+            MultiRegimeDecisionRecord.created_at >= literal(after[0]),
+            tuple_(MultiRegimeDecisionRecord.created_at, MultiRegimeDecisionRecord.id)
+            > tuple_(literal(after[0]), literal(after[1])),
         )
     statement = statement.order_by(
         MultiRegimeDecisionRecord.created_at,
-        MultiRegimeDecisionRecord.source_event_id,
-        MultiRegimeDecisionRecord.batch_id,
+        MultiRegimeDecisionRecord.id,
     )
     if limit is not None:
         statement = statement.limit(limit)
@@ -169,7 +197,9 @@ async def load_multi_regime_batches(
         if _hash(record.payload) != record.payload_hash:
             raise MultiRegimeDecisionIntegrityError("stored multi-regime batch checksum mismatch")
         batches.append(MultiRegimeDecisionBatch.model_validate(record.payload))
-    return tuple(batches)
+    if not records:
+        return (), None
+    return tuple(batches), (records[-1].created_at, records[-1].id)
 
 
 async def _save_risk_decision(session: AsyncSession, decision: RiskDecision) -> None:

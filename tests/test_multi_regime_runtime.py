@@ -18,6 +18,7 @@ from funding_arbitrage.database.repositories.directional_paper import (
 )
 from funding_arbitrage.database.repositories.events import append_events
 from funding_arbitrage.database.repositories.multi_regime import (
+    load_multi_regime_batch_page,
     load_multi_regime_batches,
     save_multi_regime_batch,
 )
@@ -160,6 +161,22 @@ class DeterministicIntentStrategy:
         )
 
 
+class InstrumentBlindIntentStrategy(DeterministicIntentStrategy):
+    """Reuse one signal ID for every instrument decided at the same time."""
+
+    def evaluate(
+        self, context: DirectionalStrategyContext
+    ) -> DirectionalStrategyEvaluation:
+        evaluation = super().evaluate(context)
+        assert evaluation.intent is not None
+        signal_id = "sig_" + hashlib.sha256(
+            evaluation.intent.created_at.isoformat().encode()
+        ).hexdigest()[:32]
+        return evaluation.model_copy(
+            update={"intent": evaluation.intent.model_copy(update={"signal_id": signal_id})}
+        )
+
+
 class RejectingStrategy:
     def evaluate(
         self, context: DirectionalStrategyContext
@@ -248,6 +265,7 @@ def _engine(
     ]
     | None = None,
     risk_context_decision_support_multiplier: Decimal = Decimal("1"),
+    breakout_strategy: DeterministicIntentStrategy | None = None,
 ) -> MultiRegimeEngine:
     config = MultiRegimeEngineConfig(
         mode=mode,
@@ -279,7 +297,7 @@ def _engine(
     engine = MultiRegimeEngine(
         config,
         risk_context_provider=risk_provider,
-        breakout_strategy=DeterministicIntentStrategy(),
+        breakout_strategy=breakout_strategy or DeterministicIntentStrategy(),
         sweep_strategy=RejectingStrategy(),
         supplemental_context_provider=supplemental_context_provider,
         decision_support_provider=decision_support_provider,
@@ -856,13 +874,12 @@ async def test_restore_pages_through_persisted_batches_in_order(
         paged = []
         after = None
         while True:
-            page = await load_multi_regime_batches(
+            page, after = await load_multi_regime_batch_page(
                 session, mode=TradingMode.PAPER, after=after, limit=2
             )
             if not page:
                 break
             paged.extend(page)
-            after = (page[-1].timestamp, page[-1].source_event_id, page[-1].batch_id)
     assert len(everything) > 2
     assert [batch.batch_id for batch in paged] == [batch.batch_id for batch in everything]
 
@@ -876,6 +893,72 @@ async def test_restore_pages_through_persisted_batches_in_order(
     assert paged_runtime.latest_by_instrument == whole.latest_by_instrument
     assert paged_runtime.engine.orchestrator.last_timestamp == (
         whole.engine.orchestrator.last_timestamp
+    )
+
+
+async def test_restore_replays_signal_id_collisions_in_decision_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # On 2026-10-31 passive market making reused a signal ID with new evidence
+    # in the same millisecond. Restore raised on the recorded collision, and it
+    # sorted same-time batches by source event hash, not by the journal order
+    # they were decided in, so the V1 paper stack failed every restart.
+    from funding_arbitrage.services import multi_regime_runtime as runtime_module
+
+    eth = INSTRUMENT.model_copy(update={"exchange_symbol": "ETHUSDT", "base_asset": "ETH"})
+    # The sort is stable, so BTC is journaled and decided first at every tie,
+    # while "evt-10122" (ETH) sorts before "evt-122" (BTC) by ID.
+    events = sorted(
+        _events() + _events(instrument=eth, first_sequence=10_000),
+        key=lambda event: event.metadata.exchange_timestamp,
+    )
+    decided = _replay(
+        _engine(mode=TradingMode.PAPER, breakout_strategy=InstrumentBlindIntentStrategy()),
+        events,
+    )
+    collisions = [
+        batch
+        for batch in decided
+        if any(item.reason == "signal_id_collision" for item in batch.orchestration.decisions)
+    ]
+    assert collisions
+    assert all(batch.instrument.base_asset == "ETH" for batch in collisions)
+
+    database = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(database, expire_on_commit=False)
+    async with factory() as session:
+        await append_events(session, tuple(events))
+    live = DurableMultiRegimeRuntime(
+        _engine(mode=TradingMode.PAPER, breakout_strategy=InstrumentBlindIntentStrategy()),
+        factory,
+    )
+    await live.flush()
+    async with factory() as session:
+        loaded = await load_multi_regime_batches(session, mode=TradingMode.PAPER)
+    assert [batch.batch_id for batch in loaded] == [batch.batch_id for batch in decided]
+
+    monkeypatch.setattr(runtime_module, "_RESTORE_BATCH_PAGE", 1)
+    restored = DurableMultiRegimeRuntime(
+        _engine(mode=TradingMode.PAPER, breakout_strategy=InstrumentBlindIntentStrategy()),
+        factory,
+    )
+    await restored.restore_features(start=START)
+    await database.dispose()
+
+    assert restored.latest_by_instrument == live.latest_by_instrument
+    intents = tuple(
+        {
+            intent.signal_id: intent
+            for batch in decided
+            if batch.strategy_suite is not None
+            for intent in batch.strategy_suite.intents
+        }.values()
+    )
+    later = decided[-1].timestamp + timedelta(seconds=1)
+    assert restored.engine.orchestrator.orchestrate(intents, later) == (
+        live.engine.orchestrator.orchestrate(intents, later)
     )
 
 def test_ai_decision_support_can_only_reduce_portfolio_risk_size() -> None:

@@ -238,3 +238,57 @@ def test_persisted_orchestration_restores_active_and_seen_state() -> None:
     )
     with pytest.raises(ValueError, match="allocation mismatch"):
         SignalOrchestrator(TradingMode.PAPER).restore(tampered, (intent,))
+
+
+def test_restore_replays_a_recorded_signal_id_collision() -> None:
+    # On 2026-10-31 passive market making reused a signal ID with new evidence in
+    # the same millisecond. Restore raised on the recorded rejection, so the V1
+    # paper stack failed every restart.
+    original = _intent("reused")
+    colliding = _intent("reused", expected_move_bps="21")
+    live = SignalOrchestrator(TradingMode.PAPER)
+    first = live.orchestrate((original,), NOW)
+    second = live.orchestrate((colliding,), NOW)
+    assert _decision(second, "reused").reason == "signal_id_collision"
+
+    restored = SignalOrchestrator(TradingMode.PAPER)
+    restored.restore(first, (original,))
+    restored.restore(second, (colliding,))
+    later = NOW + timedelta(seconds=1)
+    for step in ((original,), (colliding,), ()):
+        assert restored.orchestrate(step, later) == live.orchestrate(step, later)
+
+    # The accepting batch can lie before the restore window.
+    windowed = SignalOrchestrator(TradingMode.PAPER)
+    windowed.restore(second, (colliding,))
+    assert windowed.orchestrate((), later).active == live.orchestrate((), later).active
+
+    no_conflict = SignalOrchestrator(TradingMode.PAPER)
+    no_conflict.restore(first, (original,))
+    with pytest.raises(ValueError, match="collision has no conflict"):
+        no_conflict.restore(second, (original,))
+    unrecorded = SignalOrchestrator(TradingMode.PAPER)
+    unrecorded.restore(first, (original,))
+    with pytest.raises(ValueError, match="signal ID collision"):
+        unrecorded.restore(first, (colliding,))
+
+
+def test_restored_duplicates_keep_the_seen_order_live_kept() -> None:
+    config = SignalOrchestratorConfig(seen_signal_limit=2)
+    first = _intent("first", asset="BTC")
+    second = _intent("second", asset="ETH")
+    third = _intent("third", asset="SOL")
+    steps = ((first,), (second,), (first,), (third,))
+    live = SignalOrchestrator(TradingMode.PAPER, config)
+    results = [live.orchestrate(step, NOW) for step in steps]
+    assert results[2].decisions[0].status is SignalDecisionStatus.DUPLICATE
+
+    restored = SignalOrchestrator(TradingMode.PAPER, config)
+    for step, result in zip(steps, results, strict=True):
+        restored.restore(result, step)
+
+    # A duplicate does not refresh the seen order, so "third" evicted "first".
+    later = NOW + timedelta(seconds=1)
+    replay = restored.orchestrate((first,), later)
+    assert replay == live.orchestrate((first,), later)
+    assert replay.decisions[0].status is not SignalDecisionStatus.DUPLICATE

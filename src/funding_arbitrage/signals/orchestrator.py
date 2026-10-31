@@ -243,10 +243,10 @@ class SignalOrchestrator:
         submitted = {intent.signal_id: intent for intent in submitted_intents}
         if len(submitted) != len(submitted_intents):
             raise ValueError("persisted orchestration has duplicate submitted signals")
-        decision_ids = tuple(decision.signal_id for decision in result.decisions)
-        if len(decision_ids) != len(set(decision_ids)):
+        decisions = {decision.signal_id: decision for decision in result.decisions}
+        if len(decisions) != len(result.decisions):
             raise ValueError("persisted orchestration has duplicate decisions")
-        if set(decision_ids) != set(submitted):
+        if set(decisions) != set(submitted):
             raise ValueError("persisted orchestration decisions do not match inputs")
 
         restored_active: dict[str, _Candidate] = {}
@@ -277,11 +277,26 @@ class SignalOrchestrator:
         previous_seen = self._seen.copy()
         previous_timestamp = self._last_timestamp
         try:
+            # Apply each recorded decision the way orchestrate() did. A recorded
+            # signal_id_collision rejection kept the first fingerprint, so it is
+            # not remembered; on 2026-10-31 restore raised on such a batch and the
+            # V1 paper stack failed every restart. The first fingerprint can lie
+            # before the restore window, so a collision may find nothing seen.
             for intent in submitted_intents:
                 fingerprint = _fingerprint(intent)
                 previous = self._seen.get(intent.signal_id)
+                decision = decisions[intent.signal_id]
+                if (
+                    decision.status is SignalDecisionStatus.REJECTED
+                    and decision.reason == "signal_id_collision"
+                ):
+                    if previous == fingerprint:
+                        raise ValueError("persisted orchestration collision has no conflict")
+                    continue
                 if previous is not None and previous != fingerprint:
                     raise ValueError("persisted orchestration signal ID collision")
+                if decision.status is SignalDecisionStatus.DUPLICATE and previous is not None:
+                    continue
                 self._remember(intent.signal_id, fingerprint)
             self._active = restored_active
             self._last_timestamp = now

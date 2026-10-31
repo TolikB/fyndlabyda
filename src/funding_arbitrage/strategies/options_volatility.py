@@ -102,6 +102,10 @@ class BlackScholesModel:
                 - carry * s * discount_carry * _cdf(-d1)
             )
             rho = -k * t * discount_rate * _cdf(-d2)
+        # A deep out-of-the-money price is a difference of two near-equal terms;
+        # float cancellation gave -5.4e-13 on 2026-10-31 under a stress shock,
+        # failed OptionValuation, and took the V1 paper runtime down.
+        price = max(price, 0.0)
         gamma = discount_carry * density / (s * sigma * root_t)
         vega = s * discount_carry * density * root_t
         return OptionValuation(
