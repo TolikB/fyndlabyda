@@ -124,3 +124,64 @@ symbols. Two problems were fixed before any result was seen:
 
 The registry now holds 342 trials. The best is still the listing short: deflated Sharpe
 0.000, PBO 0.51.
+
+## Rounds 7–10: indicators and oscillators (2026-10-31)
+
+Each round's trials and its development bar were written in the module docstring before
+the run. The bar: Sharpe ≥1.0 at 1x and ≥0.7 at 2x costs, ≥60% positive quarters, and
+no calendar year worse than −15%.
+
+New tools:
+- `features.py`: causal indicators — RSI, Stochastic, Williams %R, CCI, MACD, Bollinger,
+  ATR/Keltner, Donchian, DI/ADX, OBV, MFI, taker share and funding z-score.
+- `bt_hourly.py`: the `bt.run` rules on hourly bars. `bt_hourly_selftest.py` proves that
+  a once-a-day book reproduces `bt.run` exactly.
+- `Dockerfile.ml` (`funding-research:py312-ml`): LightGBM for round 10. The cron keeps
+  `py312`.
+
+| Round | What | Trials | Passed the bar |
+|---|---|---|---|
+| 7 | 14 daily indicators × time-series/cross-section × trend/reversal | 56 | 0 |
+| 7b | cross-sectional trend oscillators with turnover control | 12 | 4 |
+| 7c | those 4 with lookbacks halved and doubled | 8 | all 4 robust |
+| 8 | hourly oscillators and BTC-residual reversal, 4h/8h rebalance | 16 | 0 |
+| 9 | regime filters on the 4: BTC 200d, BTC vol, funding | 12 | 6 |
+| 10 | walk-forward ridge and LightGBM over 22 features | 4 | 0 |
+
+**Main finding.** The cross-sectional "trend" reading of range oscillators has a pre-cost
+Sharpe of 1.5–2.2. Examples: Donchian20 (close position in its 20-day range) and
+Bollinger z. Its correlation with `xsmom` is only 0.2–0.4. At daily rebalance on top-60,
+turnover takes everything. On top-30, with weekly rebalance or a hysteresis band, the
+development result is +2.2–2.7% a month at a 20% vol target, Sharpe 1.2–1.4.
+
+The funding filter (the book is off while median top-30 funding is negative) raises it to
+Sharpe 1.44–1.58, with drawdowns of 19–26%.
+
+**Hourly.** The pre-cost signal is there (Sharpe up to 1.8), but turnover is 3–8 times
+equity a day, and taker costs make every trial lose 10–27% a month.
+
+**ML.** LightGBM with a 1-day horizon: Sharpe 1.29 at 1x costs, 0.46 at 2x.
+
+**Holdout (`holdout2.py`, opened once on 2026-10-31).** The pool is the 4 funding-filtered
+books; the rule was fixed before rounds 8–10 finished.
+
+| Portfolio | Vol target (dev DD ≤35%) | Development | Holdout 2026-04..09 |
+|---|---|---|---|
+| `osc` (pool, equal risk) | 50% | +2.38%/mo, DD 31.7% | −2.26%/mo, Sharpe −1.79 |
+| `combo5s` (osc + 4 old sleeves) | 50% | +4.49%/mo, median +0.35%, DD 30% | +0.05%/mo, DD 23.6% |
+
+| Holdout, raw 1x PnL at vol 20% | 6 months |
+|---|---|
+| `comp8|weekly|fund` | −10.5% |
+| `donch|buffer|fund` | +3.4% |
+| `donch|weekly|fund` | −7.1% |
+| `donch|ema5buf|fund` | −9.1% |
+| old `carry` / `pumplong` / `xsmom` / `listshort` | +19.8% / +14.8% / +2.0% / −17.0% |
+
+**Verdict: the success criterion (≥5% a month on the holdout with DD ≤35%) is not met.**
+- The oscillator family, the best development result of 558 trials, lost on the holdout.
+- On development, `osc` has a lower Sharpe (0.72) than its members because of the
+  pre-registered drawdown brake. At 50% vol it cuts leverage to a quarter for long
+  periods. The members' raw holdout PnL does not depend on that.
+- The registry holds 558 trials: PBO 0.15, deflated Sharpe 0.000. The hourly trials'
+  Sharpes (−5…−30) inflate the spread the deflation uses.
