@@ -1,0 +1,17 @@
+development 2022-01-01..2025-07-01: 507295 settlements, 469 symbols; basis points
+by the settled rate (leakage-bounded upper estimate):
+  |rate| [0.0, 0.0001)      n  220147  |rate|    0.5  m1: move   -0.4 snipe    0.0 (t  -0.3)  m5: move   -0.2 snipe    0.3 (t   1.7)  m15: move   -0.7 snipe   -0.2 (t   0.8)  m60: move   -1.2 snipe   -0.7 (t  -0.4)  cost  48.1  after60   -0.1
+  |rate| [0.0001, 0.0003)   n  243823  |rate|    1.2  m1: move   -1.4 snipe   -0.2 (t  -0.8)  m5: move   -1.4 snipe   -0.2 (t   0.2)  m15: move   -1.1 snipe    0.2 (t   1.0)  m60: move   -1.7 snipe   -0.5 (t  -0.2)  cost  50.1  after60    1.7
+  |rate| [0.0003, 0.001)    n   38267  |rate|    4.9  m1: move   -5.0 snipe   -0.1 (t   2.3)  m5: move   -4.2 snipe    0.7 (t   2.2)  m15: move   -5.1 snipe   -0.2 (t   2.0)  m60: move   -7.1 snipe   -2.2 (t   1.9)  cost  47.1  after60    5.2
+  |rate| [0.001, 0.003)     n    3917  |rate|   15.5  m1: move  -11.8 snipe    3.6 (t   3.4)  m5: move   -8.6 snipe    6.9 (t   3.7)  m15: move  -12.0 snipe    3.5 (t   2.1)  m60: move   -3.4 snipe   12.1 (t   1.7)  cost  51.8  after60    4.1
+  |rate| [0.003, 1.0)       n    1141  |rate|   71.2  m1: move  -54.9 snipe   16.3 (t   4.7)  m5: move  -44.9 snipe   26.3 (t   5.9)  m15: move  -39.8 snipe   31.4 (t   4.2)  m60: move   23.3 snipe   94.5 (t   7.0)  cost  55.9  after60    9.9
+by the previous settlement's rate (causal):
+  |prev| [0.0, 0.0001)      n  220192  |rate|    0.8  m1: move   -0.8 snipe    0.0 (t   0.3)  m5: move   -0.7 snipe    0.1 (t  -0.1)  m15: move   -1.7 snipe   -0.9 (t  -2.0)  m60: move   -3.5 snipe   -2.7 (t  -3.5)  cost  48.1  after60    0.5
+  |prev| [0.0001, 0.0003)   n  244000  |rate|    1.3  m1: move   -1.2 snipe    0.0 (t   0.5)  m5: move   -1.2 snipe    0.1 (t   1.1)  m15: move   -0.7 snipe    0.6 (t   1.5)  m60: move   -0.4 snipe    0.9 (t   0.8)  cost  50.1  after60    1.6
+  |prev| [0.0003, 0.001)    n   38230  |rate|    4.2  m1: move   -4.9 snipe   -0.7 (t   3.9)  m5: move   -3.4 snipe    0.7 (t   4.1)  m15: move   -2.1 snipe    2.1 (t   3.9)  m60: move   -1.1 snipe    3.1 (t   2.8)  cost  47.1  after60    2.4
+  |prev| [0.001, 0.003)     n    3845  |rate|   11.4  m1: move   -9.3 snipe    2.1 (t   4.5)  m5: move   -6.6 snipe    4.8 (t   3.5)  m15: move  -11.3 snipe    0.1 (t   2.1)  m60: move   -0.7 snipe   10.7 (t   1.8)  cost  51.9  after60    7.0
+  |prev| [0.003, 1.0)       n    1028  |rate|   45.6  m1: move  -36.1 snipe    9.5 (t   2.0)  m5: move  -33.6 snipe   12.1 (t   2.7)  m15: move  -29.4 snipe   16.3 (t   2.4)  m60: move  -29.5 snipe   16.2 (t   0.7)  cost  56.2  after60    6.9
+  |rate| >= 10 bp, 1h interval: n 85  snipe_5   27.2
+  |rate| >= 10 bp, 2h interval: n 44  snipe_5   90.7
+  |rate| >= 10 bp, 4h interval: n 2055  snipe_5    8.1
+  |rate| >= 10 bp, 8h interval: n 2874  snipe_5   11.9
