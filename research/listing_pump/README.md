@@ -202,6 +202,23 @@ flat or losing, and the mean rests on a few large jumps.
   against T, and fills from the live trade stream at that time. Without it, this pass is not a
   strategy. Whether to use either route is the user's decision.
 
+## Forward step 0: can a legitimate feed see a listing in time? (`watch_upbit.py`, since 2026-11-01)
+
+Upbit's official Open API is meant for programs. Container `upbit-watch` on the research VM polls
+`GET /v1/market/all` once a second, about a tenth of the published quotation limit, and logs when
+each new market first appears.
+
+- **Output:** `watch/markets.jsonl`, plus an hourly `watch/heartbeat.jsonl` with request counts,
+  errors and round-trip times.
+- **On refusal:** a 429 slows it down, and a block pauses it for an hour. It never changes headers
+  or addresses.
+- **The question:** does a new KRW market appear at the notice time T, or only when trading opens
+  hours later? After a few listings, each first-seen time is compared with the notice's
+  first_listed_at and with the Binance perp's jump in the aggTrades archive.
+  - If it appears at T, the remaining gap is round-trip time, and a server near Seoul could close
+    it.
+  - If it appears only later, this route is useless for 16b.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
@@ -216,4 +233,5 @@ flat or losing, and the mean rests on a few large jumps.
   `results_latency_holdout.json`, `latency_holdout.log`.
 - **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
   `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`.
-- **Data on the VM:** `/w/data/listing/`.
+- **Forward logger:** `watch_upbit.py`.
+- **Data on the VM:** `/w/data/listing/`, `listing_pump/watch/`.
