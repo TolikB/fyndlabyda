@@ -253,6 +253,18 @@ This is slower than a listing jump.
 A version without futures delistings was suggested by the holdout itself. It may only be judged on
 forward data.
 
+## Bybit listings: no move to trade (`diag_bybit.py` → `diag_bybit.txt`, descriptive, no trial)
+
+Bybit's official v5 announcement API is a legitimate fast feed. `download_bybit.py` fetched its
+1,826 "New Listings" posts (2022–2026).
+
+**The Binance perp hardly moves.** On development posts whose coin already had an old Binance perp
+(42 posts), the move 60 s after either timestamp has a median of +0.02% to +0.12%. Almost none
+exceeds +2%. So Bybit adds no event worth a trial.
+
+**OKX is not used.** Its announcement API answers the EU-based VM with the EEA site's feed, and this
+project does not work around regional restrictions.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
@@ -262,12 +274,12 @@ forward data.
 
 ## Files
 
-- **Download:** `download_upbit.py`, `download_binance.py`.
+- **Download:** `download_upbit.py`, `download_binance.py`, `download_bybit.py`.
 - **Test:** `bt_spotlist.py`, `selftest_spotlist.py`, `bt_latency.py`, `selftest_latency.py`, `bt_badnews.py`,
   `selftest_badnews.py`.
 - **Results:** `results_dev.json`, `dev.log`, `results_latency_dev.json`, `latency_dev.log`,
   `results_latency_holdout.json`, `latency_holdout.log`, `badnews_*.log`, `results_badnews_*.json`.
 - **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
-  `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`.
+  `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`, `diag_bybit.py`, `diag_bybit.txt`.
 - **Forward logger:** `watch_upbit.py`.
 - **Data on the VM:** `/w/data/listing/`, `listing_pump/watch/`.

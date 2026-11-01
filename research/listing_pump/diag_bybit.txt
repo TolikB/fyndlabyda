@@ -1,0 +1,6 @@
+development posts with an old Binance perp: 42
+Binance perp move from the last trade before T to the first trade 60 s after T (%):
+  perp  T=dateTimestamp  n  23 mean   0.15 median   0.02 share > +2% 0%
+  perp  T=publishTime    n  23 mean   0.10 median   0.06 share > +2% 0%
+  spot  T=dateTimestamp  n  15 mean   0.09 median   0.12 share > +2% 0%
+  spot  T=publishTime    n  19 mean   0.14 median   0.04 share > +2% 5%
