@@ -34,6 +34,7 @@ from funding_arbitrage.domain.events import (
     Side,
     deterministic_event_id,
 )
+from funding_arbitrage.exchanges.okx.client import use_okx_port_443_websockets
 from funding_arbitrage.execution.reconciliation import ReconciliationResult
 from funding_arbitrage.execution.trading import (
     LiveOrderStatus,
@@ -1143,6 +1144,8 @@ def create_private_stream_supervisor(
             exchange = exchange_class(config)
             if venue == "htx":
                 exchange.urls["hostnames"]["contract"] = "api.hbdm.com"
+            if venue == "okx":
+                use_okx_port_443_websockets(exchange)
             if settings.live_sandbox:
                 exchange.set_sandbox_mode(True)
             accounts.append(PrivateStreamAccount(profile=profile, exchange=exchange))

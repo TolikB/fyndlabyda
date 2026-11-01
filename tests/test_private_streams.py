@@ -25,6 +25,7 @@ from funding_arbitrage.exchanges.private_streams import (
     PrivateStreamNormalizationError,
     PrivateStreamProfile,
     PrivateStreamSupervisor,
+    create_private_stream_supervisor,
     private_stream_profiles,
 )
 from funding_arbitrage.execution.reconciliation import LiveReconciler, ReconciliationResult
@@ -572,6 +573,37 @@ def test_private_profile_matrix_covers_all_eight_cex_and_pinned_capabilities() -
         assert exchange.has.get("watchBalance") is True
         if profile.watch_positions and not profile.positions_via_reconciliation:
             assert exchange.has.get("watchPositions") is True
+
+
+@pytest.mark.parametrize(
+    ("sandbox", "host"), [(False, "ws.okx.com"), (True, "wspap.okx.com")]
+)
+@pytest.mark.asyncio
+async def test_okx_private_streams_dial_port_443_not_retired_8443(
+    sandbox: bool, host: str
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        LIVE_VENUES="okx",
+        LIVE_SANDBOX=sandbox,
+        OKX_API_KEY="okx-key",
+        OKX_API_SECRET="okx-secret",
+        OKX_API_PASSPHRASE="okx-passphrase",
+    )
+    supervisor = create_private_stream_supervisor(
+        settings, {"okx": cast(TradingAdapter, object())}, EventCollector()
+    )
+    try:
+        exchange = supervisor.accounts[0].exchange
+        assert exchange.get_url("orders", "private").split("?")[0] == (
+            f"wss://{host}/ws/v5/private"
+        )
+        assert exchange.get_url("orders-algo", "private").split("?")[0] == (
+            f"wss://{host}/ws/v5/business"
+        )
+    finally:
+        for account in supervisor.accounts:
+            await account.exchange.close()
 
 
 def test_private_profile_topology_fails_closed_before_start() -> None:

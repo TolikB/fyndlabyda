@@ -270,6 +270,21 @@ def test_live_mode_rejects_unsafe_runtime_boundaries(
         Settings(_env_file=None, **values)
 
 
+def test_live_okx_websocket_must_use_port_443_not_retired_8443() -> None:
+    values = _live_values()
+    values["LIVE_VENUES"] = "okx"
+    values["OKX_API_KEY"] = "okx-key"
+    values["OKX_API_SECRET"] = "okx-secret"
+    values["OKX_API_PASSPHRASE"] = "okx-passphrase"
+    values["LIVE_CREDENTIAL_POLICY_JSON"] = live_credential_policy_json({"okx": "okx-key"})
+
+    assert Settings(_env_file=None, **values).okx_ws_url == "wss://ws.okx.com/ws/v5/public"
+
+    values["OKX_WS_URL"] = "wss://ws.okx.com:8443/ws/v5/public"
+    with pytest.raises(ValidationError, match="OKX_WS_URL must be the official"):
+        Settings(_env_file=None, **values)
+
+
 def test_database_and_redis_credentials_are_not_in_settings_repr() -> None:
     settings = Settings(
         _env_file=None,

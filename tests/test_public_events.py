@@ -1491,3 +1491,27 @@ async def test_public_event_accounts_choose_which_ccxt_profiles_run() -> None:
         ] == [("bybit", "linear"), ("okx", "linear")]
     finally:
         await supervisor.close()
+
+
+async def test_okx_ccxt_streams_dial_port_443_not_retired_8443() -> None:
+    settings = Settings(
+        _env_file=None,
+        RUN_MODE="paper_test",
+        TRADING_MODE="PAPER",
+        PAPER_VENUES="okx",
+        CANONICAL_HIGH_FREQUENCY_MARKET_EVENTS_ENABLED=False,
+        MULTI_REGIME_ENABLED=False,
+        MARKET_DATA_STREAMS_ENABLED=False,
+        PUBLIC_EVENT_ACCOUNTS="spot,linear",
+    )
+    supervisor = create_public_event_supervisor(settings, EventCollector())
+    try:
+        assert len(supervisor.accounts) == 2
+        for account in supervisor.accounts:
+            exchange = account.exchange
+            assert exchange.get_url("trades", "public") == "wss://ws.okx.com/ws/v5/public"
+            assert exchange.get_url("candle1m", "public") == (
+                "wss://ws.okx.com/ws/v5/business"
+            )
+    finally:
+        await supervisor.close()

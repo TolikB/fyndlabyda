@@ -47,6 +47,17 @@ from funding_arbitrage.monitoring.metrics import websocket_reconnects_total
 logger = logging.getLogger(__name__)
 
 
+def use_okx_port_443_websockets(exchange: Any) -> None:
+    """Point a CCXT Pro OKX client at OKX's port-443 WebSocket hosts.
+
+    CCXT before 4.5.87 dials port 8443, which OKX is retiring (notice 64010).
+    CCXT appends ``/public``, ``/private`` or ``/business`` to these bases, and
+    ``set_sandbox_mode`` swaps in the ``test`` one, so set both before that call.
+    """
+    exchange.urls["api"]["ws"] = "wss://ws.okx.com/ws/v5"
+    exchange.urls["test"]["ws"] = "wss://wspap.okx.com/ws/v5"
+
+
 def _ms(value: object) -> datetime:
     return datetime.fromtimestamp(float(decimal(value, "timestamp") / Decimal("1000")), tz=UTC)
 
@@ -106,7 +117,7 @@ class OkxPublicAdapter(ExchangeAdapter):
     def __init__(
         self,
         base_url: str = "https://www.okx.com",
-        websocket_url: str = "wss://ws.okx.com:8443/ws/v5/public",
+        websocket_url: str = "wss://ws.okx.com/ws/v5/public",
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
         burst: int = 8,

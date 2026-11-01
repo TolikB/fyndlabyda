@@ -41,6 +41,7 @@ from funding_arbitrage.domain.events import (
 )
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
 from funding_arbitrage.exchanges.base.stream_batches import publish_events
+from funding_arbitrage.exchanges.okx.client import use_okx_port_443_websockets
 from funding_arbitrage.market_data.collector import MarketSnapshot
 from funding_arbitrage.market_data.quality import StreamIdentity
 from funding_arbitrage.market_data.venue_metadata import (
@@ -1130,6 +1131,8 @@ def create_public_event_supervisor(
                 exchange = getattr(ccxtpro, profile.exchange_class)(config)
                 if venue == "htx":
                     exchange.urls["hostnames"]["contract"] = "api.hbdm.com"
+                if venue == "okx":
+                    use_okx_port_443_websockets(exchange)
                 accounts.append(PublicEventAccount(profile, exchange))
     return PublicEventSupervisor(
         accounts,

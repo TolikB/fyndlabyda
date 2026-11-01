@@ -21,7 +21,7 @@ gate:
   settle: usdt
 okx:
   base_url: https://www.okx.com
-  websocket_url: wss://ws.okx.com:8443/ws/v5/public
+  websocket_url: wss://ws.okx.com/ws/v5/public
   funding_symbol_limit: 30
 binance:
   spot_base_url: https://api.binance.com
