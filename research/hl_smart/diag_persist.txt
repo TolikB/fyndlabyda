@@ -1,0 +1,21 @@
+dates 122, 2024-06-05..2026-09-30, median eligible 761, median top decile 77 accounts
+
+top decile minus median, next 30 days, mean over dates (pp)
+  stat             +4.86   95% CI [+1.02, +9.88]   dates > 0: 66%
+  stat_median      +4.68   95% CI [+1.42, +9.27]   dates > 0: 63%
+  stat_drop_best   +2.80   95% CI [-0.84, +7.78]   dates > 0: 62%
+  stat_trim10      +5.34   95% CI [+1.51, +10.49]   dates > 0: 67%
+  top decile next ROI, absolute: mean +4.86, its past ROI +47.35; all-account median next +0.00
+  share of top-decile accounts with next ROI > 0: 57% (all accounts 34%)
+  share of the top decile still in it 4 weeks later: 32%
+
+by half-year (survivorship should bite hardest near the 2026-10-31 snapshot)
+  2024H1  dates   4  stat +3.03  trim10 +2.37  dates>0  75%  BTC next30 -7.22  eligible 87
+  2024H2  dates  26  stat +7.60  trim10 +9.44  dates>0  58%  BTC next30 +8.64  eligible 127
+  2025H1  dates  26  stat +6.80  trim10 +7.40  dates>0  73%  BTC next30 +3.24  eligible 610
+  2025H2  dates  27  stat +5.63  trim10 +5.96  dates>0  67%  BTC next30 -3.11  eligible 813
+  2026H1  dates  25  stat +0.99  trim10 +0.73  dates>0  60%  BTC next30 -5.94  eligible 1051
+  2026H2  dates  14  stat +2.08  trim10 +1.78  dates>0  71%  BTC next30 +13.31  eligible 1315
+  last 6 months before the snapshot: stat +1.43 (22 dates); earlier +5.61 (100 dates)
+
+market direction: corr(stat, BTC next 30d) -0.08 over 117 dates; stat when BTC rose +2.03, when it fell +8.50

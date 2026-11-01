@@ -1,0 +1,22 @@
+{
+ "filters": {
+  "snapshot_1m": 2854,
+  "downloaded": 2854,
+  "top_dropped": 10,
+  "zero_perp": 1217,
+  "market_makers": 44
+ },
+ "sample": 1583,
+ "deep_history": 1441,
+ "dates": 122,
+ "mean_top_minus_median_pp": 4.86,
+ "ci95_pp": [
+  1.02,
+  9.88
+ ],
+ "mean_bottom_minus_median_pp": -1.19,
+ "median_eligible_per_date": 761,
+ "first_date": "2024-06-05",
+ "last_date": "2026-09-30",
+ "verdict": "PASS"
+}
