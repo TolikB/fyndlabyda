@@ -408,7 +408,9 @@ async def test_batch_append_deduplicates_inside_batch_and_against_journal() -> N
     await engine.dispose()
 
 
-async def test_journal_rejects_event_id_collision_with_different_payload() -> None:
+async def test_journal_rejects_event_id_collision_with_different_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -420,8 +422,21 @@ async def test_journal_rejects_event_id_collision_with_different_payload() -> No
 
     async with factory() as session:
         assert await append_event(session, original) is True
-        with pytest.raises(EventJournalIntegrityError, match="different payload hash"):
+        with pytest.raises(
+            EventJournalIntegrityError,
+            match="different payload hash: TRADE_TICK bybit.public.trade 1",
+        ):
             await append_event(session, collision)
+
+    # The log names the event and shows both payloads, so a collision that stops
+    # the stack can be traced to its producer.
+    record = next(r for r in caplog.records if r.message == "canonical_event_id_collision")
+    assert record.event_id == original.metadata.event_id
+    assert record.sequence_id == "1"
+    assert '"price": "62001"' in record.stored_payload
+    assert '"price": "99999"' in record.payload
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(CanonicalEventRecord)) == 1
 
     await engine.dispose()
 

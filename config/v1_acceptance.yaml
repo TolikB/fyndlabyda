@@ -111,14 +111,14 @@ requirements:
     evidence_sha256:
       migrations/versions/0011_canonical_events.py: 08dc8e3f20df217a6765df32e08c69eac8546fc019ebcb3d2acd1de09db3f7eb
       src/funding_arbitrage/database/repositories/directional_paper.py: 3d6246a471ec2ce8a07aef6621064ef2f9b0b78ffc7764f423bca7bb075a9c47
-      src/funding_arbitrage/database/repositories/events.py: 4b1e1bbf68bb6ec7d5881690d48559ce89ddd0e306a19b0ca60ab0caf56d7bd2
+      src/funding_arbitrage/database/repositories/events.py: 7fe68d4d09dded7a44299cfd310af13cf0d011ed2dba629ca5362728ae0e7ebb
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/services/event_router.py: 874325736b96ac2c24029df2bce49a8776ea80e3ba76aa90ff046369bd0a33bd
       src/funding_arbitrage/services/event_writer.py: a14dc726f4ff1465aae529134ab4f90adb2b96383ad7493ff719411178a92b1e
       src/funding_arbitrage/services/multi_regime_runtime.py: f68f472648dc04eae1d83e399416da0d7ff18bf595ff36ce2a66ef22204ddddf
       tests/test_directional_paper_restore.py: a9c02e22bb1c8ae73f5e30b9d0b19264a5fbddd6832dd90863c80142d1249370
       tests/test_domain_events.py: a2e05ddef42d353520089047f4533ad379e07175f03ed9401abb06c8b68043ab
-      tests/test_event_journal.py: a01291065738d52a851e4797465881e0d26b5b91a0dd9ac70486fe5800c026d6
+      tests/test_event_journal.py: c244b56e4662f09fa9d8a5a12b62d6c62b09f5c00e0407d406504528cd1c7469
       tests/test_event_writer.py: c5674ca03a7523a21f11394c545f7f86a9ebecaa55ee7d0f63b07bd8bb421a28
   - id: MODE-001
     category: architecture
@@ -413,7 +413,7 @@ requirements:
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/exchanges/public_events.py: ac104c60f3ae15ae4ef583b7f610abd6dd8e763e7c44af61ff1f13fa2fc1884e
       src/funding_arbitrage/services/event_writer.py: a14dc726f4ff1465aae529134ab4f90adb2b96383ad7493ff719411178a92b1e
-      tests/test_event_journal.py: a01291065738d52a851e4797465881e0d26b5b91a0dd9ac70486fe5800c026d6
+      tests/test_event_journal.py: c244b56e4662f09fa9d8a5a12b62d6c62b09f5c00e0407d406504528cd1c7469
       tests/test_public_events.py: bee13c7d3eb4f8494bcfdbc4e5415f510d5dade1f910f9915c05582a6f9dfb8f
   - id: MD-005
     category: market_data
@@ -1243,9 +1243,9 @@ requirements:
       docs/V1_DATA_RETENTION.md: 123486d3c77db980a17bc3c0a4241e8b38457dd625a13d3944a69136ac2f3293
       migrations/versions/0011_canonical_events.py: 08dc8e3f20df217a6765df32e08c69eac8546fc019ebcb3d2acd1de09db3f7eb
       migrations/versions/0013_append_only_retention.py: 66ac7b58b134efe93d6f4f036a0e6fc1bb38ac6b78a645310105efd564dbe03b
-      src/funding_arbitrage/database/repositories/events.py: 4b1e1bbf68bb6ec7d5881690d48559ce89ddd0e306a19b0ca60ab0caf56d7bd2
+      src/funding_arbitrage/database/repositories/events.py: 7fe68d4d09dded7a44299cfd310af13cf0d011ed2dba629ca5362728ae0e7ebb
       src/funding_arbitrage/storage/incident.py: fe38946017308f6ffd426cb2e8c317350890081a91eda15ba5dfb7a1b71dbeb4
-      tests/test_event_journal.py: a01291065738d52a851e4797465881e0d26b5b91a0dd9ac70486fe5800c026d6
+      tests/test_event_journal.py: c244b56e4662f09fa9d8a5a12b62d6c62b09f5c00e0407d406504528cd1c7469
       tests/test_immutable_retention.py: 0b03cec1edc1a92886cf86228470e3464e51764f1400af2feb7a29efe002f8c0
   - id: SEC-001
     category: security
@@ -1610,7 +1610,7 @@ requirements:
       tests/test_domain_events.py: a2e05ddef42d353520089047f4533ad379e07175f03ed9401abb06c8b68043ab
       tests/test_double_entry_ledger.py: 6ef6da1228a9bb9e74e5ca5b69e2668561a89b56ea460c5af4dd77efc11baff8
       tests/test_durable_oms.py: f47c1a21eca714fd4092905d8e4565c944d6a5af33bd97d5a4e247f9c0da2e96
-      tests/test_event_journal.py: a01291065738d52a851e4797465881e0d26b5b91a0dd9ac70486fe5800c026d6
+      tests/test_event_journal.py: c244b56e4662f09fa9d8a5a12b62d6c62b09f5c00e0407d406504528cd1c7469
       tests/test_event_router_consumers.py: 94deae50fd11ed9946ae0789e3a860d8583f2acd38bedbe7a9666631462fcf18
       tests/test_event_sampling.py: e8748784ecd42d392e4d78125605c5130869527bbfe1d3b9e1f1f9b11f40fe59
       tests/test_event_writer.py: c5674ca03a7523a21f11394c545f7f86a9ebecaa55ee7d0f63b07bd8bb421a28

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
@@ -73,6 +74,10 @@ PAYLOAD_MODELS: dict[EventKind, type[BaseModel]] = {
     EventKind.BALANCE_SNAPSHOT: BalanceSnapshot,
     EventKind.UNIVERSE_SELECTION_SNAPSHOT: UniverseSelectionSnapshot,
 }
+
+
+logger = logging.getLogger(__name__)
+_COLLISION_EXCERPT_CHARS = 4000
 
 
 class EventJournalIntegrityError(RuntimeError):
@@ -186,6 +191,41 @@ async def _stored_hashes(
     return {event_id: payload_hash for event_id, payload_hash in result.all()}
 
 
+async def _log_collision(
+    session: AsyncSession,
+    conflicts: Sequence[dict[str, Any]],
+    existing_hashes: dict[str, str],
+) -> None:
+    # A collision stops the writer and the whole paper stack. On 2026-11-01 one
+    # restarted the V1 paper app and nothing said which event it was.
+    row = conflicts[0]
+    stored = await session.scalar(
+        select(CanonicalEventRecord.payload).where(
+            CanonicalEventRecord.event_id == row["event_id"]
+        )
+    )
+    await session.rollback()
+    logger.error(
+        "canonical_event_id_collision",
+        extra={
+            "event": "canonical_journal_integrity",
+            "event_id": row["event_id"],
+            "kind": row["kind"],
+            "source": row["source"],
+            "sequence_id": row["sequence_id"],
+            "stored_payload_hash": existing_hashes[row["event_id"]],
+            "payload_hash": row["payload_hash"],
+            "stored_payload": _excerpt(stored),
+            "payload": _excerpt(row["payload"]),
+            "collisions": len(conflicts),
+        },
+    )
+
+
+def _excerpt(payload: object) -> str:
+    return json.dumps(payload, sort_keys=True, default=str)[:_COLLISION_EXCERPT_CHARS]
+
+
 async def append_event(session: AsyncSession, event: EventEnvelope[Any]) -> bool:
     """Durably append once, returning false for a reconnect/replay duplicate."""
 
@@ -208,12 +248,19 @@ async def append_events(session: AsyncSession, events: Sequence[EventEnvelope[An
         return 0
     dialect = session.get_bind().dialect.name
     existing_hashes = await _stored_hashes(session, dialect, list(unique))
-    if any(
-        event_id in existing_hashes and existing_hashes[event_id] != row["payload_hash"]
+    conflicts = [
+        row
         for event_id, row in unique.items()
-    ):
+        if event_id in existing_hashes and existing_hashes[event_id] != row["payload_hash"]
+    ]
+    if conflicts:
         await session.rollback()
-        raise EventJournalIntegrityError("stored event ID has a different payload hash")
+        await _log_collision(session, conflicts, existing_hashes)
+        row = conflicts[0]
+        raise EventJournalIntegrityError(
+            "stored event ID has a different payload hash: "
+            f"{row['kind']} {row['source']} {row['sequence_id']}"
+        )
     if dialect == "postgresql":
         inserted_ids = await session.execute(
             _PG_APPEND,
