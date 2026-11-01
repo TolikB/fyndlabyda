@@ -1,0 +1,32 @@
+/w/code/bt.py:157: RuntimeWarning: invalid value encountered in scalar power
+  "cagr_pct": round((eq.iloc[-1] ** (365 / len(pnl)) - 1) * 100, 1),
+/w/code/bt.py:157: RuntimeWarning: invalid value encountered in scalar power
+  "cagr_pct": round((eq.iloc[-1] ** (365 / len(pnl)) - 1) * 100, 1),
+F48 1x ann  63 trades  72 mean   2.154% t  1.09 win 69.8% worst -35.7% best 36.6% funding -1.483% stopped 7 rate 3.0/mo src {'binance': {'n': 11, 'mean_pct': 5.619}, 'upbit': {'n': 61, 'mean_pct': 2.733}}
+      s=1 figure 6.46%/mo | book month 2.08% dd 62.5% years {'2020': 0.0, '2021': 41.7, '2022': 28.6, '2023': 90.3, '2024': -36.2, '2025': -23.4}
+      s=2 figure 12.92%/mo | book month 4.04% dd 96.5% years {'2020': 0.0, '2021': 93.4, '2022': 59.9, '2023': 148.9, '2024': -84.9, '2025': -76.4}
+      s=3 figure 19.38%/mo | book month 5.56% dd 103.0% years {'2020': 0.0, '2021': 156.2, '2022': 94.1, '2023': 9.8, '2024': -100.3, '2025': -99.9}
+F48 2x ann  63 trades  72 mean   1.709% t  0.87 win 66.7% worst -36.3% best 36.0% funding -1.483% stopped 7 rate 3.0/mo src {'binance': {'n': 11, 'mean_pct': 5.183}, 'upbit': {'n': 61, 'mean_pct': 2.295}}
+      s=1 figure 5.13%/mo | book month 1.66% dd 65.5% years {'2020': 0.0, '2021': 40.2, '2022': 27.4, '2023': 80.3, '2024': -43.0, '2025': -30.6}
+      s=2 figure 10.26%/mo | book month 3.23% dd 98.0% years {'2020': 0.0, '2021': 89.8, '2022': 57.3, '2023': 121.5, '2024': -88.5, '2025': -81.2}
+      s=3 figure 15.38%/mo | book month 4.41% dd 102.8% years {'2020': 0.0, '2021': 149.7, '2022': 89.5, '2023': -24.1, '2024': -100.2, '2025': -100.0}
+   passes False s* None
+L15 1x ann  63 trades  72 mean  -0.935% t -1.12 win 41.3% worst -24.0% best 23.6% funding 0.0% stopped 0 rate 3.0/mo src {'binance': {'n': 11, 'mean_pct': -1.174}, 'upbit': {'n': 61, 'mean_pct': -0.935}}
+      s=1 figure -2.8%/mo | book month -0.99% dd 56.5% years {'2020': 0.0, '2021': -28.3, '2022': -3.2, '2023': -11.3, '2024': -3.0, '2025': -19.5}
+      s=2 figure -5.61%/mo | book month -2.16% dd 85.7% years {'2020': 0.0, '2021': -53.9, '2022': -6.3, '2023': -23.6, '2024': -11.4, '2025': -42.6}
+      s=3 figure -8.41%/mo | book month -3.51% dd 97.0% years {'2020': 0.0, '2021': -76.8, '2022': -9.3, '2023': -36.1, '2024': -23.7, '2025': -64.9}
+L15 2x ann  63 trades  72 mean  -1.551% t -1.86 win 34.9% worst -24.4% best 22.7% funding 0.0% stopped 0 rate 3.0/mo src {'binance': {'n': 11, 'mean_pct': -1.779}, 'upbit': {'n': 61, 'mean_pct': -1.542}}
+      s=1 figure -4.65%/mo | book month -1.57% dd 69.6% years {'2020': 0.0, '2021': -29.4, '2022': -4.4, '2023': -18.0, '2024': -16.6, '2025': -29.7}
+      s=2 figure -9.31%/mo | book month -3.3% dd 93.1% years {'2020': 0.0, '2021': -55.6, '2022': -8.7, '2023': -34.9, '2024': -34.7, '2025': -56.7}
+      s=3 figure -13.96%/mo | book month -5.18% dd 99.1% years {'2020': 0.0, '2021': -78.6, '2022': -12.8, '2023': -50.1, '2024': -52.1, '2025': -77.6}
+   passes False s* None
+L60 1x ann  63 trades  72 mean  -1.450% t -1.33 win 36.5% worst -30.2% best 35.1% funding -0.084% stopped 0 rate 3.0/mo src {'binance': {'n': 11, 'mean_pct': 0.072}, 'upbit': {'n': 61, 'mean_pct': -1.887}}
+      s=1 figure -4.35%/mo | book month -1.47% dd 70.8% years {'2020': 0.0, '2021': -43.8, '2022': -4.6, '2023': -11.5, '2024': 9.9, '2025': -39.8}
+      s=2 figure -8.7%/mo | book month -3.1% dd 95.3% years {'2020': 0.0, '2021': -76.0, '2022': -9.0, '2023': -22.9, '2024': 4.1, '2025': -69.3}
+      s=3 figure -13.05%/mo | book month -4.88% dd 99.8% years {'2020': 0.0, '2021': -96.2, '2022': -13.3, '2023': -33.9, '2024': -13.5, '2025': -87.6}
+L60 2x ann  63 trades  72 mean  -2.066% t -1.91 win 36.5% worst -30.6% best 34.3% funding -0.084% stopped 0 rate 3.0/mo src {'binance': {'n': 11, 'mean_pct': -0.533}, 'upbit': {'n': 61, 'mean_pct': -2.494}}
+      s=1 figure -6.2%/mo | book month -2.04% dd 80.2% years {'2020': 0.0, '2021': -44.8, '2022': -5.8, '2023': -18.2, '2024': -5.4, '2025': -47.6}
+      s=2 figure -12.4%/mo | book month -4.21% dd 97.9% years {'2020': 0.0, '2021': -77.1, '2022': -11.4, '2023': -34.4, '2024': -23.1, '2025': -77.0}
+      s=3 figure -18.6%/mo | book month -6.49% dd 100.0% years {'2020': 0.0, '2021': -96.8, '2022': -16.7, '2023': -48.4, '2024': -45.7, '2025': -92.3}
+   passes False s* None
+passing: []
