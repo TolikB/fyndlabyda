@@ -265,12 +265,33 @@ exceeds +2%. So Bybit adds no event worth a trial.
 **OKX is not used.** Its announcement API answers the EU-based VM with the EEA site's feed, and this
 project does not work around regional restrictions.
 
+## Round 21: buy 2 s after an Upbit BTC/USDT-market listing (`bt_upbit_btc.py`, 718e384)
+
+**Why it looked worth a trial.** Round 16 used only KRW notices. `diag_upbit_btc.py` showed that
+BTC/USDT-only listings also move the Binance perp, and more slowly. Over 41 development notices the
+median move was +2.2% at T+2 s, +8.9% at 10 s and +5.2% at 60 s. Those numbers set the design, so
+the holdout is the test.
+
+**Rules.**
+- Enter at T+2 s with the 16b queueing floor.
+- Exit at T+10 s (E2X10) or T+60 s (E2X60), with a seller-side floor.
+- The book and bar are those of 16b.
+
+| | Announcements | Mean 1× | t | Win | Result |
+|---|---|---|---|---|---|
+| Development E2X10 | 26 | +3.24% | 2.84 | 62% | passes at s*=2: figure 7.0%/mo, DD 13.4% |
+| Development E2X60 | 26 | +2.22% | 1.63 | 54% | fails |
+| **Holdout E2X10, one look** | **14** | **−1.97%** | **−1.55** | **21%** | **FAIL** (DD 26% at s=1) |
+
+The holdout says the same as 16b's 2026 quarters. By 2025 H2 the race is fast enough that a 2 s
+entry buys the top. Whatever edge is left belongs to sub-second bots.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
 - `/w/pnl_round16b.parquet` adds 2 trials.
-- That makes 577 in all. Rounds 17 and 18 bring it to 581, and `/w/pnl_round19.parquet` (2 trials)
-  to 583. The diagnostics add none.
+- That makes 577 in all. Rounds 17 and 18 bring it to 581, `/w/pnl_round19.parquet` (2 trials) to 583,
+  and `/w/pnl_round21.parquet` (2 trials) to 585. The diagnostics add none.
 
 ## Files
 
