@@ -1,0 +1,10 @@
+development BTC/USDT-only listing notices with an old Binance perp: 41
+price at T + L vs the last trade before T, %:
+  L=  1s mean   2.22 median   0.04 share > +2% 29%
+  L=  2s mean   4.81 median   2.23 share > +2% 51%
+  L=  3s mean   6.97 median   5.62 share > +2% 66%
+  L=  5s mean   9.60 median   8.83 share > +2% 80%
+  L= 10s mean  10.40 median   8.91 share > +2% 83%
+  L= 60s mean   8.71 median   5.24 share > +2% 78%
+left from 2 s to 60 s (median %): 1.70
+by year, median at 60 s: 2020 n1 0.7; 2021 n5 14.8; 2022 n5 4.8; 2023 n4 5.5; 2024 n17 3.3; 2025 n9 11.8
