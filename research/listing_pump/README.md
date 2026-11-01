@@ -286,6 +286,25 @@ the holdout is the test.
 The holdout says the same as 16b's 2026 quarters. By 2025 H2 the race is fast enough that a 2 s
 entry buys the top. Whatever edge is left belongs to sub-second bots.
 
+## Forward step 1: the paper sniper (`fwd_sniper.py`, container `fwd-sniper`, since 2026-11-01)
+
+The rules are in the docstring and were fixed before any forward event.
+
+- **Trigger:** every market `upbit-watch` sees added to Upbit's official list, whether KRW, BTC or
+  USDT. One coin counts once within 72 h.
+- **Perp:** the coin's Binance perp, at least 2 days old.
+- **Fill:** 3 minutes later it fetches REST aggTrades and fills the 16b rule on this host's clock:
+  - entry at t_seen + one-way delay, with the queueing floor;
+  - exit at t_seen + 60 s;
+  - 16b costs.
+- **Price-side latency check:** it also records `pre_move_pct`, the part of the jump that happened
+  in the 10 s before we saw the market.
+- **Ledger:** `fwd_sniper/ledger.jsonl`, plus `report.json`.
+- **Verdict:** on or after 2026-12-27, equity ≥ 1 and drawdown ≤ 35% at s = 1.
+
+**Dry run.** It was replayed on the KRW-NIL notice of 2026-10-27 07:30:00 UTC, part of the spent 16b
+holdout. REST and the archive give the same S2 fill: entry 0.07163, exit 0.07169.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
@@ -302,5 +321,5 @@ entry buys the top. Whatever edge is left belongs to sub-second bots.
   `results_latency_holdout.json`, `latency_holdout.log`, `badnews_*.log`, `results_badnews_*.json`.
 - **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
   `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`, `diag_bybit.py`, `diag_bybit.txt`.
-- **Forward logger:** `watch_upbit.py`.
+- **Forward:** `watch_upbit.py`, `analyze_watch.py`, `fwd_sniper.py`, `selftest_sniper.py`.
 - **Data on the VM:** `/w/data/listing/`, `listing_pump/watch/`.
