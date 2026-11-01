@@ -176,6 +176,20 @@ This is the first holdout pass in 577 trials. Its terms matter more than the hea
 - The median move left after 2 s fell from 11.2% (2025) to 4.3% (2026).
 - After 5 s it fell from 2.4% to −0.6%.
 
+**Latency budget** (`diag_budget.py` → `diag_budget.txt`). This is descriptive, computed on the
+spent holdout with the S2 entry floor, exit and costs.
+
+| Entry delay | 2026 mean a trade | 2026 median | ≈ a month at s=1 (6 trades) |
+|---|---|---|---|
+| 0.5 s | +10.3% | +6.0% | 61% |
+| 1 s | +5.0% | +3.7% | 29% |
+| 2 s | +3.7% | +0.9% | 21% |
+| 3 s | +2.1% | −0.6% | 12% |
+| 5 s | +0.3% | −2.1% | 2% |
+
+A bot that lands within about one second earns most trades. At 2–3 s the median trade is already
+flat or losing, and the mean rests on a few large jumps.
+
 **The bar does not test the main risk.** The backtest assumes we see the notice and our order lands
 2 s after T. Nothing here shows that a bot of ours can do that.
 
@@ -201,5 +215,5 @@ This is the first holdout pass in 577 trials. Its terms matter more than the hea
 - **Results:** `results_dev.json`, `dev.log`, `results_latency_dev.json`, `latency_dev.log`,
   `results_latency_holdout.json`, `latency_holdout.log`.
 - **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
-  `diag_holdout.py`, `diag_holdout.txt`.
+  `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`.
 - **Data on the VM:** `/w/data/listing/`.
