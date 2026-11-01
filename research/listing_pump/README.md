@@ -122,14 +122,84 @@ pre-registered on these development numbers and tested once on the unspent holdo
 case, but the move is over in the first seconds. A minute later, what remains is a crowded fade with
 no significant edge. The speed version is round 16b.
 
+## Round 16b: buy 2 or 5 seconds after the post (`bt_latency.py`, 4c53204)
+
+**Rules.** The rules were pre-registered after the development numbers above were seen, so the
+development run is not independent. The holdout is the test.
+
+- **Events:** the same as round 16.
+- **Entry:** at T + L seconds, L ∈ {2, 5}. The price is the larger of the first trade at or after T + L
+  and the VWAP of buyer-initiated trades in the next second. This floor models queueing behind faster
+  buyers.
+- **Exit:** the first trade at or after T + 60 s.
+- **Costs:** as in round 16.
+- **Bar:** the same as round 16. On the holdout, the monthly figure is read straight from the book.
+
+**Development** (`latency_dev.log`):
+
+| Trial | Mean | t | Win | Max DD |
+|---|---|---|---|---|
+| S2 | +10.6% | 5.34 | 73% | 23% |
+| S5 | +5.4% | 3.35 | 54% | 34% |
+
+Both pass, as they had to.
+
+**Holdout, one look** (`latency_holdout.log`, 2025-07-01..2026-10-28, 99 announcements):
+
+| Trial | Mean 1× | t | Win | Mean 2× | Max DD at s=1 | Verdict |
+|---|---|---|---|---|---|---|
+| S2 | +8.73% | 4.06 | 55% | +7.94% | 32.3% | **PASS** |
+| S5 | +4.83% | 2.52 | 47% | +4.05% | 67.5% | FAIL (drawdown) |
+
+This is the first holdout pass in 577 trials. Its terms matter more than the headline
+(`diag_holdout.py` → `diag_holdout.txt`).
+
+**A few events carry the mean.**
+- The median S2 trade is +1.4%. The 10%-winsorised mean is +6.5%, and dropping the 5 best trades
+  leaves +5.3%.
+- The best trades are CYBER +105%, IN +85%, OMNI +79%, API3 +63% and HYPER +60%.
+- The simple monthly sum at s=1 averages +54%, but its median month is +18% and its worst is −26%.
+
+**It is shrinking fast.**
+
+| Quarter | S2 mean | S2 median |
+|---|---|---|
+| 2025 Q3 | +15.9% | −0.5% |
+| 2025 Q4 | +17.3% | +8.6% |
+| 2026 Q1 | +2.1% | −0.4% |
+| 2026 Q2 | +2.6% | +2.2% |
+| 2026 Q3 | +2.3% | −0.3% |
+| 2026 Q4 (8 trades) | +13.1% | +8.7% |
+
+**The race got faster.**
+- In the holdout, half the +60 s jump is done 1.1 s after T, against 1.9 s on development.
+- The median move left after 2 s fell from 11.2% (2025) to 4.3% (2026).
+- After 5 s it fell from 2.4% to −0.6%.
+
+**The bar does not test the main risk.** The backtest assumes we see the notice and our order lands
+2 s after T. Nothing here shows that a bot of ours can do that.
+
+- **Upbit has no official notice feed.** Its web API answers the research VM with Cloudflare error
+  1015 and throttles the workstation at about one request a second. Fast polling would mean working
+  around a bot check, which this project will not do.
+- **Legitimate routes exist.** For Binance listings (17 of the 101 holdout trades, mean +8.2%,
+  median +2.4%), Binance's official announcement WebSocket. For Upbit, a paid low-latency news feed.
+- **Next step.** Only a forward paper run with a real detector can measure our delay: detection time
+  against T, and fills from the live trade stream at that time. Without it, this pass is not a
+  strategy. Whether to use either route is the user's decision.
+
 ## Registry
 
-`/w/pnl_round16.parquet` adds 3 trials: 575 in all. The diagnostics add none.
+- `/w/pnl_round16.parquet` adds 3 trials.
+- `/w/pnl_round16b.parquet` adds 2 trials.
+- That makes 577 in all, and round 17 brings it to 579. The diagnostics add none.
 
 ## Files
 
 - **Download:** `download_upbit.py`, `download_binance.py`.
-- **Test:** `bt_spotlist.py`, `selftest_spotlist.py`.
-- **Results:** `results_dev.json`, `dev.log`.
-- **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`.
+- **Test:** `bt_spotlist.py`, `selftest_spotlist.py`, `bt_latency.py`, `selftest_latency.py`.
+- **Results:** `results_dev.json`, `dev.log`, `results_latency_dev.json`, `latency_dev.log`,
+  `results_latency_holdout.json`, `latency_holdout.log`.
+- **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
+  `diag_holdout.py`, `diag_holdout.txt`.
 - **Data on the VM:** `/w/data/listing/`.

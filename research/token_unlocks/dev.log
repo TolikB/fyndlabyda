@@ -1,0 +1,33 @@
+unlock|k7: events 196 perps 38 median size 3.6% active days 705
+   1x s=1 month 4.48% median 4.91% t 1.69 sharpe 1.07 dd 43.0% pos 60.0% years {'2023': -1.5, '2024': 66.0, '2025': 70.9} parts {'gross': 2.2236, 'funding': -0.0928, 'costs': 0.6777, 'turnover_per_day': 0.1456}
+   1x s=2 month 8.76% median 6.44% t 1.56 sharpe 1.07 dd 70.2% pos 53.0% years {'2023': -33.3, '2024': 120.1, '2025': 156.8} parts {'gross': 4.4473, 'funding': -0.1857, 'costs': 1.3554, 'turnover_per_day': 0.2912}
+   1x s=3 month 12.7% median 5.32% t 1.41 sharpe 1.07 dd 90.4% pos 53.0% years {'2023': -73.4, '2024': 129.9, '2025': 236.8} parts {'gross': 6.6709, 'funding': -0.2785, 'costs': 2.0331, 'turnover_per_day': 0.4368}
+   2x s=1 month 2.15% median 3.25% t 0.84 sharpe 0.54 dd 44.7% pos 57.0% years {'2023': -18.8, '2024': 26.8, '2025': 39.2} parts {'gross': 2.2236, 'funding': -0.0928, 'costs': 1.3554, 'turnover_per_day': 0.1456}
+   2x s=2 month 3.87% median 2.28% t 0.73 sharpe 0.54 dd 77.0% pos 50.0% years {'2023': -55.0, '2024': 28.1, '2025': 70.1} parts {'gross': 4.4473, 'funding': -0.1857, 'costs': 2.7108, 'turnover_per_day': 0.2912}
+   2x s=3 month 5.07% median -0.78% t 0.6 sharpe 0.54 dd 95.7% pos 50.0% years {'2023': -85.5, '2024': 1.6, '2025': 81.1} parts {'gross': 6.6709, 'funding': -0.2785, 'costs': 4.0662, 'turnover_per_day': 0.4368}
+   passes False s* None
+unlock|k21: events 195 perps 37 median size 3.6% active days 903
+   1x s=1 month 2.09% median 4.18% t 0.88 sharpe 0.56 dd 57.8% pos 57.0% years {'2023': -45.4, '2024': 66.5, '2025': 60.2} parts {'gross': 1.2017, 'funding': -0.1073, 'costs': 0.38, 'turnover_per_day': 0.079}
+   1x s=2 month 3.78% median 7.54% t 0.77 sharpe 0.56 dd 88.3% pos 57.0% years {'2023': -79.9, '2024': 134.9, '2025': 126.0} parts {'gross': 2.4034, 'funding': -0.2146, 'costs': 0.76, 'turnover_per_day': 0.158}
+   1x s=3 month 5.12% median 9.64% t 0.68 sharpe 0.56 dd 98.1% pos 57.0% years {'2023': -95.7, '2024': 179.6, '2025': 173.4} parts {'gross': 3.6052, 'funding': -0.322, 'costs': 1.1399, 'turnover_per_day': 0.2371}
+   2x s=1 month 0.83% median 2.78% t 0.36 sharpe 0.26 dd 63.5% pos 57.0% years {'2023': -52.3, '2024': 43.8, '2025': 46.8} parts {'gross': 1.2017, 'funding': -0.1073, 'costs': 0.76, 'turnover_per_day': 0.079}
+   2x s=2 month 1.21% median 4.68% t 0.26 sharpe 0.26 dd 91.3% pos 57.0% years {'2023': -84.7, '2024': 75.2, '2025': 89.5} parts {'gross': 2.4034, 'funding': -0.2146, 'costs': 1.5199, 'turnover_per_day': 0.158}
+   2x s=3 month 1.2% median 5.67% t 0.17 sharpe 0.26 dd 98.8% pos 57.0% years {'2023': -97.2, '2024': 79.7, '2025': 109.7} parts {'gross': 3.6052, 'funding': -0.322, 'costs': 2.2799, 'turnover_per_day': 0.2371}
+   passes False s* None
+early 2021-22 (reported, not judged):
+unlock|k7: events 45 perps 14 median size 3.39% active days 309
+   1x s=1 month -3.74% median -0.45% t -0.86 sharpe -1.14 dd 89.8% pos 33.0% years {'2021': -88.0, '2022': -20.4} parts {'gross': -1.311, 'funding': -0.0901, 'costs': 0.2571, 'turnover_per_day': 0.0595}
+   1x s=2 month -4.75% median -1.7% t -0.78 sharpe -1.14 dd 100.0% pos 33.0% years {'2021': -100.0, '2022': -50.6} parts {'gross': -2.6219, 'funding': -0.1801, 'costs': 0.5142, 'turnover_per_day': 0.119}
+   1x s=3 month -5.91% median -6.23% t -0.74 sharpe -1.14 dd 100.1% pos 29.0% years {'2021': -100.0, '2022': -76.8} parts {'gross': -3.9329, 'funding': -0.2702, 'costs': 0.7714, 'turnover_per_day': 0.1784}
+   2x s=1 month -4.68% median -1.07% t -1.09 sharpe -1.3 dd 91.6% pos 33.0% years {'2021': -89.1, '2022': -32.1} parts {'gross': -1.311, 'funding': -0.0901, 'costs': 0.5142, 'turnover_per_day': 0.0595}
+   2x s=2 month -6.6% median -3.85% t -1.1 sharpe -1.3 dd 100.0% pos 29.0% years {'2021': -100.0, '2022': -64.1} parts {'gross': -2.6219, 'funding': -0.1801, 'costs': 1.0285, 'turnover_per_day': 0.119}
+   2x s=3 month -8.64% median -9.66% t -1.12 sharpe -1.3 dd 100.0% pos 25.0% years {'2021': -100.0, '2022': -85.7} parts {'gross': -3.9329, 'funding': -0.2702, 'costs': 1.5427, 'turnover_per_day': 0.1784}
+   passes None s* None
+unlock|k21: events 44 perps 14 median size 3.43% active days 570
+   1x s=1 month -7.81% median -2.4% t -1.59 sharpe -1.71 dd 97.9% pos 29.0% years {'2021': -92.9, '2022': -70.3} parts {'gross': -2.6114, 'funding': -0.0208, 'costs': 0.2153, 'turnover_per_day': 0.047}
+   1x s=2 month -12.9% median -10.68% t -1.84 sharpe -1.71 dd 100.0% pos 29.0% years {'2021': -100.0, '2022': -96.4} parts {'gross': -5.2228, 'funding': -0.0416, 'costs': 0.4306, 'turnover_per_day': 0.0941}
+   1x s=3 month -18.36% median -20.24% t -2.12 sharpe -1.71 dd 100.7% pos 29.0% years {'2021': -100.0, '2022': -100.1} parts {'gross': -7.8342, 'funding': -0.0624, 'costs': 0.6459, 'turnover_per_day': 0.1411}
+   2x s=1 month -8.58% median -3.39% t -1.76 sharpe -1.83 dd 98.3% pos 29.0% years {'2021': -93.4, '2022': -73.8} parts {'gross': -2.6114, 'funding': -0.0208, 'costs': 0.4306, 'turnover_per_day': 0.047}
+   2x s=2 month -14.35% median -12.68% t -2.09 sharpe -1.83 dd 100.0% pos 29.0% years {'2021': -100.0, '2022': -97.2} parts {'gross': -5.2228, 'funding': -0.0416, 'costs': 0.8612, 'turnover_per_day': 0.0941}
+   2x s=3 month -20.42% median -22.9% t -2.42 sharpe -1.83 dd 100.7% pos 29.0% years {'2021': -100.0, '2022': -100.0} parts {'gross': -7.8342, 'funding': -0.0624, 'costs': 1.2918, 'turnover_per_day': 0.1411}
+   passes None s* None

@@ -1,0 +1,26 @@
+S2: trades 101, mean 8.93%, median 1.41%, 10% winsorised mean 6.49%, without the top 5 5.31%, share > 0 54%
+  by quarter: 2025Q3 n23 mean 15.9% median -0.5%; 2025Q4 n18 mean 17.3% median 8.6%; 2026Q1 n19 mean 2.1% median -0.4%; 2026Q2 n17 mean 2.6% median 2.2%; 2026Q3 n16 mean 2.3% median -0.3%; 2026Q4 n8 mean 13.1% median 8.7%
+  by source: binance n17 mean 8.2% median 2.4%; upbit n84 mean 9.1% median 1.2%
+  best: HYPERUSDT 60%, API3USDT 63%, OMNIUSDT 79%, INUSDT 85%, CYBERUSDT 105%
+  worst: LINEAUSDT -13%, BREVUSDT -11%, MONUSDT -10%, KITEUSDT -9%, SENTUSDT -9%
+  simple monthly sum at s=1: mean 54.0%, median 18.4%, worst -25.7%, months 16
+S5: trades 101, mean 4.96%, median -0.81%, 10% winsorised mean 2.58%, without the top 5 1.64%, share > 0 46%
+  by quarter: 2025Q3 n23 mean 11.4% median -2.5%; 2025Q4 n18 mean 12.0% median 3.3%; 2026Q1 n19 mean -1.0% median -2.6%; 2026Q2 n17 mean 0.3% median -0.8%; 2026Q3 n16 mean -2.3% median -5.0%; 2026Q4 n8 mean 9.0% median 2.9%
+  by source: binance n17 mean 2.6% median -2.1%; upbit n84 mean 5.4% median -0.8%
+  best: API3USDT 51%, HYPERUSDT 52%, OMNIUSDT 59%, INUSDT 82%, CYBERUSDT 100%
+  worst: ZKPUSDT -14%, LINEAUSDT -13%, PROMUSDT -12%, ENSOUSDT -12%, AVNTUSDT -12%
+  simple monthly sum at s=1: mean 29.9%, median 2.5%, worst -49.9%, months 16
+
+holdout events with trades 101, median +60 s move 14.8%, 90 with a move >= 4%
+seconds to reach 25/50/80% of the +60 s move (quartiles): t25 [0.7, 1.0, 2.0]; t50 [0.7, 1.1, 2.3]; t80 [0.9, 2.3, 5.9]
+price 5 s before T vs the last trade before T (median): 0.000%
+median price at T + L and what is left of the +60 s move:
+  L=  1s price   3.20%  left   9.56%
+  L=  2s price  14.96%  left   4.54%
+  L=  3s price  15.07%  left   1.28%
+  L=  5s price  16.28%  left  -0.40%
+  L= 10s price  16.18%  left   0.19%
+  L= 30s price  15.16%  left  -0.56%
+  L=120s price  14.30%  left   0.23%
+  L=300s price  14.92%  left   0.00%
+left after 2 s / 5 s by year (median): 2025 n41 11.2% / 2.4%; 2026 n60 4.3% / -0.6%
