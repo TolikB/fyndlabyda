@@ -1,0 +1,1 @@
+events with a 60 s drop >= 4%: 26; seconds to a quarter of the drop, quartiles [1.8, 2.8, 3.3]; over 30 s: 0% -> ok

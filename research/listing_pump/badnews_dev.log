@@ -1,0 +1,18 @@
+S2 1x ann  44 trades  59 mean   3.219% t  3.40 win 59.1% worst -3.8% best 20.2% funding 0.0% stopped 0 rate 1.5/mo src {'binance': {'n': 29, 'mean_pct': 7.829}, 'upbit': {'n': 30, 'mean_pct': 0.246}}
+      s=1 figure 4.83%/mo | book month 2.2% dd 6.6% years {'2020': 0.0, '2021': 0.0, '2022': -5.9, '2023': 2.1, '2024': 110.8, '2025': 84.0}
+      s=2 figure 9.66%/mo | book month 4.52% dd 12.9% years {'2020': 0.0, '2021': 0.0, '2022': -11.6, '2023': 3.8, '2024': 308.8, '2025': 212.8}
+      s=3 figure 14.48%/mo | book month 6.95% dd 18.8% years {'2020': 0.0, '2021': 0.0, '2022': -17.1, '2023': 5.0, '2024': 642.2, '2025': 399.9}
+S2 2x ann  44 trades  59 mean   2.498% t  2.67 win 50.0% worst -4.6% best 19.3% funding 0.0% stopped 0 rate 1.5/mo src {'binance': {'n': 29, 'mean_pct': 6.979}, 'upbit': {'n': 30, 'mean_pct': -0.394}}
+      s=1 figure 3.75%/mo | book month 1.71% dd 19.2% years {'2020': 0.0, '2021': 0.0, '2022': -11.5, '2023': -3.3, '2024': 88.4, '2025': 70.0}
+      s=2 figure 7.49%/mo | book month 3.5% dd 35.6% years {'2020': 0.0, '2021': 0.0, '2022': -21.8, '2023': -7.0, '2024': 228.5, '2025': 169.4}
+      s=3 figure 11.24%/mo | book month 5.39% dd 49.3% years {'2020': 0.0, '2021': 0.0, '2022': -31.1, '2023': -11.0, '2024': 438.2, '2025': 303.7}
+   passes True s* 2
+S5 1x ann  44 trades  59 mean   1.412% t  1.86 win 50.0% worst -5.5% best 19.6% funding 0.0% stopped 0 rate 1.5/mo src {'binance': {'n': 29, 'mean_pct': 2.913}, 'upbit': {'n': 30, 'mean_pct': 0.2}}
+      s=1 figure 2.12%/mo | book month 0.98% dd 7.7% years {'2020': 0.0, '2021': 0.0, '2022': -5.6, '2023': 1.7, '2024': 27.7, '2025': 43.4}
+      s=2 figure 4.24%/mo | book month 2.03% dd 15.2% years {'2020': 0.0, '2021': 0.0, '2022': -11.0, '2023': 3.0, '2024': 58.4, '2025': 92.8}
+      s=3 figure 6.35%/mo | book month 3.15% dd 22.6% years {'2020': 0.0, '2021': 0.0, '2022': -16.2, '2023': 3.9, '2024': 91.6, '2025': 146.3}
+S5 2x ann  44 trades  59 mean   0.691% t  0.92 win 38.6% worst -6.4% best 18.7% funding 0.0% stopped 0 rate 1.5/mo src {'binance': {'n': 29, 'mean_pct': 2.063}, 'upbit': {'n': 30, 'mean_pct': -0.44}}
+      s=1 figure 1.04%/mo | book month 0.49% dd 20.7% years {'2020': 0.0, '2021': 0.0, '2022': -11.2, '2023': -3.7, '2024': 13.6, '2025': 32.2}
+      s=2 figure 2.07%/mo | book month 1.04% dd 37.9% years {'2020': 0.0, '2021': 0.0, '2022': -21.2, '2023': -7.7, '2024': 25.5, '2025': 64.8}
+      s=3 figure 3.11%/mo | book month 1.64% dd 52.0% years {'2020': 0.0, '2021': 0.0, '2022': -30.3, '2023': -12.0, '2024': 34.9, '2025': 95.5}
+   passes False s* None

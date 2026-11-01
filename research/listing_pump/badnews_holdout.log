@@ -1,0 +1,9 @@
+S2 1x ann  70 trades 104 mean  -0.603% t -0.45 win 57.1% worst -52.4% best 12.9% funding 0.0% stopped 0 rate 0.0/mo src {'binance': {'n': 60, 'mean_pct': 0.238}, 'upbit': {'n': 44, 'mean_pct': 0.997}}
+      s=1 figure -0.0%/mo | book month -0.62% dd 88.6% years {'2025': -87.1, '2026': 183.0}
+      s=2 figure -0.0%/mo | book month 2.17% dd 104.8% years {'2025': -100.0, '2026': 614.1}
+      s=3 figure -0.0%/mo | book month 7.27% dd 155.6% years {'2025': -99.7, '2026': 1514.1}
+S2 2x ann  70 trades 104 mean  -1.437% t -1.08 win 47.1% worst -53.3% best 12.5% funding 0.0% stopped 0 rate 0.0/mo src {'binance': {'n': 60, 'mean_pct': -0.597}, 'upbit': {'n': 44, 'mean_pct': 0.157}}
+      s=1 figure -0.0%/mo | book month -4.3% dd 90.0% years {'2025': -88.9, '2026': 80.9}
+      s=2 figure -0.0%/mo | book month -5.52% dd 106.3% years {'2025': -100.0, '2026': 195.0}
+      s=3 figure -0.0%/mo | book month -5.03% dd 156.5% years {'2025': -99.9, '2026': 333.0}
+   passes False s* None

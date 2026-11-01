@@ -219,18 +219,54 @@ each new market first appears.
     it.
   - If it appears only later, this route is useless for 16b.
 
+## Round 19: short the perp seconds after bad exchange news (`bt_badnews.py`, 5c3aad4)
+
+**Events.** These are Upbit notices of an investment warning, a caution or a delisting, and Binance
+spot delistings, futures delistings and monitoring tags.
+- Development: 57 announcements with a perp.
+- Holdout: 79 announcements.
+
+**Rules.**
+- Short at T + 2 s (S2) or T + 5 s (S5), with the mirror of the 16b queueing floor.
+- Cover at T + 60 s.
+- The book and bar are those of 16b.
+- Titles that mix futures delistings with margin-tier updates were excluded before any price was
+  seen.
+
+**Timestamp check: ok.** A quarter of a ≥ 4% drop is reached after 1.8 / 2.8 / 3.3 s (quartiles).
+This is slower than a listing jump.
+
+**Development** (`badnews_dev.log`):
+- **S2:** +3.22% an announcement, t 3.40. It passes at s* = 2, with a figure of 9.7% a month and a
+  drawdown of 12.9%; at 2x costs the figure is +7.5%.
+- **S5:** fails, t 1.86.
+- Most of the S2 edge came from Binance events (+7.8% over 29 trades). Upbit events made +0.2%.
+
+**Holdout, one look: FAIL** (`badnews_holdout.log`).
+- **S2:** 70 announcements, −0.60% each, t −0.45, max drawdown 89%.
+- **Futures delistings squeeze.** The four worst trades are Binance futures delistings in 2025 Q3:
+  LEVER −52%, ALPHA −48%, NEIROETH −32% and HIFI −24% within a minute. When Binance closes the perp
+  itself, shorts rush to cover. This is the opposite of a spot delisting.
+- **Recent quarters.** By quarter the mean was −15.8% and −3.2% (2025 Q3–Q4), then +2.9%, +6.8%,
+  +1.4% and +0.7% (2026).
+
+A version without futures delistings was suggested by the holdout itself. It may only be judged on
+forward data.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
 - `/w/pnl_round16b.parquet` adds 2 trials.
-- That makes 577 in all, and round 17 brings it to 579. The diagnostics add none.
+- That makes 577 in all. Rounds 17 and 18 bring it to 581, and `/w/pnl_round19.parquet` (2 trials)
+  to 583. The diagnostics add none.
 
 ## Files
 
 - **Download:** `download_upbit.py`, `download_binance.py`.
-- **Test:** `bt_spotlist.py`, `selftest_spotlist.py`, `bt_latency.py`, `selftest_latency.py`.
+- **Test:** `bt_spotlist.py`, `selftest_spotlist.py`, `bt_latency.py`, `selftest_latency.py`, `bt_badnews.py`,
+  `selftest_badnews.py`.
 - **Results:** `results_dev.json`, `dev.log`, `results_latency_dev.json`, `latency_dev.log`,
-  `results_latency_holdout.json`, `latency_holdout.log`.
+  `results_latency_holdout.json`, `latency_holdout.log`, `badnews_*.log`, `results_badnews_*.json`.
 - **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
   `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`.
 - **Forward logger:** `watch_upbit.py`.

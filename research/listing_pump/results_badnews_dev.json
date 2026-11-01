@@ -1,0 +1,370 @@
+{
+ "S2": {
+  "1x": {
+   "trades": 59,
+   "announcements": 44,
+   "mean_pct": 3.219,
+   "t_ann": 3.4,
+   "win_pct": 59.1,
+   "worst_pct": -3.8,
+   "best_pct": 20.2,
+   "funding_mean_pct": 0.0,
+   "stopped": 0,
+   "rate_per_month": 1.5,
+   "by_source": {
+    "binance": {
+     "n": 29,
+     "mean_pct": 7.829
+    },
+    "upbit": {
+     "n": 30,
+     "mean_pct": 0.246
+    }
+   },
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": 4.83,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 2.2,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 27.0,
+      "vol_pct": 20.0,
+      "sharpe": 1.28,
+      "max_dd_pct": 6.6,
+      "pos_months_pct": 26.0,
+      "p_month_ge_10pct": 11.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -5.9,
+       "2023": 2.1,
+       "2024": 110.8,
+       "2025": 84.0
+      }
+     }
+    },
+    "2": {
+     "monthly_figure_pct": 9.66,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 4.52,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 56.4,
+      "vol_pct": 40.1,
+      "sharpe": 1.28,
+      "max_dd_pct": 12.9,
+      "pos_months_pct": 26.0,
+      "p_month_ge_10pct": 14.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -11.6,
+       "2023": 3.8,
+       "2024": 308.8,
+       "2025": 212.8
+      }
+     }
+    },
+    "3": {
+     "monthly_figure_pct": 14.48,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 6.95,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 88.1,
+      "vol_pct": 60.1,
+      "sharpe": 1.28,
+      "max_dd_pct": 18.8,
+      "pos_months_pct": 26.0,
+      "p_month_ge_10pct": 15.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -17.1,
+       "2023": 5.0,
+       "2024": 642.2,
+       "2025": 399.9
+      }
+     }
+    }
+   }
+  },
+  "2x": {
+   "trades": 59,
+   "announcements": 44,
+   "mean_pct": 2.498,
+   "t_ann": 2.67,
+   "win_pct": 50.0,
+   "worst_pct": -4.6,
+   "best_pct": 19.3,
+   "funding_mean_pct": 0.0,
+   "stopped": 0,
+   "rate_per_month": 1.5,
+   "by_source": {
+    "binance": {
+     "n": 29,
+     "mean_pct": 6.979
+    },
+    "upbit": {
+     "n": 30,
+     "mean_pct": -0.394
+    }
+   },
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": 3.75,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 1.71,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 20.1,
+      "vol_pct": 19.0,
+      "sharpe": 1.05,
+      "max_dd_pct": 19.2,
+      "pos_months_pct": 21.0,
+      "p_month_ge_10pct": 9.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -11.5,
+       "2023": -3.3,
+       "2024": 88.4,
+       "2025": 70.0
+      }
+     }
+    },
+    "2": {
+     "monthly_figure_pct": 7.49,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 3.5,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 40.3,
+      "vol_pct": 37.9,
+      "sharpe": 1.05,
+      "max_dd_pct": 35.6,
+      "pos_months_pct": 21.0,
+      "p_month_ge_10pct": 12.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -21.8,
+       "2023": -7.0,
+       "2024": 228.5,
+       "2025": 169.4
+      }
+     }
+    },
+    "3": {
+     "monthly_figure_pct": 11.24,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 5.39,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 60.1,
+      "vol_pct": 56.9,
+      "sharpe": 1.05,
+      "max_dd_pct": 49.3,
+      "pos_months_pct": 21.0,
+      "p_month_ge_10pct": 15.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -31.1,
+       "2023": -11.0,
+       "2024": 438.2,
+       "2025": 303.7
+      }
+     }
+    }
+   }
+  },
+  "passes": true,
+  "size": 2
+ },
+ "S5": {
+  "1x": {
+   "trades": 59,
+   "announcements": 44,
+   "mean_pct": 1.412,
+   "t_ann": 1.86,
+   "win_pct": 50.0,
+   "worst_pct": -5.5,
+   "best_pct": 19.6,
+   "funding_mean_pct": 0.0,
+   "stopped": 0,
+   "rate_per_month": 1.5,
+   "by_source": {
+    "binance": {
+     "n": 29,
+     "mean_pct": 2.913
+    },
+    "upbit": {
+     "n": 30,
+     "mean_pct": 0.2
+    }
+   },
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": 2.12,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 0.98,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 10.8,
+      "vol_pct": 15.0,
+      "sharpe": 0.75,
+      "max_dd_pct": 7.7,
+      "pos_months_pct": 21.0,
+      "p_month_ge_10pct": 5.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -5.6,
+       "2023": 1.7,
+       "2024": 27.7,
+       "2025": 43.4
+      }
+     }
+    },
+    "2": {
+     "monthly_figure_pct": 4.24,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 2.03,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 20.6,
+      "vol_pct": 30.0,
+      "sharpe": 0.75,
+      "max_dd_pct": 15.2,
+      "pos_months_pct": 21.0,
+      "p_month_ge_10pct": 8.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -11.0,
+       "2023": 3.0,
+       "2024": 58.4,
+       "2025": 92.8
+      }
+     }
+    },
+    "3": {
+     "monthly_figure_pct": 6.35,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 3.15,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 29.3,
+      "vol_pct": 45.0,
+      "sharpe": 0.75,
+      "max_dd_pct": 22.6,
+      "pos_months_pct": 21.0,
+      "p_month_ge_10pct": 8.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -16.2,
+       "2023": 3.9,
+       "2024": 91.6,
+       "2025": 146.3
+      }
+     }
+    }
+   }
+  },
+  "2x": {
+   "trades": 59,
+   "announcements": 44,
+   "mean_pct": 0.691,
+   "t_ann": 0.92,
+   "win_pct": 38.6,
+   "worst_pct": -6.4,
+   "best_pct": 18.7,
+   "funding_mean_pct": 0.0,
+   "stopped": 0,
+   "rate_per_month": 1.5,
+   "by_source": {
+    "binance": {
+     "n": 29,
+     "mean_pct": 2.063
+    },
+    "upbit": {
+     "n": 30,
+     "mean_pct": -0.44
+    }
+   },
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": 1.04,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 0.49,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 4.7,
+      "vol_pct": 14.4,
+      "sharpe": 0.39,
+      "max_dd_pct": 20.7,
+      "pos_months_pct": 12.0,
+      "p_month_ge_10pct": 5.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -11.2,
+       "2023": -3.7,
+       "2024": 13.6,
+       "2025": 32.2
+      }
+     }
+    },
+    "2": {
+     "monthly_figure_pct": 2.07,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 1.04,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 7.7,
+      "vol_pct": 28.7,
+      "sharpe": 0.39,
+      "max_dd_pct": 37.9,
+      "pos_months_pct": 12.0,
+      "p_month_ge_10pct": 6.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -21.2,
+       "2023": -7.7,
+       "2024": 25.5,
+       "2025": 64.8
+      }
+     }
+    },
+    "3": {
+     "monthly_figure_pct": 3.11,
+     "book": {
+      "months": 66,
+      "monthly_mean_pct": 1.64,
+      "monthly_median_pct": 0.0,
+      "cagr_pct": 9.1,
+      "vol_pct": 43.1,
+      "sharpe": 0.39,
+      "max_dd_pct": 52.0,
+      "pos_months_pct": 12.0,
+      "p_month_ge_10pct": 8.0,
+      "by_year_pct": {
+       "2020": 0.0,
+       "2021": 0.0,
+       "2022": -30.3,
+       "2023": -12.0,
+       "2024": 34.9,
+       "2025": 95.5
+      }
+     }
+    }
+   }
+  },
+  "passes": false,
+  "size": null
+ }
+}
