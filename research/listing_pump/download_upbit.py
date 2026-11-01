@@ -4,8 +4,9 @@ Upbit's API answers Cloudflare error 1015 to the research VM, so this runs on th
 file is copied to the VM afterwards.
 
 Output: <out>/upbit_notices.json, a list of {id, title, listed_at, first_listed_at} (KST ISO strings).
+With --pages N only the newest N pages (20 notices each) are fetched, for checking recent listings.
 
-  python download_upbit.py <out_dir>
+  python download_upbit.py <out_dir> [--pages N]
 """
 
 from __future__ import annotations
@@ -32,11 +33,12 @@ def get(page, tries=8):
 
 def main():
     out = sys.argv[1]
+    limit = int(sys.argv[sys.argv.index("--pages") + 1]) if "--pages" in sys.argv else None
     os.makedirs(out, exist_ok=True)
     rows, page, pages = {}, 1, None
     while pages is None or page <= pages:
         data = get(page)
-        pages = data["total_pages"]
+        pages = min(data["total_pages"], limit) if limit else data["total_pages"]
         for n in data["notices"]:
             rows[n["id"]] = {k: n[k] for k in ("id", "title", "listed_at", "first_listed_at")}
         page += 1
