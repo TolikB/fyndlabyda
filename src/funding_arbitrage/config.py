@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     gate_ws_url: str = Field(default="wss://fx-ws.gateio.ws/v4/ws/usdt", alias="GATE_WS_URL")
     gate_settle: str = Field(default="usdt", alias="GATE_SETTLE")
     okx_base_url: str = Field(default="https://www.okx.com", alias="OKX_BASE_URL")
-    okx_ws_url: str = Field(default="wss://ws.okx.com:8443/ws/v5/public", alias="OKX_WS_URL")
+    okx_ws_url: str = Field(default="wss://ws.okx.com/ws/v5/public", alias="OKX_WS_URL")
     # OKX publishes funding per instrument; this many swaps are refreshed per cycle.
     okx_funding_symbol_limit: int = Field(default=30, alias="OKX_FUNDING_SYMBOL_LIMIT")
     binance_spot_base_url: str = Field(

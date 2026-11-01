@@ -61,7 +61,7 @@ class OkxPublicAdapter(ExchangeAdapter):
     def __init__(
         self,
         base_url: str = "https://www.okx.com",
-        websocket_url: str = "wss://ws.okx.com:8443/ws/v5/public",
+        websocket_url: str = "wss://ws.okx.com/ws/v5/public",
         timeout_seconds: float = 15.0,
         requests_per_second: float = 8.0,
         burst: int = 8,

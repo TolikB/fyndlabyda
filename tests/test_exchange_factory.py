@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import yaml
+
 from funding_arbitrage.config import Settings
 from funding_arbitrage.exchanges.binance import BinancePublicAdapter
 from funding_arbitrage.exchanges.bybit import BybitPublicAdapter
@@ -25,3 +29,16 @@ def test_paper_test_registry_is_mock_only() -> None:
 
     assert set(adapters) == {"bybit", "gate", "okx", "binance", "hyperliquid"}
     assert all(isinstance(adapter, MockExchangeAdapter) for adapter in adapters.values())
+
+
+def test_okx_websocket_uses_port_443() -> None:
+    # OKX notice 64010 retires port 8443; its docs list the public URL without a port.
+    url = "wss://ws.okx.com/ws/v5/public"
+
+    assert Settings().okx_ws_url == url
+    assert OkxPublicAdapter().websocket_url == url
+    adapter = create_public_adapters(Settings())["okx"]
+    assert isinstance(adapter, OkxPublicAdapter)
+    assert adapter.websocket_url == url
+    raw = yaml.safe_load(Path("config/default.yaml").read_text(encoding="utf-8"))
+    assert raw["okx"]["websocket_url"] == url
