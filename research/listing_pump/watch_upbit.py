@@ -1,20 +1,22 @@
-"""Log when new markets appear in Upbit's official market list (research only, public data, no orders).
+"""Log when markets and their warning flags change in Upbit's official market list (research only, public data, no orders).
 
 Round 16b needs a bot that sees a KRW listing within about a second of the notice. Upbit's notice
 page is not an API and refuses fast polling; its official Open API is meant for programs. This logger
 asks one question: does a new KRW market show up in GET /v1/market/all at the notice time, or only
 when trading opens hours later? It compares the time it first sees each new market with the notice
-time (looked up later) and with the Binance perp's jump (aggTrades archive).
+time (looked up later) and with the Binance perp's jump (aggTrades archive). It also logs every change of
+a market's market_event flags (warning, caution.*), a possible fast signal for round 19.
 
 Polite by construction:
-  - one request a second, about a tenth of the published quotation limit, on one kept-alive connection;
+  - one request a second, about a tenth of the published quotation limit, on one kept-alive connection,
+    gzip-encoded (about 15 KB a request with details);
   - it reads the Remaining-Req header and waits when the per-second budget is low;
   - 429 doubles the wait (up to 60 s); 403 or a Cloudflare error page pauses polling for an hour.
     It never changes headers or addresses to get around a refusal.
 
 Output (append-only) in $WATCH (default ./watch):
-  markets.jsonl   {"t": ms, "added": [...], "removed": [...], "rtt_ms": n}, one line per change
-                  (the first line is the baseline)
+  markets.jsonl   {"t": ms, "added": [...], "removed": [...], "flags": [[market, warning, [caution...]], ...],
+                  "rtt_ms": n}, one line per change; a baseline line on every start lists the flagged markets
   heartbeat.jsonl {"t": ms, "requests": n, "errors": {...}, "rtt_ms_p50": n, "rtt_ms_p95": n} hourly
 
   python watch_upbit.py
@@ -22,6 +24,7 @@ Output (append-only) in $WATCH (default ./watch):
 
 from __future__ import annotations
 
+import gzip
 import http.client
 import json
 import os
@@ -29,7 +32,7 @@ import ssl
 import time
 
 HOST = "api.upbit.com"
-PATH = "/v1/market/all"
+PATH = "/v1/market/all?is_details=true"
 WATCH = os.environ.get("WATCH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "watch"))
 INTERVAL = 1.0
 PAUSE_BLOCKED = 3600.0
@@ -42,6 +45,12 @@ def now_ms():
 def append(name, row):
     with open(os.path.join(WATCH, name), "a") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def flags(m):
+    """market row -> (warning, sorted caution keys that are true)."""
+    ev = m.get("market_event") or {}
+    return bool(ev.get("warning")), sorted(k for k, v in (ev.get("caution") or {}).items() if v)
 
 
 def remaining_sec(header):
@@ -63,9 +72,11 @@ class Client:
             self.conn = http.client.HTTPSConnection(HOST, timeout=10, context=ssl.create_default_context())
         t0 = time.monotonic()
         try:
-            self.conn.request("GET", PATH, headers={"Accept": "application/json"})
+            self.conn.request("GET", PATH, headers={"Accept": "application/json", "Accept-Encoding": "gzip"})
             r = self.conn.getresponse()
             body = r.read()
+            if (r.getheader("Content-Encoding") or "").lower() == "gzip":
+                body = gzip.decompress(body)
             return r.status, body, dict(r.getheaders()), (time.monotonic() - t0) * 1000
         except Exception:  # noqa: BLE001
             self.conn.close()
@@ -89,12 +100,18 @@ def main():
         if status == 200:
             wait = INTERVAL
             stats["rtt"].append(rtt)
-            markets = {m["market"] for m in json.loads(body)}
-            if known is None or markets != known:
-                append("markets.jsonl", {"t": now_ms(), "added": sorted(markets - (known or set())),
-                                         "removed": sorted((known or set()) - markets), "rtt_ms": round(rtt),
-                                         "baseline": known is None})
-                known = markets
+            state = {m["market"]: flags(m) for m in json.loads(body)}
+            if known is None:
+                append("markets.jsonl", {"t": now_ms(), "baseline": True, "markets": sorted(state),
+                                         "flags": [[m, *f] for m, f in sorted(state.items()) if f != (False, [])],
+                                         "rtt_ms": round(rtt)})
+            elif state != known:
+                append("markets.jsonl", {"t": now_ms(), "added": sorted(state.keys() - known.keys()),
+                                         "removed": sorted(known.keys() - state.keys()),
+                                         "flags": [[m, *f] for m, f in sorted(state.items())
+                                                   if m in known and known[m] != f],
+                                         "rtt_ms": round(rtt)})
+            known = state
             sec = remaining_sec(headers.get("Remaining-Req") or headers.get("remaining-req"))
             if sec is not None and sec <= 1:
                 wait = max(wait, 1.0)
