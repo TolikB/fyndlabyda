@@ -670,3 +670,41 @@ async def test_writer_logs_a_slow_append_that_fits_the_window(
     assert logged["latency_ms"] > 100
     assert logged["reason"] == "events=1 retries=0"
     assert not writer.failed
+
+
+async def test_writer_reports_recovering_while_a_commit_is_slow() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    release = asyncio.Event()
+
+    async def held_append(_session: object, events: Sequence[object]) -> int:
+        await release.wait()
+        return len(events)
+
+    writer = CanonicalEventWriter(
+        factory,
+        queue_size=2,
+        batch_size=1,
+        flush_interval_seconds=0.01,
+        retry_window_seconds=1,
+        retry_initial_seconds=0.01,
+        retry_max_seconds=0.02,
+        shutdown_timeout_seconds=2,
+        append_batch=held_append,
+    )
+    writer.start()
+    publish = asyncio.create_task(writer.publish(_event(1)))
+    await asyncio.sleep(0.1)
+    assert not writer.recovering
+
+    await asyncio.sleep(0.3)
+    assert writer.recovering
+    assert writer.recovery_reason == "SlowAppend"
+
+    release.set()
+    await publish
+    assert not writer.recovering
+    assert writer.recovery_reason is None
+    assert not writer.failed
+    await writer.stop()
+    await engine.dispose()

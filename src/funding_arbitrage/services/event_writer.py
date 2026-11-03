@@ -22,7 +22,9 @@ EventBatch = Sequence[EventEnvelope[Any]]
 AppendBatch = Callable[[AsyncSession, EventBatch], Awaitable[int]]
 _STOP = object()
 _T = TypeVar("_T")
-# A commit slower than this share of the retry window is logged with its size.
+# A commit slower than this (or a quarter of a shorter retry window) is logged,
+# and the writer reports itself recovering until the commit lands.
+_SLOW_APPEND_SECONDS = 5.0
 _SLOW_APPEND_WINDOW_FRACTION = 0.25
 _STORAGE_DISPOSE_TIMEOUT_SECONDS = 5.0
 logger = logging.getLogger(__name__)
@@ -69,8 +71,9 @@ class _StorageLoop:
     book deltas. A commit takes seven round trips through the loop that owns its
     connection (ping, begin, two hash reads, insert, commit, reset), and
     PostgreSQL sat idle in the transaction waiting for the next one more often
-    than it worked. On 2026-11-01 23:00 one attempt ran out the 20 s retry
-    window that way; the stack restarted and spent half an hour restoring.
+    than it worked. With a top-of-the-hour storage stall on top, one attempt
+    ran out the 20 s retry window on 2026-11-01 at 23:00, and the stack
+    restarted.
     """
 
     def __init__(self) -> None:
@@ -193,6 +196,9 @@ class CanonicalEventWriter:
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self.append_batch = append_batch
         self._storage = _StorageLoop() if storage_thread else None
+        self._slow_append_seconds = min(
+            _SLOW_APPEND_SECONDS, retry_window_seconds * _SLOW_APPEND_WINDOW_FRACTION
+        )
         self._publish_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._accepting = False
@@ -401,6 +407,22 @@ class CanonicalEventWriter:
             raise
 
     async def _append_with_retry(self, events: EventBatch) -> int:
+        slow = asyncio.get_running_loop().call_later(
+            self._slow_append_seconds, self._mark_slow_append
+        )
+        try:
+            return await self._append_within_window(events)
+        finally:
+            slow.cancel()
+
+    def _mark_slow_append(self) -> None:
+        # The V1 paper host's storage stalls for seconds at the top of the hour.
+        # A commit held that long is an outage in progress, so entries wait.
+        if not self._recovering:
+            self._recovering = True
+            self._recovery_error_type = "SlowAppend"
+
+    async def _append_within_window(self, events: EventBatch) -> int:
         loop = asyncio.get_running_loop()
         started = loop.time()
         deadline = started + self.retry_window_seconds
@@ -447,7 +469,7 @@ class CanonicalEventWriter:
                 await asyncio.sleep(sleep_seconds)
                 delay = min(delay * 2, self.retry_max_seconds)
                 continue
-            if self._recovering:
+            if outage_retries:
                 logger.info(
                     "canonical_event_writer_recovered",
                     extra={
@@ -456,7 +478,7 @@ class CanonicalEventWriter:
                     },
                 )
             elapsed = loop.time() - started
-            if elapsed > self.retry_window_seconds * _SLOW_APPEND_WINDOW_FRACTION:
+            if elapsed > self._slow_append_seconds:
                 # The 2026-11-01 expiry was the first sign: slow commits that
                 # still fit the window left no trace before it. JsonFormatter
                 # keeps only its own fields, so the numbers go into those.

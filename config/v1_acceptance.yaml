@@ -114,12 +114,12 @@ requirements:
       src/funding_arbitrage/database/repositories/events.py: 7fe68d4d09dded7a44299cfd310af13cf0d011ed2dba629ca5362728ae0e7ebb
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/services/event_router.py: 874325736b96ac2c24029df2bce49a8776ea80e3ba76aa90ff046369bd0a33bd
-      src/funding_arbitrage/services/event_writer.py: dfd4433acbcd7f2a5db0584420e06d48f39db7384e43fb2749edefd1d5f75c7c
+      src/funding_arbitrage/services/event_writer.py: cbbb756372dd54b79dc387ba8ddeb9d479a5e578544d57c45ab59766d7f97ff4
       src/funding_arbitrage/services/multi_regime_runtime.py: f68f472648dc04eae1d83e399416da0d7ff18bf595ff36ce2a66ef22204ddddf
       tests/test_directional_paper_restore.py: a9c02e22bb1c8ae73f5e30b9d0b19264a5fbddd6832dd90863c80142d1249370
       tests/test_domain_events.py: a2e05ddef42d353520089047f4533ad379e07175f03ed9401abb06c8b68043ab
       tests/test_event_journal.py: c244b56e4662f09fa9d8a5a12b62d6c62b09f5c00e0407d406504528cd1c7469
-      tests/test_event_writer.py: 639444193d3c01e4b56a99a8f1cd68995f8bc8a7c987fc823502795c97e067a9
+      tests/test_event_writer.py: fe5038d7941401d1689d3c8ab4024484a490b943023953d36094a091470ed52e
   - id: MODE-001
     category: architecture
     title: BACKTEST, REPLAY, SHADOW, PAPER, LIMITED_LIVE, LIVE, and SAFE_MODE share explicit contracts
@@ -412,7 +412,7 @@ requirements:
       docs/V1_PUBLIC_EVENTS.md: ce04450c61bf4115914a6579f4c6de69d29b8af3c4c3e4a721192b9a3036f96d
       src/funding_arbitrage/domain/events.py: dc23c71552808e4b97b813c4ffd8acf1528d9f234b07c4a0675a6a311ed23cf7
       src/funding_arbitrage/exchanges/public_events.py: 2633dfb3f95431c948b260903de697bd0f4633ceb3b0fab3ed43b137728e95a3
-      src/funding_arbitrage/services/event_writer.py: dfd4433acbcd7f2a5db0584420e06d48f39db7384e43fb2749edefd1d5f75c7c
+      src/funding_arbitrage/services/event_writer.py: cbbb756372dd54b79dc387ba8ddeb9d479a5e578544d57c45ab59766d7f97ff4
       tests/test_event_journal.py: c244b56e4662f09fa9d8a5a12b62d6c62b09f5c00e0407d406504528cd1c7469
       tests/test_public_events.py: e7aaea58937d9833923ad96f27b38eb191050acf81cd1468c39d357bf2851c4f
   - id: MD-005
@@ -1613,7 +1613,7 @@ requirements:
       tests/test_event_journal.py: c244b56e4662f09fa9d8a5a12b62d6c62b09f5c00e0407d406504528cd1c7469
       tests/test_event_router_consumers.py: 94deae50fd11ed9946ae0789e3a860d8583f2acd38bedbe7a9666631462fcf18
       tests/test_event_sampling.py: e8748784ecd42d392e4d78125605c5130869527bbfe1d3b9e1f1f9b11f40fe59
-      tests/test_event_writer.py: 639444193d3c01e4b56a99a8f1cd68995f8bc8a7c987fc823502795c97e067a9
+      tests/test_event_writer.py: fe5038d7941401d1689d3c8ab4024484a490b943023953d36094a091470ed52e
       tests/test_event_writer_config.py: b29160919359d390c642c6ae92474cd37b56d6053efc2bbb2b80b60e32925862
       tests/test_exchange_factory.py: 3a17fd6e1c74a23390104d9d7dbac5decd1e0b2f97515c10b8d6973071e93fd0
       tests/test_funding_basis_strategy.py: 6ec08a4039ff265b2361f3e16d1a50d3e134e552a1c440d929b9eb20b7946b2f

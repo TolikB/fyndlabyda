@@ -412,8 +412,13 @@ idle in the transaction waiting for most of them. A burst of book deltas then he
 one attempt past `CANONICAL_EVENT_RETRY_WINDOW_SECONDS` (20 s), the writer failed
 closed and the paper pipeline exited. The restarts at 2026-11-01 23:00 and
 2026-11-02 13:38 and 15:58 all followed a writer failure and cost 9–39 minutes of
-restore each. A `canonical_event_writer_slow_append` warning (a commit over a
-quarter of the window) is the early sign; find its cause before raising the
-window. To see what holds the application loop, run `py-spy dump --nonblocking
+restore each. The host's storage also stalls at the top of most hours (reads at
+14-43 ms for ~10 s at 11:00 on 2026-11-03, with almost no I/O from any container),
+and the last commit before the 2026-11-01 restart was at 22:59:59.96. The stack
+therefore runs with `CANONICAL_EVENT_RETRY_WINDOW_SECONDS=40` (shutdown 45 s). A
+commit slower than 5 s logs `canonical_event_writer_slow_append` (`latency_ms`)
+and reports the journal as recovering, which holds new entries until it lands.
+Find the cause of those warnings before raising the window further. To see what
+holds the application loop, run `py-spy dump --nonblocking
 --pid <host PID of uvicorn>` from the host (`/root/pyspy-venv` on the VM); it does
 not pause the app.
