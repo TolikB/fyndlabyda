@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -11,7 +12,12 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import Table, event, select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from funding_arbitrage.database.models import Base, CanonicalEventRecord
 from funding_arbitrage.database.repositories.events import (
@@ -31,6 +37,7 @@ from funding_arbitrage.domain.events import (
     TradeTick,
     deterministic_event_id,
 )
+from funding_arbitrage.services.event_writer import CanonicalEventWriter
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_POSTGRES_REPOSITORY_CONTRACT") != "1",
@@ -217,3 +224,40 @@ async def test_postgres_append_rejects_a_reused_event_id_with_another_payload(
     assert (
         await session.scalars(select(CanonicalEventRecord.event_id))
     ).all() == [original.metadata.event_id]
+
+
+@pytest.mark.asyncio
+async def test_postgres_writer_commits_from_its_own_thread_and_engine(
+    journal_session: tuple[AsyncSession, list[str]],
+) -> None:
+    session, _ = journal_session
+    bind = session.bind
+    assert isinstance(bind, AsyncEngine)
+    writer_engine = create_async_engine(
+        os.environ["DATABASE_URL"],
+        execution_options=bind.get_execution_options(),
+        pool_size=1,
+        max_overflow=1,
+    )
+    writer = CanonicalEventWriter(
+        async_sessionmaker(writer_engine, expire_on_commit=False),
+        queue_size=20,
+        batch_size=5,
+        flush_interval_seconds=0.01,
+        storage_thread=True,
+    )
+    writer.start()
+
+    await asyncio.gather(*(writer.publish(_trade(sequence)) for sequence in range(1, 8)))
+    await writer.publish_many([_trade(8), _trade(1)])
+    await writer.stop()
+
+    assert writer.persisted_events == 8
+    # Stopping closed the writer's connections on the loop that opened them.
+    assert writer_engine.pool.checkedin() == 0
+    stored = (
+        await session.scalars(
+            select(CanonicalEventRecord.event_id).order_by(CanonicalEventRecord.id)
+        )
+    ).all()
+    assert stored == [_trade(sequence).metadata.event_id for sequence in range(1, 9)]

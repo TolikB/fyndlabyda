@@ -19,9 +19,19 @@ from .models import Base
 _POOL_RECYCLE_SECONDS = 1800
 
 
-def create_database(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+def create_database(
+    settings: Settings,
+    *,
+    pool_size: int | None = None,
+    max_overflow: int | None = None,
+) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     ssl_context = create_internal_ssl_context(settings)
     connect_args = {"ssl": ssl_context} if ssl_context is not None else {}
+    pool_options = {
+        name: value
+        for name, value in (("pool_size", pool_size), ("max_overflow", max_overflow))
+        if value is not None
+    }
     engine = create_async_engine(
         settings.database_url,
         connect_args=connect_args,
@@ -32,6 +42,7 @@ def create_database(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker
         # still OOM-killed after seven hours of them.
         pool_recycle=_POOL_RECYCLE_SECONDS,
         future=True,
+        **pool_options,
     )
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -474,3 +478,182 @@ async def test_writer_flushes_publish_already_in_flight_before_stop_sentinel() -
     await engine.dispose()
 
     assert persisted == ["1", "2", "3"]
+
+
+def _storage_threads() -> list[threading.Thread]:
+    return [
+        thread
+        for thread in threading.enumerate()
+        if thread.name == "canonical-event-storage"
+    ]
+
+
+async def test_blocked_application_loop_runs_out_an_in_loop_retry_window() -> None:
+    # The 2026-11-01 V1 paper restart: the database had answered, but the loop
+    # that owned the attempt was busy until the retry window had passed.
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    started = asyncio.Event()
+
+    async def quick_append(_session: object, events: Sequence[object]) -> int:
+        started.set()
+        await asyncio.sleep(0.02)
+        return len(events)
+
+    writer = CanonicalEventWriter(
+        factory,
+        queue_size=2,
+        batch_size=1,
+        flush_interval_seconds=0.01,
+        retry_window_seconds=0.2,
+        retry_initial_seconds=0.01,
+        retry_max_seconds=0.02,
+        shutdown_timeout_seconds=1,
+        append_batch=quick_append,
+    )
+    writer.start()
+    publish = asyncio.create_task(writer.publish(_event(1)))
+    await started.wait()
+    time.sleep(0.4)  # noqa: ASYNC251 - stands in for a busy application loop
+
+    with pytest.raises(EventWriterFailed, match="TimeoutError"):
+        await publish
+    with pytest.raises(TimeoutError):
+        await writer.stop()
+    await engine.dispose()
+
+
+async def test_storage_thread_keeps_retry_window_off_a_blocked_application_loop() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    started = threading.Event()
+    append_threads: list[int] = []
+
+    async def quick_append(_session: object, events: Sequence[object]) -> int:
+        append_threads.append(threading.get_ident())
+        started.set()
+        await asyncio.sleep(0.02)
+        return len(events)
+
+    writer = CanonicalEventWriter(
+        factory,
+        queue_size=2,
+        batch_size=1,
+        flush_interval_seconds=0.01,
+        retry_window_seconds=0.2,
+        retry_initial_seconds=0.01,
+        retry_max_seconds=0.02,
+        shutdown_timeout_seconds=1,
+        append_batch=quick_append,
+        storage_thread=True,
+    )
+    writer.start()
+    publish = asyncio.create_task(writer.publish(_event(1)))
+    assert await asyncio.to_thread(started.wait, 5)
+    time.sleep(0.4)  # noqa: ASYNC251 - stands in for a busy application loop
+
+    await publish
+    await writer.publish(_event(2))
+    await writer.stop()
+
+    assert not writer.failed
+    assert writer.persisted_events == 2
+    assert len(append_threads) == 2
+    assert threading.get_ident() not in append_threads
+    assert not _storage_threads()
+
+
+async def test_storage_thread_commits_rows_and_disposes_its_engine(tmp_path: Path) -> None:
+    url = f"sqlite+aiosqlite:///{(tmp_path / 'journal.db').as_posix()}"
+    schema_engine = create_async_engine(url)
+    async with schema_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    await schema_engine.dispose()
+    writer_engine = create_async_engine(url)
+    writer = CanonicalEventWriter(
+        async_sessionmaker(writer_engine, expire_on_commit=False),
+        queue_size=10,
+        batch_size=10,
+        flush_interval_seconds=0.01,
+        storage_thread=True,
+    )
+    writer.start()
+
+    await writer.publish_many([_event(1), _event(2)])
+    await writer.publish(_event(1))
+    await writer.stop()
+
+    assert writer_engine.pool.checkedin() == 0
+    assert not _storage_threads()
+    read_engine = create_async_engine(url)
+    async with async_sessionmaker(read_engine)() as session:
+        count = await session.scalar(select(func.count()).select_from(CanonicalEventRecord))
+    await read_engine.dispose()
+    assert count == 2
+    assert writer.persisted_events == 2
+
+
+async def test_storage_thread_fails_closed_and_stops_when_the_window_expires() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def hung_append(_session: object, _events: object) -> int:
+        await asyncio.Event().wait()
+        return 1
+
+    writer = CanonicalEventWriter(
+        factory,
+        queue_size=2,
+        batch_size=1,
+        flush_interval_seconds=0.01,
+        retry_window_seconds=0.05,
+        retry_initial_seconds=0.001,
+        retry_max_seconds=0.002,
+        append_batch=hung_append,
+        storage_thread=True,
+    )
+    writer.start()
+
+    with pytest.raises(EventWriterFailed, match="TimeoutError"):
+        await asyncio.wait_for(writer.publish(_event(1)), timeout=2)
+    with pytest.raises(TimeoutError):
+        await writer.stop()
+    assert writer.failed
+    assert not _storage_threads()
+
+
+async def test_writer_logs_a_slow_append_that_fits_the_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def slow_append(_session: object, events: Sequence[object]) -> int:
+        await asyncio.sleep(0.15)
+        return len(events)
+
+    writer = CanonicalEventWriter(
+        factory,
+        queue_size=2,
+        batch_size=1,
+        flush_interval_seconds=0.01,
+        retry_window_seconds=0.4,
+        retry_initial_seconds=0.01,
+        retry_max_seconds=0.02,
+        append_batch=slow_append,
+    )
+    writer.start()
+    with caplog.at_level(logging.WARNING, logger="funding_arbitrage.services.event_writer"):
+        await writer.publish(_event(1))
+    await writer.stop()
+    await engine.dispose()
+
+    slow = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "canonical_event_writer_slow_append"
+    ]
+    assert len(slow) == 1
+    assert slow[0].__dict__["events"] == 1
+    assert slow[0].__dict__["seconds"] >= 0.15
+    assert not writer.failed

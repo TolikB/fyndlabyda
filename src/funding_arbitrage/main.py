@@ -219,8 +219,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine, session_factory = create_database(active_settings)
     market_replay_job_store = DurableMarketReplayJobStore(session_factory)
     market_replay_worker_id = "market-worker-" + uuid4().hex
+    # The journal commits on a PostgreSQL engine of its own, driven from the
+    # writer's thread, so a busy application loop cannot run out its retry
+    # window. It appends one batch at a time; the spare connection covers a
+    # cancelled attempt that is still being returned.
+    journal_storage_thread = engine.dialect.name == "postgresql"
+    _, journal_session_factory = (
+        create_database(active_settings, pool_size=1, max_overflow=1)
+        if journal_storage_thread
+        else (engine, session_factory)
+    )
     event_writer = CanonicalEventWriter(
-        session_factory,
+        journal_session_factory,
+        storage_thread=journal_storage_thread,
         queue_size=active_settings.canonical_event_queue_size,
         batch_size=active_settings.canonical_event_batch_size,
         flush_interval_seconds=(active_settings.canonical_event_flush_interval_seconds),

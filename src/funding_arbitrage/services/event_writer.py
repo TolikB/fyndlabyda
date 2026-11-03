@@ -6,13 +6,14 @@ import asyncio
 import errno
 import logging
 import math
-from collections.abc import Awaitable, Callable, Sequence
+import threading
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy.exc import DBAPIError, DisconnectionError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from funding_arbitrage.database.repositories.events import append_events
 from funding_arbitrage.domain.events import EventEnvelope
@@ -20,6 +21,10 @@ from funding_arbitrage.domain.events import EventEnvelope
 EventBatch = Sequence[EventEnvelope[Any]]
 AppendBatch = Callable[[AsyncSession, EventBatch], Awaitable[int]]
 _STOP = object()
+_T = TypeVar("_T")
+# A commit slower than this share of the retry window is logged with its size.
+_SLOW_APPEND_WINDOW_FRACTION = 0.25
+_STORAGE_DISPOSE_TIMEOUT_SECONDS = 5.0
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_ERRNOS = frozenset(
@@ -56,8 +61,89 @@ class _QueuedEvent:
     durable: asyncio.Future[None]
 
 
+class _StorageLoop:
+    """An event loop on its own thread for the writer's database round trips.
+
+    The application loop also maintains every venue order book. On the V1 paper
+    stack it was busy about 90% of the time and stalled for seconds on bursts of
+    book deltas. A commit takes seven round trips through the loop that owns its
+    connection (ping, begin, two hash reads, insert, commit, reset), and
+    PostgreSQL sat idle in the transaction waiting for the next one more often
+    than it worked. On 2026-11-01 23:00 one attempt ran out the 20 s retry
+    window that way; the stack restarted and spent half an hour restoring.
+    """
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._serve,
+            args=(self._loop,),
+            name="canonical-event-storage",
+            daemon=True,
+        )
+        self._thread.start()
+
+    async def run(self, operation: Coroutine[Any, Any, _T]) -> _T:
+        """Run on the storage loop; cancelling the caller cancels the operation."""
+
+        if self._loop is None:
+            operation.close()
+            raise RuntimeError("canonical event storage loop is not running")
+        return await asyncio.wrap_future(
+            asyncio.run_coroutine_threadsafe(operation, self._loop)
+        )
+
+    async def close(self, engine: AsyncEngine | None) -> None:
+        loop, thread = self._loop, self._thread
+        if loop is None or thread is None:
+            return
+        if engine is not None:
+            try:
+                # Connections belong to the loop that opened them, so only this
+                # loop can close them.
+                await self.run(_dispose(engine))
+            except Exception:
+                logger.warning(
+                    "canonical_event_storage_dispose_failed",
+                    exc_info=True,
+                    extra={"event": "canonical_event_storage_dispose_failed"},
+                )
+        self._loop = None
+        loop.call_soon_threadsafe(loop.stop)
+        await asyncio.to_thread(thread.join)
+
+    @staticmethod
+    def _serve(loop: asyncio.AbstractEventLoop) -> None:
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+
+
+async def _dispose(engine: AsyncEngine) -> None:
+    async with asyncio.timeout(_STORAGE_DISPOSE_TIMEOUT_SECONDS):
+        await engine.dispose()
+
+
 class CanonicalEventWriter:
-    """Batch events while acknowledging producers only after the DB commit."""
+    """Batch events while acknowledging producers only after the DB commit.
+
+    With ``storage_thread`` every append runs on a dedicated thread and event
+    loop, so the retry window measures the database rather than how long the
+    application loop takes to resume the writer. The writer then owns the
+    session factory's engine: its connections live on that thread, and
+    :meth:`stop` disposes it there. Give it an engine of its own.
+    """
 
     def __init__(
         self,
@@ -71,6 +157,7 @@ class CanonicalEventWriter:
         retry_max_seconds: float = 2.0,
         shutdown_timeout_seconds: float = 30.0,
         append_batch: AppendBatch = append_events,
+        storage_thread: bool = False,
     ) -> None:
         if queue_size <= 0 or batch_size <= 0 or batch_size > queue_size:
             raise ValueError("event writer queue and batch sizes are invalid")
@@ -105,6 +192,7 @@ class CanonicalEventWriter:
         self.retry_max_seconds = retry_max_seconds
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self.append_batch = append_batch
+        self._storage = _StorageLoop() if storage_thread else None
         self._publish_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._accepting = False
@@ -135,6 +223,8 @@ class CanonicalEventWriter:
     def start(self) -> None:
         if self._task is not None:
             raise RuntimeError("canonical event writer already started")
+        if self._storage is not None:
+            self._storage.start()
         self._accepting = True
         self._task = asyncio.create_task(self._run(), name="canonical-event-writer")
 
@@ -232,6 +322,14 @@ class CanonicalEventWriter:
         self._raise_if_failed()
 
     async def _stop_worker(self, task: asyncio.Task[None]) -> None:
+        try:
+            await self._drain_worker(task)
+        finally:
+            if self._storage is not None:
+                bind = self.session_factory.kw.get("bind")
+                await self._storage.close(bind if isinstance(bind, AsyncEngine) else None)
+
+    async def _drain_worker(self, task: asyncio.Task[None]) -> None:
         put_task: asyncio.Task[None] | None = None
         try:
             async with asyncio.timeout(self.shutdown_timeout_seconds):
@@ -283,8 +381,11 @@ class CanonicalEventWriter:
                     if not isinstance(item, _QueuedEvent):
                         raise RuntimeError("canonical event queue item is invalid")
                     active.append(item)
-                inserted = await self._append_with_retry(
-                    [queued.event for queued in active]
+                events = [queued.event for queued in active]
+                inserted = await (
+                    self._append_with_retry(events)
+                    if self._storage is None
+                    else self._storage.run(self._append_with_retry(events))
                 )
                 self.persisted_events += inserted
                 for queued in active:
@@ -301,7 +402,8 @@ class CanonicalEventWriter:
 
     async def _append_with_retry(self, events: EventBatch) -> int:
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.retry_window_seconds
+        started = loop.time()
+        deadline = started + self.retry_window_seconds
         delay = self.retry_initial_seconds
         outage_retries = 0
         last_error: BaseException | None = None
@@ -347,6 +449,19 @@ class CanonicalEventWriter:
                     "canonical_event_writer_recovered",
                     extra={
                         "event": "canonical_event_writer_recovered",
+                        "retry_count": outage_retries,
+                    },
+                )
+            elapsed = loop.time() - started
+            if elapsed > self.retry_window_seconds * _SLOW_APPEND_WINDOW_FRACTION:
+                # The 2026-11-01 expiry was the first sign: slow commits that
+                # still fit the window left no trace before it.
+                logger.warning(
+                    "canonical_event_writer_slow_append",
+                    extra={
+                        "event": "canonical_event_writer_slow_append",
+                        "events": len(events),
+                        "seconds": round(elapsed, 3),
                         "retry_count": outage_retries,
                     },
                 )

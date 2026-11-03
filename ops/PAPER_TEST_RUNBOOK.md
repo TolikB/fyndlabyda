@@ -403,3 +403,17 @@ streams saturated the event loop, Bybit dropped on keepalive timeouts and every
 candidate was priced without a book (slippage 2.0–4.0, net APR below −700%).
 Check `GET /opportunities/funnel` after a change: candidates should carry real
 `slippage_percent` values.
+
+The canonical journal writer commits from a thread and event loop of its own, on
+a PostgreSQL engine of its own (one connection plus one spare). Until 2026-11-03 it
+shared the application loop, which spends about 90% of a core on the venue order
+books here. A commit needs seven round trips through its loop, and PostgreSQL sat
+idle in the transaction waiting for most of them. A burst of book deltas then held
+one attempt past `CANONICAL_EVENT_RETRY_WINDOW_SECONDS` (20 s), the writer failed
+closed and the paper pipeline exited. The restarts at 2026-11-01 23:00 and
+2026-11-02 13:38 and 15:58 all followed a writer failure and cost 9–39 minutes of
+restore each. A `canonical_event_writer_slow_append` warning (a commit over a
+quarter of the window) is the early sign; find its cause before raising the
+window. To see what holds the application loop, run `py-spy dump --nonblocking
+--pid <host PID of uvicorn>` from the host (`/root/pyspy-venv` on the VM); it does
+not pause the app.
