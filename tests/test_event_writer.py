@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -26,6 +27,7 @@ from funding_arbitrage.domain.events import (
     TradeTick,
     deterministic_event_id,
 )
+from funding_arbitrage.logging import JsonFormatter
 from funding_arbitrage.services.event_writer import CanonicalEventWriter, EventWriterFailed
 
 NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
@@ -229,7 +231,9 @@ async def test_writer_fails_closed_when_transient_outage_exceeds_retry_window() 
     await engine.dispose()
 
 
-async def test_writer_retries_sqlalchemy_pool_timeout() -> None:
+async def test_writer_retries_sqlalchemy_pool_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     factory = async_sessionmaker(engine, expire_on_commit=False)
     attempts = 0
@@ -252,13 +256,21 @@ async def test_writer_retries_sqlalchemy_pool_timeout() -> None:
         append_batch=pool_recovers,
     )
     writer.start()
-    await writer.publish(_event(1))
+    with caplog.at_level(logging.WARNING, logger="funding_arbitrage.services.event_writer"):
+        await writer.publish(_event(1))
     await writer.stop()
     await engine.dispose()
 
     assert attempts == 2
     assert writer.retries_total == 1
     assert not writer.failed
+    (retry,) = [
+        json.loads(JsonFormatter().format(record))
+        for record in caplog.records
+        if record.getMessage() == "canonical_event_writer_retrying"
+    ]
+    assert retry["error"] == "TimeoutError"
+    assert retry["reason"].startswith("retry=1 ")
 
 
 async def test_writer_retry_window_bounds_a_hung_database_attempt() -> None:
@@ -654,6 +666,7 @@ async def test_writer_logs_a_slow_append_that_fits_the_window(
         if record.getMessage() == "canonical_event_writer_slow_append"
     ]
     assert len(slow) == 1
-    assert slow[0].__dict__["events"] == 1
-    assert slow[0].__dict__["seconds"] >= 0.15
+    logged = json.loads(JsonFormatter().format(slow[0]))
+    assert logged["latency_ms"] > 100
+    assert logged["reason"] == "events=1 retries=0"
     assert not writer.failed

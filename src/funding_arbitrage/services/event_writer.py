@@ -439,6 +439,9 @@ class CanonicalEventWriter:
                         "error_type": type(error).__name__,
                         "retry_count": outage_retries,
                         "retry_delay_seconds": sleep_seconds,
+                        # The fields above never reached the JSON log.
+                        "error": type(error).__name__,
+                        "reason": f"retry={outage_retries} delay={sleep_seconds:.3f}s",
                     },
                 )
                 await asyncio.sleep(sleep_seconds)
@@ -455,14 +458,14 @@ class CanonicalEventWriter:
             elapsed = loop.time() - started
             if elapsed > self.retry_window_seconds * _SLOW_APPEND_WINDOW_FRACTION:
                 # The 2026-11-01 expiry was the first sign: slow commits that
-                # still fit the window left no trace before it.
+                # still fit the window left no trace before it. JsonFormatter
+                # keeps only its own fields, so the numbers go into those.
                 logger.warning(
                     "canonical_event_writer_slow_append",
                     extra={
                         "event": "canonical_event_writer_slow_append",
-                        "events": len(events),
-                        "seconds": round(elapsed, 3),
-                        "retry_count": outage_retries,
+                        "latency_ms": round(elapsed * 1000),
+                        "reason": f"events={len(events)} retries={outage_retries}",
                     },
                 )
             self._recovering = False
