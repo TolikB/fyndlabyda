@@ -121,3 +121,12 @@ perps with the highest 24 h notional volume in the latest `ctx` row.
 
 **What a pass means.** It means more collection (8 weeks or more) and a forward paper run, never
 real money directly. Four weeks of data can only give a preliminary verdict.
+
+## Round 23: big accounts against small ones across coins
+
+Pre-registered on 2026-11-04 in the docstring of `test_skew.py`, with known-answer checks in
+`selftest_skew.py`. It reads the same collected data as round 14 and adds no new collection.
+
+- Development: run `python test_skew.py dev` after 2026-11-16 00:00 UTC.
+- Holdout: run `python test_skew.py holdout` after 2026-11-30 00:00 UTC, only if a trial passed.
+- Copy `pnl_round23.parquet` to `/opt/funding_arbitrage_research/` so the registry counts the 4 trials.
