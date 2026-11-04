@@ -1,0 +1,83 @@
+events with a perp: 84
+DEPOSIT_AMOUNT_SOARING: n=27, coins=18, pre-5m median +0.04%
+  + 1m raw mean -0.05% med -0.01% win 33% t -1.41 n 27 | excess over BTC mean -0.07% med -0.02% win 26% t -2.07 n 27 | by 30m bucket mean -0.10% med -0.02% win 0% t -1.27 n 3
+  + 5m raw mean -0.17% med +0.10% win 59% t -1.33 n 27 | excess over BTC mean -0.20% med -0.09% win 30% t -2.22 n 27 | by 30m bucket mean -0.26% med -0.08% win 0% t -1.25 n 3
+  +10m raw mean +0.00% med -0.03% win 44% t +0.03 n 27 | excess over BTC mean -0.13% med -0.21% win 26% t -0.87 n 27 | by 30m bucket mean -0.16% med -0.21% win 0% t -2.41 n 3
+  +15m raw mean +0.17% med +0.11% win 63% t +0.89 n 27 | excess over BTC mean +0.06% med -0.03% win 41% t +0.30 n 27 | by 30m bucket mean +0.06% med +0.06% win 100% t +3.31 n 3
+  +20m raw mean +0.12% med +0.13% win 59% t +0.57 n 27 | excess over BTC mean -0.03% med -0.10% win 41% t -0.16 n 27 | by 30m bucket mean +0.02% med +0.05% win 67% t +0.13 n 3
+  +30m raw mean +0.33% med +0.15% win 56% t +0.98 n 27 | excess over BTC mean +0.12% med -0.11% win 33% t +0.34 n 27 | by 30m bucket mean +0.26% med -0.01% win 33% t +0.67 n 3
+  +45m raw mean +0.10% med +0.03% win 52% t +0.43 n 27 | excess over BTC mean -0.11% med -0.23% win 30% t -0.47 n 27 | by 30m bucket mean -0.03% med -0.21% win 33% t -0.15 n 3
+  +60m raw mean -0.31% med -0.31% win 41% t -1.12 n 27 | excess over BTC mean -0.44% med -0.23% win 26% t -1.52 n 27 | by 30m bucket mean -0.28% med -0.67% win 33% t -0.55 n 3
+GLOBAL_PRICE_DIFFERENCES: n=5, coins=4, pre-5m median +0.20%
+  + 1m raw mean +0.07% med +0.06% win 60% t +1.00 n 5 | excess over BTC mean +0.08% med +0.00% win 60% t +1.24 n 5 | by 30m bucket mean +0.08% med +0.00% win 60% t +1.24 n 5
+  + 5m raw mean -0.05% med +0.05% win 60% t -0.18 n 5 | excess over BTC mean +0.02% med +0.11% win 60% t +0.08 n 5 | by 30m bucket mean +0.02% med +0.11% win 60% t +0.08 n 5
+  +10m raw mean +0.10% med -0.05% win 40% t +0.23 n 5 | excess over BTC mean +0.20% med +0.00% win 60% t +0.50 n 5 | by 30m bucket mean +0.20% med +0.00% win 60% t +0.50 n 5
+  +15m raw mean -0.18% med -0.38% win 40% t -0.34 n 5 | excess over BTC mean -0.14% med -0.28% win 40% t -0.28 n 5 | by 30m bucket mean -0.14% med -0.28% win 40% t -0.28 n 5
+  +20m raw mean -0.25% med -0.43% win 40% t -0.43 n 5 | excess over BTC mean -0.20% med -0.37% win 40% t -0.36 n 5 | by 30m bucket mean -0.20% med -0.37% win 40% t -0.36 n 5
+  +30m raw mean +0.06% med -0.64% win 40% t +0.07 n 5 | excess over BTC mean +0.23% med -0.02% win 40% t +0.27 n 5 | by 30m bucket mean +0.23% med -0.02% win 40% t +0.27 n 5
+  +45m raw mean +0.50% med +0.23% win 60% t +0.42 n 5 | excess over BTC mean +0.61% med +0.24% win 60% t +0.50 n 5 | by 30m bucket mean +0.61% med +0.24% win 60% t +0.50 n 5
+  +60m raw mean +0.50% med +0.08% win 60% t +0.34 n 5 | excess over BTC mean +0.71% med +0.75% win 60% t +0.46 n 5 | by 30m bucket mean +0.71% med +0.75% win 60% t +0.46 n 5
+TRADING_VOLUME_SOARING: n=52, coins=34, pre-5m median +0.04%
+  + 1m raw mean +0.02% med +0.02% win 50% t +0.87 n 52 | excess over BTC mean -0.00% med -0.00% win 46% t -0.18 n 52 | by 30m bucket mean -0.00% med -0.00% win 25% t -0.52 n 4
+  + 5m raw mean +0.04% med +0.13% win 63% t +0.52 n 52 | excess over BTC mean -0.03% med -0.02% win 48% t -0.58 n 52 | by 30m bucket mean +0.01% med +0.01% win 50% t +0.07 n 4
+  +10m raw mean +0.24% med +0.16% win 58% t +2.59 n 52 | excess over BTC mean +0.07% med -0.04% win 44% t +0.75 n 52 | by 30m bucket mean -0.03% med +0.00% win 50% t -0.24 n 4
+  +15m raw mean +0.40% med +0.34% win 71% t +3.58 n 52 | excess over BTC mean +0.24% med +0.09% win 63% t +2.19 n 52 | by 30m bucket mean +0.09% med +0.19% win 75% t +0.41 n 4
+  +20m raw mean +0.28% med +0.25% win 71% t +2.56 n 52 | excess over BTC mean +0.08% med +0.03% win 50% t +0.74 n 52 | by 30m bucket mean +0.06% med +0.02% win 75% t +0.43 n 4
+  +30m raw mean +0.29% med +0.20% win 60% t +1.55 n 52 | excess over BTC mean +0.03% med -0.14% win 38% t +0.17 n 52 | by 30m bucket mean +0.05% med -0.13% win 25% t +0.16 n 4
+  +45m raw mean +0.19% med +0.27% win 63% t +1.24 n 52 | excess over BTC mean -0.09% med -0.16% win 38% t -0.59 n 52 | by 30m bucket mean -0.07% med -0.16% win 25% t -0.61 n 4
+  +60m raw mean -0.12% med -0.19% win 44% t -0.82 n 52 | excess over BTC mean -0.29% med -0.30% win 29% t -1.89 n 52 | by 30m bucket mean -0.30% med -0.41% win 25% t -1.24 n 4
+   11-02 mean +0.25% med +0.25% win 74% t +1.71 n 27
+   11-03 mean +0.09% med -0.00% win 47% t +0.67 n 17
+   11-04 mean +0.51% med +0.13% win 62% t +1.19 n 8
+   11-02 00:56:28 POWR pre -0.71% +5 +0.36% +15 -0.22% +60 -0.36% btc15 +0.31%
+   11-02 01:00:05 COW pre -0.18% +5 +0.27% +15 +1.08% +60 +1.89% btc15 +0.35%
+   11-02 01:00:05 FF pre +0.09% +5 -0.04% +15 +0.04% +60 +0.54% btc15 +0.35%
+   11-02 01:00:05 HYPER pre +0.30% +5 +0.05% +15 +0.47% +60 -0.20% btc15 +0.35%
+   11-02 01:00:05 LSK pre -0.44% +5 -1.00% +15 -1.96% +60 -2.29% btc15 +0.35%
+   11-02 01:00:05 MTL pre +0.11% +5 +0.48% +15 +0.78% +60 +0.63% btc15 +0.35%
+   11-02 01:00:05 PROM pre +0.09% +5 -0.38% +15 +0.09% +60 -0.31% btc15 +0.35%
+   11-02 01:00:05 RE pre -0.09% +5 +0.30% +15 +0.83% +60 +0.21% btc15 +0.35%
+   11-02 01:00:05 RED pre +0.00% +5 +0.66% +15 +1.54% +60 +0.66% btc15 +0.35%
+   11-02 01:00:05 RSR pre -0.21% +5 +0.34% +15 +0.82% +60 +0.07% btc15 +0.35%
+   11-02 01:00:05 SPK pre +0.24% +5 +0.47% +15 +0.41% +60 +0.24% btc15 +0.35%
+   11-02 01:00:05 STX pre +0.22% +5 +1.02% +15 +1.30% +60 +1.48% btc15 +0.35%
+   11-02 01:00:05 TRUST pre +0.08% +5 +0.20% +15 +1.05% +60 +0.79% btc15 +0.35%
+   11-02 01:00:05 WET pre +1.14% +5 +0.09% +15 +0.39% +60 -0.81% btc15 +0.35%
+   11-02 01:00:05 ZBT pre -0.20% +5 +0.10% +15 +0.43% +60 +0.10% btc15 +0.35%
+   11-02 01:00:05 ZK pre +0.38% +5 +0.28% +15 +0.72% +60 +0.13% btc15 +0.35%
+   11-02 01:00:15 1INCH pre +0.36% +5 +0.06% +15 +0.28% +60 +0.11% btc15 +0.35%
+   11-02 01:00:15 BIO pre -0.18% +5 +0.32% +15 +1.00% +60 -0.27% btc15 +0.35%
+   11-02 01:00:15 BMT pre +0.09% +5 +0.19% +15 +0.32% +60 +0.00% btc15 +0.35%
+   11-02 01:00:15 CVC pre -0.34% +5 -0.30% +15 +0.60% +60 -0.60% btc15 +0.35%
+   11-02 01:00:15 FLOCK pre +0.34% +5 +0.67% +15 +1.56% +60 -2.52% btc15 +0.35%
+   11-02 01:00:15 G pre -0.17% +5 -0.22% +15 +2.17% +60 +0.28% btc15 +0.35%
+   11-02 01:00:15 POLYX pre +0.28% +5 +0.06% +15 +0.40% +60 +0.09% btc15 +0.35%
+   11-02 01:00:15 STEEM pre -0.26% +5 +0.44% +15 -0.38% +60 -0.76% btc15 +0.35%
+   11-02 01:00:15 SUPER pre +0.16% +5 +0.00% +15 +0.37% +60 -0.45% btc15 +0.35%
+   11-02 01:00:15 TRUMP pre -0.40% +5 +0.52% +15 +1.39% +60 +0.35% btc15 +0.35%
+   11-02 01:00:15 ZKP pre +0.12% +5 +0.44% +15 +0.59% +60 -0.20% btc15 +0.35%
+   11-03 01:00:32 ZIL pre -0.06% +5 +0.00% +15 -0.28% +60 -1.00% btc15 +0.11%
+   11-03 01:00:34 1INCH pre -0.03% +5 +0.14% +15 +0.09% +60 -0.10% btc15 +0.11%
+   11-03 01:00:34 BIO pre -0.05% +5 +0.00% +15 -0.29% +60 -0.77% btc15 +0.11%
+   11-03 01:00:34 BMT pre +0.67% +5 +0.38% +15 +2.15% +60 +1.05% btc15 +0.11%
+   11-03 01:00:34 CVC pre -0.19% +5 +0.42% +15 +0.88% +60 +0.28% btc15 +0.11%
+   11-03 01:00:34 FLOCK pre +0.30% +5 +0.00% +15 -0.03% +60 -0.91% btc15 +0.11%
+   11-03 01:00:34 G pre -0.21% +5 +0.27% +15 -0.21% +60 -1.12% btc15 +0.11%
+   11-03 01:00:34 POLYX pre -0.03% +5 +0.26% +15 +0.16% +60 -0.19% btc15 +0.11%
+   11-03 01:00:34 POWR pre +0.06% +5 +0.40% +15 +0.38% +60 -0.37% btc15 +0.11%
+   11-03 01:00:34 STEEM pre -0.13% +5 +0.11% +15 -0.26% +60 +0.15% btc15 +0.11%
+   11-03 01:00:34 SUPER pre +0.10% +5 +0.28% +15 +0.31% +60 -0.46% btc15 +0.11%
+   11-03 01:00:34 TRUMP pre +0.13% +5 +0.13% +15 +0.25% +60 +0.44% btc15 +0.11%
+   11-03 01:00:34 ZKP pre +0.07% +5 +0.20% +15 +0.17% +60 +0.44% btc15 +0.11%
+   11-03 01:00:39 FLUID pre +0.33% +5 +0.22% +15 +0.11% +60 -0.22% btc15 +0.11%
+   11-03 01:00:39 GRVT pre -0.13% +5 -0.35% +15 +0.35% +60 -2.60% btc15 +0.11%
+   11-03 01:00:39 MEGA pre +0.02% +5 -0.13% +15 -0.24% +60 -1.11% btc15 +0.11%
+   11-03 01:00:39 SOPH pre +0.20% +5 +0.75% +15 +0.00% +60 -0.41% btc15 +0.11%
+   11-04 01:00:10 BMT pre +1.82% +5 -0.57% +15 +2.85% +60 +3.96% btc15 -0.36%
+   11-04 01:00:10 ERA pre +0.47% +5 -0.99% +15 +0.15% +60 -0.91% btc15 -0.36%
+   11-04 01:00:11 FLUID pre -0.14% +5 -1.15% +15 -0.91% +60 -1.53% btc15 -0.36%
+   11-04 01:00:11 GRVT pre -0.09% +5 -0.96% +15 -0.26% +60 -0.53% btc15 -0.36%
+   11-04 01:00:11 MEGA pre +0.29% +5 -0.78% +15 -0.20% +60 +0.22% btc15 -0.36%
+   11-04 01:00:11 SOPH pre +0.00% +5 -0.42% +15 +0.77% +60 +1.95% btc15 -0.36%
+   11-04 01:00:11 ZIL pre -0.06% +5 -1.30% +15 -0.79% +60 -0.68% btc15 -0.36%
+   11-04 01:00:14 PIEVERSE pre -0.19% +5 -0.39% +15 -0.40% +60 -0.76% btc15 -0.36%

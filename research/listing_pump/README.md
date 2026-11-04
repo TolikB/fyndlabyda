@@ -305,6 +305,21 @@ The rules are in the docstring and were fixed before any forward event.
 **Dry run.** It was replayed on the KRW-NIL notice of 2026-10-27 07:30:00 UTC, part of the spent 16b
 holdout. REST and the archive give the same S2 fill: entry 0.07163, exit 0.07169.
 
+## Upbit caution flags: daily batches, no signal (`diag_flags.py` → `diag_flags.txt`, descriptive, no trial)
+
+`upbit-watch` logs every `market_event` flag change. The question was whether a flag turning on for a
+KRW market predicts the coin's Binance perp. Data: 67 h from 2026-11-01, 84 events with a perp, entry
+at the next minute's open.
+
+`TRADING_VOLUME_SOARING` looked good at first: +0.40% at +15 min, t 3.58, n 52. It is not a signal.
+Every one of those events turned on within 40 s of 01:00 UTC (10:00 KST) on three days, so Upbit
+computes the flag in a daily batch. The figure is those three days' market move. Over BTC and counted
+per 30-minute bucket, it is +0.09%, t 0.41, n 4. `DEPOSIT_AMOUNT_SOARING` has the same shape (3
+buckets), `PRICE_FLUCTUATIONS` never fired on a KRW market, and `GLOBAL_PRICE_DIFFERENCES` has only 5
+events.
+
+Closed. Clustering events in time before quoting a t-stat is what caught this.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
