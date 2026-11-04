@@ -325,7 +325,7 @@ Closed. Clustering events in time before quoting a t-stat is what caught this.
 - `/w/pnl_round16.parquet` adds 3 trials.
 - `/w/pnl_round16b.parquet` adds 2 trials.
 - That makes 577 in all. Rounds 17 and 18 bring it to 581, `/w/pnl_round19.parquet` (2 trials) to 583,
-  and `/w/pnl_round21.parquet` (2 trials) to 585. The diagnostics add none.
+  and `/w/pnl_round21.parquet` (2 trials) to 585. The diagnostics add none. Round 22 (`../upbit_factor`) brings it to 593.
 
 ## Files
 
