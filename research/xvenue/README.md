@@ -8,6 +8,7 @@ No orders are placed anywhere, and no keys are used.
 | `selftest_collector.py` | Parsers and buckets on canned payloads; prints `selftest OK` |
 | `pilot.py` | First look at spreads and gaps (descriptive, no trial) |
 | `test_lag.py`, `selftest_lag.py` | Round 25: does Lighter lag Binance by more than its 300 ms taker delay? |
+| `test_gap.py`, `selftest_gap.py` | Round 24: do gaps between venues close by more than the costs? |
 
 ## Run
 
@@ -43,4 +44,5 @@ Median quoted spread, bp:
 - **Where they exist.** A few volatile small caps (AKE, EVAA, JCT, ELSA), mostly against Gate. Gate's ticker call takes
   about 3 s, so part of that may be stale quotes. The medians also carry funding, so a gap is not yet an arbitrage.
 
-Round 24 tests whether these gaps close by more than the costs. Its rules are not fixed yet.
+Round 24 (`test_gap.py`, 79f6f90) tests whether these gaps close by more than the costs. Development runs on
+2026-11-07..11-21 and the holdout on 11-21..12-05.
