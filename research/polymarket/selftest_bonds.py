@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 import bt_bonds as b
+import download_prices as d
 
 DAY, HOUR = b.DAY, b.HOUR
 T0 = b.sec("2024-01-01")
@@ -78,6 +79,24 @@ s = b.signal(mk, tt, pp, 1, 0.8, 0.95)
 r, _ = b.book([s], {1: (tt, pp)}, 0.1, 1.0, lo, hi)
 assert r.loc[mk["end"] // DAY * DAY] < -0.01
 assert abs(r.sum() - (shares - 250) / 2500) < 1e-9
+
+
+# calibration: entries outside the period do not count
+mk, tt, pp = market(1, 0.92)
+late, tl, pl = market(2, 0.92, K_end=b.sec(b.PERIODS["holdout"][0]) + 5 * DAY)
+tl = tl - tl[0] + late["start"]
+cal = b.calibration([mk, late], {1: (tt, pp), 2: (tl, pl)}, 1, *(b.sec(x) for x in b.PERIODS["dev"]))
+assert sum(x["n"] for x in cal) == 1
+
+# download range: covers the oldest usable price, stays under the API's limit, skips markets that cannot enter
+e = b.sec("2025-06-01")
+u = pd.DataFrame({"id": [1, 2, 3, 4, 5], "token_yes": list("abcde"), "start": [(e - 60 * DAY) * 1000] * 3 + [(e - DAY) * 1000, 0],
+                  "end": [e * 1000, e * 1000, e * 1000, e * 1000, (b.sec("2024-01-01") - 2 * DAY) * 1000],
+                  "closed": [(e + 3600) * 1000, (e + 90 * DAY) * 1000, (e - 8 * DAY) * 1000, e * 1000, 0]})
+w = {x[0]: x for x in d.windows(u)}
+assert sorted(w) == [1, 2, 4]
+assert w[1][2:] == (e - 7 * DAY - 3 * HOUR, e + 3660) and w[2][3] == e + 7 * DAY and w[4][2] == e - DAY
+assert w[2][3] - w[2][2] < 15 * DAY
 
 
 # the bar

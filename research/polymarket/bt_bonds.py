@@ -32,7 +32,12 @@ Holdout: the same bar with f* from development, one look, only for trials that p
 series on the live order book, whose real spreads this test cannot see.
 
 Known limits: hourly prices are not quotes, so a thin book's real ask may be worse (hence the 2x run and the volume
-floor). A scheduled end that was moved after te is seen at its final value.
+floor). A scheduled end that was moved after te is seen at its final value. Marks later than 7 days after the scheduled
+end keep the last price, so a late drawdown of a disputed market shows up only at its close.
+
+Corrected on 2026-11-05 after the first run, whose rules stay as above: that run gave 0 signals because the downloader's
+interval=max returns only 31 days at hourly fidelity (download_prices.py now asks for each market's range), and its
+calibration table was not limited to the period. All its prices fell in the holdout, and the table was not read.
 
 Usage (image funding-research:py312, /opt/funding_arbitrage_research mounted at /w)
   python bt_bonds.py dev        results_bonds_dev.json, /w/pnl_round27.parquet
@@ -176,12 +181,12 @@ def load():
     return mk.to_dict("records"), px
 
 
-def calibration(markets, px, K_days):
-    """Descriptive: win rate by price band, no book and no costs."""
+def calibration(markets, px, K_days, lo, hi):
+    """Descriptive: win rate by price band for entries inside [lo, hi), no book and no costs."""
     rows = []
     for mk in markets:
         s = signal(mk, *px[mk["id"]], K_days, 0.5, 1.01)
-        if s:
+        if s and lo <= s["te"] < hi:
             rows.append(s)
     d = pd.DataFrame(rows)
     d["band"] = pd.cut(d["p"], [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.985, 1.01], right=False)
@@ -215,7 +220,7 @@ def run_period(period, keys=None, fractions=None):
             print(key, json.dumps(out[key]), flush=True)
     frame = pd.DataFrame(cols)
     frame.index = pd.to_datetime(frame.index, unit="s")
-    return out, frame, {f"k{K}": calibration(markets, px, K) for K in KS.values()} if period == "dev" else {}
+    return out, frame, {f"k{K}": calibration(markets, px, K, lo, hi) for K in KS.values()} if period == "dev" else {}
 
 
 def main():
