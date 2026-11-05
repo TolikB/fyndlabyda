@@ -219,6 +219,16 @@ each new market first appears.
     it.
   - If it appears only later, this route is useless for 16b.
 
+**First event, CARDS (2026-11-05): 43 minutes late.** The notice for KRW, BTC and USDT markets was
+posted at 06:03:03 UTC, and the three markets first appeared at 06:46:27 UTC, 2,604 s after it. The
+budget is about 1 s. They vanished 0.9 s later and came back 2.5 s after that, so the list rolls out
+unevenly across servers.
+
+The plan's rule needs 3 events, so there is no formal verdict yet (`analyze_watch.py`: "no verdict
+yet"). CARDS has no perp on Binance or Hyperliquid, so the sniper took no trade and there is no jump to
+compare against. Upbit answered 429 to a request for the notice body, which was not repeated, so
+the trading open time is unknown.
+
 ## Round 19: short the perp seconds after bad exchange news (`bt_badnews.py`, 5c3aad4)
 
 **Events.** These are Upbit notices of an investment warning, a caution or a delisting, and Binance
