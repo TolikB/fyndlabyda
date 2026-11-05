@@ -50,7 +50,8 @@ PER_CONN = 75
 TIMEOUT = 10
 NAN = float("nan")
 
-LT_API = "https://mainnet.zklighter.elliot.ai/api/v1"
+LT_ROOT = "https://mainnet.zklighter.elliot.ai/"
+LT_API = f"{LT_ROOT}api/v1"
 LT_WS = "wss://mainnet.zklighter.elliot.ai/stream"
 
 TICKERS = {
@@ -296,7 +297,7 @@ class Collector:
         while True:
             t0 = time.monotonic()
             try:
-                await asyncio.to_thread(get, f"{LT_API}/status")
+                await asyncio.to_thread(get, LT_ROOT)
                 self.store.add("rtt", [(now_ms(), "lighter", round((time.monotonic() - t0) * 1000, 1))])
             except Exception:  # noqa: BLE001
                 self.n["errors"] += 1
