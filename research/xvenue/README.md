@@ -46,3 +46,34 @@ Median quoted spread, bp:
 
 Round 24 (`test_gap.py`, 79f6f90) tests whether these gaps close by more than the costs. Development runs on
 2026-11-07..11-21 and the holdout on 11-21..12-05.
+
+## Who may use these venues
+
+[Lighter's terms](https://lighter.xyz/terms) name Ukraine, with the US, Canada, the UK, Russia and others, among the places
+whose residents and visitors may not use it. Every Lighter result here is therefore research only unless the account holder
+lives outside those places. A VM elsewhere does not change that, and no result here suggests working around it.
+
+## Near-identical instruments on one venue (`pilot_pairs.py`, `pilot_pairs.txt`)
+
+QQQ and US100, SPY and US500, XAU and PAXG on Lighter, 2026-11-05, 9 hours, $1,000 at the touch of both legs, in and out at
+the touch 1 s after the signal (descriptive):
+
+| Pair | Edge | Trades | bp a leg | Won |
+|---|---:|---:|---:|---:|
+| QQQ / US100 | ≥ 5 bp | 21 | +2.18 | 71% |
+| QQQ / US100 | ≥ 10 bp | 7 | +7.53 | 100% |
+| SPY / US500 | ≥ 5 bp | 14 | +2.38 | 79% |
+| SPY / US500 | ≥ 10 bp | 5 | +9.81 | 100% |
+
+- **One episode.** All the trades at ≥ 10 bp fell between 14:30 and 15:50 UTC, nearly all in 15:05–15:31, when the
+  gap's standard deviation jumped from about 1.5 bp to 5–7 bp. Nine hours are one event, and nothing here is a result.
+- **XAU / PAXG** fails: XAU shows $120 at the touch.
+- **Nothing outside the session.** Below 3 bp the spreads eat the edge.
+
+Because of the terms above, this pair test was not registered.
+
+## MEXC, one coin in two currencies (`pilot_mexc.py`)
+
+Twenty-five coins have two contracts at 0/0 (`DOGE_USDT` and `DOGE_USD`, `SILVER_USDT` and `SILVER_USDC`). The collector kept
+only `_USDT` until 2026-11-05 evening, so this pilot needs a day of the wider feed. `_USD` contracts are coin-margined, so
+their profit is not linear with a `_USDT` leg.

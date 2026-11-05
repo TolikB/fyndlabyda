@@ -23,8 +23,9 @@ assert r[0][:3] == ("BTC_USDT", 1.0, 2.0) and math.isnan(r[0][3]) and math.isnan
 r = c.p_bitget({"data": [{"symbol": "BTCUSDT", "bidPr": "1", "askPr": "2", "bidSz": "3", "askSz": "4", "ts": "9"}]})
 assert r == [("BTCUSDT", 1.0, 2.0, 3.0, 4.0, 9.0)]
 
-r = c.p_mexc({"data": [{"symbol": "BTC_USDT", "bid1": 1, "ask1": 2, "timestamp": 9}, {"symbol": "BTC_USD", "bid1": 1, "ask1": 2}]})
-assert len(r) == 1 and r[0][:3] == ("BTC_USDT", 1.0, 2.0) and r[0][5] == 9.0
+r = c.p_mexc({"data": [{"symbol": "BTC_USDT", "bid1": 1, "ask1": 2, "timestamp": 9}, {"symbol": "BTC_USDC", "bid1": 1, "ask1": 2},
+                       {"symbol": "BTC_EUR", "bid1": 1, "ask1": 2}]})
+assert len(r) == 2 and r[0][:3] == ("BTC_USDT", 1.0, 2.0) and r[0][5] == 9.0
 
 r = c.p_kucoin({"data": [{"symbol": "XBTUSDTM", "bestBidPrice": "1", "bestAskPrice": "2", "bestBidSize": 3,
                           "bestAskSize": 4, "ts": 9_000_000}, {"symbol": "XBTUSDM"}]})

@@ -1,0 +1,26 @@
+1,677,559 rows, unit 1 ms, coins ['HYUNDAIUSD', 'PAXG', 'QQQ', 'SAMSUNGUSD', 'SKHYNIXUSD', 'SPCX', 'SPY', 'US100', 'US500', 'XAU']
+
+QQQ/US100: 33,239 s, spread 0.87 / 1.11 bp, touch $1,224 / $836, r-base sd 2.59 bp, |r-base| 99% 9.40 bp
+  edge >=  1.0 bp:  33.93% of s,  1833 eps | session  190 trades, mean  -0.86 bp, median  -0.97, won 0.33, sum  -163.2 bp | off   21 trades, mean  -1.70 bp, median  -1.82, won 0.05, sum   -35.7 bp
+  edge >=  2.0 bp:  17.15% of s,  1157 eps | session  106 trades, mean  -0.26 bp, median  -0.45, won 0.44, sum   -28.1 bp | off    9 trades, mean  -1.07 bp, median  -1.51, won 0.22, sum    -9.6 bp
+  edge >=  3.0 bp:   8.19% of s,   710 eps | session   60 trades, mean   0.36 bp, median   0.19, won 0.52, sum    21.8 bp | off    3 trades, mean  -0.40 bp, median  -0.42, won 0.00, sum    -1.2 bp
+  edge >=  5.0 bp:   2.35% of s,   164 eps | session   21 trades, mean   2.18 bp, median   2.00, won 0.71, sum    45.7 bp | off     0 trades
+  edge >= 10.0 bp:   0.75% of s,    32 eps | session    7 trades, mean   7.53 bp, median   9.05, won 1.00, sum    52.7 bp | off     0 trades
+
+SPY/US500: 33,171 s, spread 0.68 / 1.08 bp, touch $776 / $5,037, r-base sd 2.90 bp, |r-base| 99% 11.37 bp
+  edge >=  1.0 bp:  22.23% of s,  1033 eps | session   87 trades, mean  -1.33 bp, median  -1.63, won 0.24, sum  -115.4 bp | off    4 trades, mean  -1.04 bp, median  -0.70, won 0.00, sum    -4.1 bp
+  edge >=  2.0 bp:  13.29% of s,   701 eps | session   50 trades, mean  -0.61 bp, median  -0.73, won 0.36, sum   -30.3 bp | off    1 trades, mean  -0.91 bp, median  -0.91, won 0.00, sum    -0.9 bp
+  edge >=  3.0 bp:   7.88% of s,   357 eps | session   30 trades, mean  -0.09 bp, median   0.35, won 0.57, sum    -2.8 bp | off     0 trades
+  edge >=  5.0 bp:   4.55% of s,    76 eps | session   14 trades, mean   2.38 bp, median   2.77, won 0.79, sum    33.3 bp | off     0 trades
+  edge >= 10.0 bp:   1.02% of s,    16 eps | session    5 trades, mean   9.81 bp, median   9.06, won 1.00, sum    49.1 bp | off     0 trades
+
+XAU/PAXG: 31,419 s, spread 0.51 / 2.98 bp, touch $120 / $1,858, r-base sd 2.32 bp, |r-base| 99% 5.70 bp
+  edge >=  1.0 bp:  26.06% of s,   817 eps | session   41 trades, mean  -1.38 bp, median  -1.27, won 0.20, sum   -56.7 bp | off   13 trades, mean  -2.20 bp, median  -2.22, won 0.15, sum   -28.6 bp
+  edge >=  2.0 bp:  13.51% of s,   467 eps | session   22 trades, mean  -0.73 bp, median  -0.58, won 0.36, sum   -16.1 bp | off    8 trades, mean  -0.82 bp, median  -0.62, won 0.50, sum    -6.6 bp
+  edge >=  3.0 bp:   5.94% of s,   325 eps | session   16 trades, mean  -0.37 bp, median   0.06, won 0.50, sum    -6.0 bp | off    6 trades, mean  -1.51 bp, median  -1.89, won 0.33, sum    -9.1 bp
+  edge >=  5.0 bp:   0.20% of s,    27 eps | session    3 trades, mean  -1.15 bp, median  -1.50, won 0.33, sum    -3.4 bp | off    1 trades, mean   0.48 bp, median   0.48, won 1.00, sum     0.5 bp
+  edge >= 10.0 bp:   0.00% of s,     0 eps | session     0 trades | off     0 trades
+SAMSUNG/SAMSUNGUSD: no quotes
+SKHYNIX/SKHYNIXUSD: no quotes
+HYUNDAI/HYUNDAIUSD: no quotes
+SPACEX/SPCX: no quotes

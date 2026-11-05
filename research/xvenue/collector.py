@@ -118,7 +118,7 @@ def p_bitget(d):
 
 def p_mexc(d):
     return [(x["symbol"], num(x.get("bid1")), num(x.get("ask1")), NAN, NAN, num(x.get("timestamp")))
-            for x in d["data"] if x["symbol"].endswith("_USDT")]
+            for x in d["data"] if x["symbol"].endswith(("_USDT", "_USDC", "_USD1", "_USD"))]
 
 
 def p_kucoin(d):
