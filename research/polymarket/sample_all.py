@@ -4,8 +4,9 @@ Rounds 27 and 29 keep markets with final volume >= 50,000, which is unknown at e
 may clear the floor BECAUSE the favourite lost. Raising the floor cannot show this: volumes are heavy-tailed, so the same
 multiplier on volume changes the odds of inclusion alike at any floor. Dropping the floor can.
 
-For every market with a scheduled end on a sample day (the 5th and 20th of each month, 2025-09..2026-10), entry 3 days before
-as in round 29. Each line gives the favourite's price, its win rate and the gap, with the markets split at the old floor.
+For every market with a scheduled end on a sample day (the 5th of each month, 2025-09..2026-10), entry 3 days before as in
+round 29. Many markets can share one end time, and Gamma's offsets stop at about 2,000, so a window of a minute keeps its first
+2,000 by id. Each line gives the favourite's price, its win rate and the gap, with the markets split at the old floor.
 
   python sample_all.py          sample_all.parquet, then the table
   python sample_all.py table    the table alone
@@ -29,6 +30,7 @@ import bt_bonds as b
 import download_markets as dm
 
 PATH = f"{b.DATA}/sample_all.parquet"
+DAYS = f"{b.DATA}/sample_days"
 URL = "https://clob.polymarket.com/prices-history?market={token}&startTs={a}&endTs={z}&fidelity=60"
 HEADERS = {"User-Agent": "research"}
 K = 3
@@ -40,7 +42,31 @@ lock = threading.Lock()
 
 def days():
     months = pd.date_range("2025-09-01", "2026-10-01", freq="MS")
-    return [m + pd.Timedelta(days=d) for m in months for d in (4, 19)]
+    return [m + pd.Timedelta(days=4) for m in months]
+
+
+def window(lo, hi):
+    """dm.window_rows with no volume floor. Halving stops at a minute: markets that share one end time cannot be split by time."""
+    rows, offset = {}, 0
+    while True:
+        data = dm.get({"closed": "true", "limit": dm.PAGE, "offset": offset, "end_date_min": f"{lo:%Y-%m-%dT%H:%M:%SZ}",
+                       "end_date_max": f"{hi:%Y-%m-%dT%H:%M:%SZ}", "order": "id", "ascending": "true"})
+        if not data:
+            return rows, offset
+        for m in data:
+            r = dm.row(m)
+            if r:
+                rows[r["id"]] = r
+        offset += len(data)
+        time.sleep(dm.PAUSE)
+        if offset >= dm.OFFSET_CAP:
+            if hi - lo <= pd.Timedelta(minutes=1):
+                print(f"capped at {lo}", flush=True)
+                return rows, offset
+            mid = lo + (hi - lo) / 2
+            left, a = window(lo, mid)
+            right, b = window(mid, hi)
+            return {**left, **right}, a + b
 
 
 def history(token, a, z, tries=6):
@@ -76,16 +102,19 @@ def one(r):
 
 
 def collect():
-    dm.MIN_VOLUME = 0
     frames = []
+    os.makedirs(DAYS, exist_ok=True)
     for d in days():
-        got, seen = dm.window_rows(d, d + pd.Timedelta(days=1))
-        m = pd.DataFrame(got.values())
-        te = m["end"] // 1000 - K * b.DAY
-        keep = m["outcome_yes"].isin([0.0, 1.0]) & (m["start"] // 1000 < te) & (te < m["closed"] // 1000)
-        frames.append(m.loc[keep, ["id", "event", "end", "token_yes", "outcome_yes", "volume"]])
-        print(f"{d:%Y-%m-%d} seen {seen} kept {len(got)} open at entry and resolved {int(keep.sum())}", flush=True)
-        del got, m
+        path = f"{DAYS}/{d:%Y-%m-%d}.parquet"
+        if not os.path.exists(path):
+            got, seen = window(d, d + pd.Timedelta(days=1))
+            m = pd.DataFrame(got.values())
+            te = m["end"] // 1000 - K * b.DAY
+            keep = m["outcome_yes"].isin([0.0, 1.0]) & (m["start"] // 1000 < te) & (te < m["closed"] // 1000)
+            m.loc[keep, ["id", "event", "end", "token_yes", "outcome_yes", "volume"]].to_parquet(path, index=False)
+            print(f"{d:%Y-%m-%d} seen {seen} kept {len(got)} open at entry and resolved {int(keep.sum())}", flush=True)
+            del got, m
+        frames.append(pd.read_parquet(path))
     m = pd.concat(frames, ignore_index=True).drop_duplicates("id")
     print(f"{len(m)} markets open at entry and resolved", flush=True)
     out = []
@@ -103,7 +132,7 @@ def collect():
 def gap(x):
     if not len(x):
         return "0"
-    se = np.sqrt((x["won"] * (1 - x["won"])).mean() / len(x)) * 100
+    se = np.sqrt(x["won"].mean() * (1 - x["won"].mean()) / len(x)) * 100
     return f"{len(x):6d} events {x['event'].nunique():6d}  price {x['fav'].mean():.3f}  won {x['won'].mean():.3f}  gap {(x['won'].mean() - x['fav'].mean()) * 100:+.2f} pp  se {se:.2f}"
 
 

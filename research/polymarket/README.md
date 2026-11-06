@@ -14,6 +14,10 @@ nothing here suggests working around a block.
 | `bt_bonds.py`, `selftest_bonds.py` | Round 27: buy favourites priced 0.80..0.985 before the scheduled end |
 | `diag_bonds.py` | Round 27's gap by volume floor and kind of market (descriptive, no trial) |
 | `results_bonds_dev.json`, `dev.log` | Round 27's development results |
+| `bt_underdog.py`, `selftest_underdog.py` | Round 29: buy the underdog 1 or 3 days before the end |
+| `results_underdog_*.json`, `*_underdog.log` | Round 29's results |
+| `diag_underdog.py` | Round 29's signals by month, kind and market (descriptive, no trial) |
+| `sample_all.py`, `sample_all.txt` | All markets of sample days with no volume floor (descriptive, no trial) |
 
 ## Round 27, 2026-11-05: all 9 trials fail development, with the wrong sign
 
@@ -33,11 +37,34 @@ Favourites win less often than their price says, on development entries, 2024–
 
 Cells are the win rate less the price. So the studies that find favourites underpriced do not hold here.
 
-## Is the gap a product of the volume floor?
+## The gap is a selection on final volume, so neither round says anything
 
-The universe keeps markets by final volume, which is unknown at entry, and a surprise draws trading. If that made the gap,
-it would shrink as the floor rises. It does not: favourites priced 0.60–0.985 one day before show −2.3 pp at $50k, −3.0 pp at
-$200k, −4.2 pp at $1M and −1.9 pp at $5M (208 markets). Politics is the exception, near zero.
+The universe keeps markets by final volume, which is unknown at entry, and a surprise draws trading. A first check raised the
+floor, saw the gap stay and concluded the floor was not the cause. That check cannot work: volumes are heavy-tailed, so a surprise
+that multiplies volume changes the odds of inclusion alike at any floor.
+
+`sample_all.py` (`sample_all.txt`) takes every market of 14 sample days with no floor, 43,967 with a price 3 days before the end.
+Favourites priced 0.70–0.80, win rate less price:
+
+| Final volume | Markets | Gap | Standard error |
+|---|---:|---:|---:|
+| all | 3,928 | +6.2 pp | see the file |
+| under $1,000 | 2,432 | +10.5 pp | |
+| $1,000–10,000 | 780 | +2.8 pp | |
+| $10,000–50,000 | 439 | −2.5 pp | |
+| $50,000 and over | 277 | −7.3 pp | |
+
+The gap falls steadily with final volume and changes sign. The markets over the floor are there partly because the favourite lost.
+
+- **Round 29 fails, despite its formal pass.** The rule fixed before this table said a gap under 2 pp or of the other sign makes the
+  pass an artefact. Its +84% a month at t 5.52 (holdout, `underdog|k3|f70`) came from choosing markets by a number known only afterwards.
+  A live book cannot do that.
+- **Round 27's failure means little too.** The same selection worked against the favourites.
+- **The +5 pp over all markets is no edge.** Half these markets end with $10 of volume or less, so their prices cannot be traded.
+
+A fair test would need each market's volume up to the entry, and access to the venue. Neither is in hand, so this line stops here.
+
+**Lesson:** a universe filter must use what is known at entry. A pass this large was a flaw, and only an unfiltered sample could show it.
 
 ## Notes
 

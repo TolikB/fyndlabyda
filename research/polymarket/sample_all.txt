@@ -1,0 +1,41 @@
+volume quantiles {0.1: 0.0, 0.25: 0.0, 0.5: 10.0, 0.75: 861.0, 0.9: 9569.0}
+
+favourite 0.60..0.70
+  all markets         3507 events   1574  price 0.644  won 0.724  gap +7.96 pp  se 0.75
+  volume < 50k        3212 events   1412  price 0.644  won 0.734  gap +9.04 pp  se 0.78
+  volume >= 50k        295 events    234  price 0.648  won 0.610  gap -3.79 pp  se 2.84
+        0..  1,000    2117 events    901  price 0.643  won 0.758  gap +11.50 pp  se 0.93
+    1,000.. 10,000     709 events    513  price 0.646  won 0.709  gap +6.32 pp  se 1.71
+   10,000.. 50,000     386 events    319  price 0.648  won 0.653  gap +0.53 pp  se 2.42
+
+favourite 0.70..0.80
+  all markets         3928 events   1605  price 0.746  won 0.808  gap +6.24 pp  se 0.63
+  volume < 50k        3651 events   1461  price 0.746  won 0.818  gap +7.27 pp  se 0.64
+  volume >= 50k        277 events    216  price 0.744  won 0.671  gap -7.28 pp  se 2.82
+        0..  1,000    2432 events    884  price 0.745  won 0.850  gap +10.46 pp  se 0.72
+    1,000.. 10,000     780 events    570  price 0.746  won 0.774  gap +2.79 pp  se 1.50
+   10,000.. 50,000     439 events    355  price 0.747  won 0.722  gap -2.45 pp  se 2.14
+
+favourite 0.80..0.90
+  all markets         2826 events   1248  price 0.850  won 0.875  gap +2.53 pp  se 0.62
+  volume < 50k        2606 events   1137  price 0.850  won 0.883  gap +3.26 pp  se 0.63
+  volume >= 50k        220 events    166  price 0.848  won 0.786  gap -6.12 pp  se 2.76
+        0..  1,000    1565 events    665  price 0.851  won 0.893  gap +4.25 pp  se 0.78
+    1,000.. 10,000     696 events    490  price 0.851  won 0.885  gap +3.40 pp  se 1.21
+   10,000.. 50,000     345 events    270  price 0.847  won 0.832  gap -1.49 pp  se 2.01
+
+favourite 0.90..0.95
+  all markets         2271 events    855  price 0.925  won 0.937  gap +1.29 pp  se 0.51
+  volume < 50k        2154 events    795  price 0.924  won 0.942  gap +1.80 pp  se 0.50
+  volume >= 50k        117 events     86  price 0.927  won 0.846  gap -8.11 pp  se 3.34
+        0..  1,000    1439 events    522  price 0.924  won 0.945  gap +2.08 pp  se 0.60
+    1,000.. 10,000     504 events    327  price 0.925  won 0.938  gap +1.32 pp  se 1.07
+   10,000.. 50,000     211 events    166  price 0.924  won 0.934  gap +1.01 pp  se 1.71
+
+favourite 0.60..0.95
+  all markets        12532 events   2616  price 0.773  won 0.823  gap +4.99 pp  se 0.34
+  volume < 50k       11623 events   2389  price 0.774  won 0.833  gap +5.85 pp  se 0.35
+  volume >= 50k        909 events    491  price 0.762  won 0.702  gap -5.97 pp  se 1.52
+        0..  1,000    7553 events   1509  price 0.772  won 0.851  gap +7.87 pp  se 0.41
+    1,000.. 10,000    2689 events   1203  price 0.781  won 0.817  gap +3.60 pp  se 0.75
+   10,000.. 50,000    1381 events    781  price 0.771  won 0.762  gap -0.85 pp  se 1.15
