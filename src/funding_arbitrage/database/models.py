@@ -18,6 +18,7 @@ from sqlalchemy import (
     LargeBinary,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -301,6 +302,7 @@ class PaperRuntimeIncidentRecord(Base):
     simulation_version: Mapped[str] = mapped_column(String(32), index=True)
     category: Mapped[str] = mapped_column(String(32), index=True)
     error_type: Mapped[str] = mapped_column(String(128))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class BacktestRunRecord(Base):

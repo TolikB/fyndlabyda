@@ -13,13 +13,26 @@ _TELEGRAM_TOKEN_URL = re.compile(
     r"(?P<prefix>\bhttps?://[^\s\"']*?/bot)[^/\s?#\"']+(?=/[A-Za-z])",
     re.IGNORECASE,
 )
+_URL_CREDENTIALS = re.compile(
+    r"(?P<scheme>\b[a-z][a-z0-9+.-]*://)[^/\s:@\"']+:[^/\s@\"']+@",
+    re.IGNORECASE,
+)
+
+
+def redact_sensitive_text(value: str) -> str:
+    """Remove credentials that third-party libraries can embed in error text."""
+
+    return _URL_CREDENTIALS.sub(
+        r"\g<scheme><redacted>@",
+        _TELEGRAM_TOKEN_URL.sub(r"\g<prefix><redacted>", value),
+    )
 
 
 def _redact_sensitive_value(value: Any) -> Any:
     """Remove credentials that third-party libraries can embed in log messages."""
 
     if isinstance(value, str):
-        return _TELEGRAM_TOKEN_URL.sub(r"\g<prefix><redacted>", value)
+        return redact_sensitive_text(value)
     if isinstance(value, dict):
         return {key: _redact_sensitive_value(item) for key, item in value.items()}
     if isinstance(value, tuple):

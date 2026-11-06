@@ -535,7 +535,7 @@ test "$restored_target_event_count" = "1"
 test "$restored_target_marker" = "target"
 test "$restored_post_target_event_count" = "0"
 test "$restored_sentinel" = "1|target-row"
-test "$restored_alembic_head" = "0018_journal_profiles"
+test "$restored_alembic_head" = "0019_runtime_incident_detail"
 test "$restored_critical_state_sha256" = "$target_critical_state_sha256"
 assert_profile_boundary_immutable
 test "$orphan_restore_database_count" = "0"

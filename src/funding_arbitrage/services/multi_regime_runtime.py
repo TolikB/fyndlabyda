@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import traceback
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -64,6 +65,7 @@ from funding_arbitrage.database.repositories.journal_profiles import (
     load_canonical_journal_boundary_covering_row,
     load_latest_compatible_journal_window,
 )
+from funding_arbitrage.database.repositories.market_data import save_paper_runtime_incident
 from funding_arbitrage.database.repositories.multi_regime import (
     MultiRegimeBatchCursor,
     load_multi_regime_batch_page,
@@ -73,6 +75,7 @@ from funding_arbitrage.database.repositories.multi_regime import (
 from funding_arbitrage.domain.events import EventEnvelope
 from funding_arbitrage.execution.advanced_paper import AdvancedStrategyPaperBroker
 from funding_arbitrage.execution.directional_paper import DirectionalPaperBroker
+from funding_arbitrage.logging import redact_sensitive_text
 from funding_arbitrage.services.multi_regime import (
     MultiRegimeDecisionBatch,
     MultiRegimeEngine,
@@ -96,6 +99,9 @@ from funding_arbitrage.strategies import (
 logger = logging.getLogger(__name__)
 
 _RESTORE_BATCH_PAGE = 500
+_FAILURE_INCIDENT_CATEGORY = "multi_regime_runtime"
+_FAILURE_INCIDENT_TIMEOUT_SECONDS = 5.0
+_FAILURE_DETAIL_LIMIT = 16_000
 
 BPS = Decimal("10000")
 ZERO = Decimal("0")
@@ -880,6 +886,39 @@ class RuntimePortfolioRiskContextProvider:
         )
 
 
+def _failure_detail(
+    error: Exception,
+    *,
+    stage: str,
+    processed_row_id: int,
+    position: tuple[int, EventEnvelope[Any]] | None,
+) -> str:
+    """Describe a failure well enough to find it again after the log has rotated."""
+
+    context = [f"stage={stage}", f"processed_row_id={processed_row_id}"]
+    if position is not None:
+        row_id, event = position
+        context += [
+            f"failing_row_id={row_id}",
+            f"event_id={event.metadata.event_id}",
+            f"kind={event.kind.value}",
+            f"source={event.metadata.source}",
+            f"sequence_id={event.metadata.sequence_id}",
+            f"exchange_timestamp={event.metadata.exchange_timestamp.isoformat()}",
+            f"receive_timestamp={event.metadata.receive_timestamp.isoformat()}",
+        ]
+    text = redact_sensitive_text(
+        " ".join(context) + "\n" + "".join(traceback.format_exception(error))
+    )
+    if len(text) <= _FAILURE_DETAIL_LIMIT:
+        return text
+    # The context opens the text and the exception closes it; a long chained
+    # SQL or validation message in between is what can go.
+    marker = "\n...[truncated]...\n"
+    kept = (_FAILURE_DETAIL_LIMIT - len(marker)) // 2
+    return text[:kept] + marker + text[-kept:]
+
+
 class DurableMultiRegimeRuntime:
     def __init__(
         self,
@@ -924,6 +963,7 @@ class DurableMultiRegimeRuntime:
         self.paper_replayed_events = 0
         self.failure_reason: str | None = None
         self._processed_event_row_id = 0
+        self._catch_up_position: tuple[int, EventEnvelope[Any]] | None = None
         simulation_version = (
             paper_broker.simulation_version
             if paper_broker is not None
@@ -1099,6 +1139,7 @@ class DurableMultiRegimeRuntime:
                 return restored
             except Exception as error:
                 self.failure_reason = type(error).__name__
+                await self._persist_failure(error, stage="restore")
                 raise
             finally:
                 self.engine.risk_context_provider = provider
@@ -1234,6 +1275,7 @@ class DurableMultiRegimeRuntime:
                 return
             projections: list[DirectionalPaperEventProjection] = []
             for row_id, event in pending:
+                self._catch_up_position = (row_id, event)
                 batch = self.engine.process(event)
                 if batch is not None:
                     async with self.session_factory() as session:
@@ -1290,6 +1332,43 @@ class DurableMultiRegimeRuntime:
                         journal_profile_config_sha256=config_sha256,
                     )
             self._processed_event_row_id = pending[-1][0]
+            self._catch_up_position = None
+
+    async def _persist_failure(self, error: Exception, *, stage: str) -> None:
+        """Keep the cause of a failure where log rotation cannot reach it.
+
+        The runtime has already failed closed when this runs, and a failure to
+        record it must not change that. The cause of the 2026-11-05 12:01 failure
+        was lost this way: failure_reason lived in memory and the 3 x 10 MB Docker
+        log held about ten hours.
+        """
+
+        broker = self.paper_broker or self.advanced_paper_broker
+        if broker is not None:
+            simulation_version = broker.simulation_version
+        elif self.runtime_state is not None:
+            simulation_version = self.runtime_state.settings.paper_simulation_version
+        else:
+            return
+        try:
+            detail = _failure_detail(
+                error,
+                stage=stage,
+                processed_row_id=self._processed_event_row_id,
+                position=self._catch_up_position,
+            )
+            async with asyncio.timeout(_FAILURE_INCIDENT_TIMEOUT_SECONDS):
+                async with self.session_factory() as session:
+                    await save_paper_runtime_incident(
+                        session,
+                        (simulation_version,),
+                        _FAILURE_INCIDENT_CATEGORY,
+                        type(error).__name__,
+                        datetime.now(UTC),
+                        detail=detail,
+                    )
+        except Exception:
+            logger.exception("multi_regime_runtime_failure_not_persisted")
 
     def _synchronize_protection(self, timestamp: datetime) -> None:
         """Keep durable protective orders in step with open paper positions.
@@ -1465,6 +1544,7 @@ class DurableMultiRegimeRuntime:
                 await self._catch_up()
             except Exception as error:
                 self.failure_reason = type(error).__name__
+                await self._persist_failure(error, stage="flush")
                 raise
 
     async def _run_worker(self) -> None:
@@ -1479,6 +1559,7 @@ class DurableMultiRegimeRuntime:
                 except Exception as error:
                     self.failure_reason = type(error).__name__
                     logger.exception("multi_regime_runtime_failed")
+                    await self._persist_failure(error, stage="worker")
                     return
             if self._stop_requested:
                 return
@@ -1496,4 +1577,5 @@ class DurableMultiRegimeRuntime:
                 await self._catch_up()
             except Exception as error:
                 self.failure_reason = type(error).__name__
+                await self._persist_failure(error, stage="publish")
                 raise

@@ -427,9 +427,14 @@ async def save_paper_runtime_incident(
     error_type: str,
     occurred_at: datetime,
     *,
+    detail: str | None = None,
     commit: bool = True,
 ) -> None:
-    """Persist one redacted runtime event for every affected paper ledger."""
+    """Persist one runtime event for every affected paper ledger.
+
+    Only the error type is kept unless the caller passes an already redacted
+    ``detail``.
+    """
 
     for simulation_version in dict.fromkeys(simulation_versions):
         session.add(
@@ -438,6 +443,7 @@ async def save_paper_runtime_incident(
                 simulation_version=simulation_version,
                 category=category,
                 error_type=error_type[:128],
+                detail=detail,
             )
         )
     if commit:

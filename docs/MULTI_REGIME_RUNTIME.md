@@ -120,7 +120,11 @@ into memory. Crash-gap decisions are joined to replay rows by exact source event
 not by exchange timestamp. A late exchange event remains journaled and checkpointed
 but cannot rewind feature, mark, order, or PnL state.
 A database failure, identity collision, cursor regression, invalid ordering, or
-consumer failure marks the runtime unhealthy and blocks new entries.
+consumer failure marks the runtime unhealthy and blocks new entries. The exception
+text, traceback, and failing journal row are then written, with credentials
+redacted, to `paper_runtime_incidents.detail` under category `multi_regime_runtime`,
+so the cause outlives log rotation. A failure to write that row is logged and
+changes nothing: the runtime stays closed.
 
 At process start, MULTI_REGIME_RESTORE_HOURS bounds feature warm-up. Historical risk
 and strategy/AI decisions are not recomputed because portfolio/model state is
