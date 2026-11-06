@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -41,7 +42,11 @@ def canonical_option_quote_event(
         sequence_id=sequence_id,
         exchange_timestamp=quote.exchange_timestamp,
         payload=quote,
-        occurrence_id=quote.exchange_timestamp.isoformat(),
+        # A venue timestamp does not identify a quote. OKX joins four REST responses
+        # and stamps the oldest, opt-summary, which can stand still for over 10 s while
+        # the book and the index move. The content separates those polls and keeps
+        # an identical repeat idempotent.
+        occurrence_id=hashlib.sha256(quote.model_dump_json().encode()).hexdigest(),
     )
     return EventEnvelope[OptionQuoteSnapshot](
         kind=EventKind.OPTION_QUOTE_SNAPSHOT,

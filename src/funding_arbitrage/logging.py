@@ -56,6 +56,7 @@ class JsonFormatter(logging.Formatter):
             "position_id",
             "category",
             "exchanges",
+            "collision",
         ):
             if hasattr(record, key):
                 payload[key] = _redact_sensitive_value(getattr(record, key))

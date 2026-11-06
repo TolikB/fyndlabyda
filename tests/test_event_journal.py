@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -32,6 +33,7 @@ from funding_arbitrage.domain.events import (
     snapshot_occurrence_id,
 )
 from funding_arbitrage.exchanges.hyperliquid.orderbook import HyperliquidOrderBookNormalizer
+from funding_arbitrage.logging import JsonFormatter
 from funding_arbitrage.market_data.option_quotes import canonical_option_quote_event
 
 NOW = datetime(2026, 8, 15, 12, tzinfo=UTC)
@@ -428,17 +430,60 @@ async def test_journal_rejects_event_id_collision_with_different_payload(
         ):
             await append_event(session, collision)
 
-    # The log names the event and shows both payloads, so a collision that stops
-    # the stack can be traced to its producer.
+    # The log names the event and the fields that differ, so a collision that
+    # stops the stack can be traced to its producer. Read through the formatter:
+    # it drops every field it does not list, and only its output reaches Docker.
     record = next(r for r in caplog.records if r.message == "canonical_event_id_collision")
-    assert record.event_id == original.metadata.event_id
-    assert record.sequence_id == "1"
-    assert '"price": "62001"' in record.stored_payload
-    assert '"price": "99999"' in record.payload
+    logged = json.loads(JsonFormatter().format(record))["collision"]
+    assert logged["event_id"] == original.metadata.event_id
+    assert logged["kind"] == "TRADE_TICK"
+    assert logged["source"] == "bybit.public.trade"
+    assert logged["sequence_id"] == "1"
+    assert logged["differing_fields"] == {"price": ["62001", "99999"]}
+    assert '"price": "62001"' in logged["stored_payload"]
+    assert '"price": "99999"' in logged["payload"]
     async with factory() as session:
         assert await session.scalar(select(func.count()).select_from(CanonicalEventRecord)) == 1
 
     await engine.dispose()
+
+
+async def test_journal_names_differing_fields_of_a_collision_inside_one_batch(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    original = _event(1)
+    collision = original.model_copy(
+        update={
+            "payload": original.payload.model_copy(
+                update={
+                    "instrument": original.payload.instrument.model_copy(
+                        update={"exchange_symbol": "ETHUSDT"}
+                    )
+                }
+            )
+        }
+    )
+
+    async with factory() as session:
+        with pytest.raises(
+            EventJournalIntegrityError,
+            match="inside append batch: TRADE_TICK bybit.public.trade 1",
+        ):
+            await append_events(session, [original, collision])
+
+    await engine.dispose()
+    record = next(r for r in caplog.records if r.message == "canonical_event_id_collision")
+    logged = json.loads(JsonFormatter().format(record))["collision"]
+    assert logged["differing_fields"] == {
+        "instrument.exchange_symbol": [
+            original.payload.instrument.exchange_symbol,
+            "ETHUSDT",
+        ]
+    }
 
 
 async def test_journal_detects_stored_payload_tampering_before_replay() -> None:

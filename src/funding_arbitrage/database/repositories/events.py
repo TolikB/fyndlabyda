@@ -78,6 +78,7 @@ PAYLOAD_MODELS: dict[EventKind, type[BaseModel]] = {
 
 logger = logging.getLogger(__name__)
 _COLLISION_EXCERPT_CHARS = 4000
+_COLLISION_FIELD_CHARS = 200
 
 
 class EventJournalIntegrityError(RuntimeError):
@@ -191,13 +192,11 @@ async def _stored_hashes(
     return {event_id: payload_hash for event_id, payload_hash in result.all()}
 
 
-async def _log_collision(
+async def _log_stored_collision(
     session: AsyncSession,
     conflicts: Sequence[dict[str, Any]],
     existing_hashes: dict[str, str],
 ) -> None:
-    # A collision stops the writer and the whole paper stack. On 2026-11-01 one
-    # restarted the V1 paper app and nothing said which event it was.
     row = conflicts[0]
     stored = await session.scalar(
         select(CanonicalEventRecord.payload).where(
@@ -205,21 +204,58 @@ async def _log_collision(
         )
     )
     await session.rollback()
+    _log_collision(row, stored, existing_hashes[row["event_id"]], len(conflicts))
+
+
+def _log_collision(
+    row: dict[str, Any],
+    stored_payload: object,
+    stored_payload_hash: str,
+    collisions: int,
+) -> None:
+    # A collision stops the writer and the whole paper stack. On 2026-11-01 one
+    # restarted the V1 paper app and nothing said which event it was. JsonFormatter
+    # keeps only the fields it lists, so everything travels in ``collision``.
     logger.error(
         "canonical_event_id_collision",
         extra={
             "event": "canonical_journal_integrity",
-            "event_id": row["event_id"],
-            "kind": row["kind"],
-            "source": row["source"],
-            "sequence_id": row["sequence_id"],
-            "stored_payload_hash": existing_hashes[row["event_id"]],
-            "payload_hash": row["payload_hash"],
-            "stored_payload": _excerpt(stored),
-            "payload": _excerpt(row["payload"]),
-            "collisions": len(conflicts),
+            "collision": {
+                "event_id": row["event_id"],
+                "kind": row["kind"],
+                "source": row["source"],
+                "sequence_id": row["sequence_id"],
+                "stored_payload_hash": stored_payload_hash,
+                "payload_hash": row["payload_hash"],
+                "differing_fields": _differing_fields(stored_payload, row["payload"]),
+                "stored_payload": _excerpt(stored_payload),
+                "payload": _excerpt(row["payload"]),
+                "collisions": collisions,
+            },
         },
     )
+
+
+def _differing_fields(
+    stored: object, incoming: object, path: str = ""
+) -> dict[str, list[str]]:
+    """Map each payload field a collision changed to its two values."""
+
+    if isinstance(stored, dict) and isinstance(incoming, dict):
+        differing: dict[str, list[str]] = {}
+        for key in sorted(stored.keys() | incoming.keys()):
+            differing.update(
+                _differing_fields(stored.get(key), incoming.get(key), f"{path}{key}.")
+            )
+        return differing
+    if stored == incoming:
+        return {}
+    return {
+        path.rstrip(".") or "payload": [
+            str(stored)[:_COLLISION_FIELD_CHARS],
+            str(incoming)[:_COLLISION_FIELD_CHARS],
+        ]
+    }
 
 
 def _excerpt(payload: object) -> str:
@@ -241,7 +277,11 @@ async def append_events(session: AsyncSession, events: Sequence[EventEnvelope[An
         event_id = event.metadata.event_id
         prior = unique.get(event_id)
         if prior is not None and prior["payload_hash"] != row["payload_hash"]:
-            raise EventJournalIntegrityError("event ID collision inside append batch")
+            _log_collision(row, prior["payload"], prior["payload_hash"], 1)
+            raise EventJournalIntegrityError(
+                "event ID collision inside append batch: "
+                f"{row['kind']} {row['source']} {row['sequence_id']}"
+            )
         unique[event_id] = row
     rows = list(unique.values())
     if not rows:
@@ -255,7 +295,7 @@ async def append_events(session: AsyncSession, events: Sequence[EventEnvelope[An
     ]
     if conflicts:
         await session.rollback()
-        await _log_collision(session, conflicts, existing_hashes)
+        await _log_stored_collision(session, conflicts, existing_hashes)
         row = conflicts[0]
         raise EventJournalIntegrityError(
             "stored event ID has a different payload hash: "

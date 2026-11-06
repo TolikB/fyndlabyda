@@ -5,7 +5,13 @@ from decimal import Decimal
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from funding_arbitrage.database.models import Base
+from funding_arbitrage.database.repositories.events import (
+    append_event,
+    load_forensic_events,
+)
 from funding_arbitrage.domain.events import (
     EventEnvelope,
     EventKind,
@@ -374,6 +380,114 @@ def test_option_event_is_deterministic_and_round_trips_with_typed_payload() -> N
     assert first.metadata.sequence_id == repeated.metadata.sequence_id
     assert isinstance(restored.payload, OptionQuoteSnapshot)
     assert restored.payload == quote
+
+
+def test_option_quotes_sharing_one_timestamp_are_separate_events() -> None:
+    expiry = NOW + timedelta(days=30)
+    first = canonical_option_quote_event(
+        _quote(right=OptionRight.CALL, strike="100", expiry=expiry),
+        source="BYBIT.PUBLIC.OPTION.REST",
+        receive_timestamp=NOW,
+    )
+    moved = canonical_option_quote_event(
+        _quote(right=OptionRight.CALL, strike="100", expiry=expiry, bid="4.05"),
+        source="BYBIT.PUBLIC.OPTION.REST",
+        receive_timestamp=NOW + timedelta(seconds=7),
+    )
+
+    assert first.metadata.exchange_timestamp == moved.metadata.exchange_timestamp
+    assert first.metadata.sequence_id == moved.metadata.sequence_id
+    assert first.metadata.event_id != moved.metadata.event_id
+
+
+async def test_okx_polls_inside_one_summary_update_journal_without_collision() -> None:
+    # OKX's opt-summary can stand still for over 10 s and is the oldest of the four
+    # responses, so two polls inside one update share an exchange timestamp while
+    # the book and the index move. That stopped the V1 paper stack on 2026-11-06.
+    symbol = "BTC-USD-260925-60000-C"
+    summary_time = NOW - timedelta(seconds=9)
+    summary_ms = str(int(summary_time.timestamp() * 1000))
+    polls = iter(
+        (
+            ("0.0100", "50000", NOW - timedelta(seconds=7)),
+            ("0.0105", "50010", NOW),
+        )
+    )
+    premium, index_price, fresh_time = next(polls)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        fresh_ms = str(int(fresh_time.timestamp() * 1000))
+        if path.endswith("/public/instruments"):
+            return _okx_response([_okx_instrument(symbol, "C")])
+        if path.endswith("/market/tickers"):
+            return _okx_response(
+                [
+                    {
+                        "instId": symbol,
+                        "bidPx": premium,
+                        "bidSz": "3",
+                        "askPx": "0.0110",
+                        "askSz": "4",
+                        "vol24h": "5",
+                        "ts": fresh_ms,
+                    }
+                ]
+            )
+        if path.endswith("/public/opt-summary"):
+            return _okx_response(
+                [{"instId": symbol, "markVol": "0.55", "ts": summary_ms}]
+            )
+        if path.endswith("/market/index-tickers"):
+            return _okx_response(
+                [{"instId": "BTC-USD", "idxPx": index_price, "ts": fresh_ms}]
+            )
+        if path.endswith("/public/open-interest"):
+            return _okx_response([{"instId": symbol, "oi": "7", "ts": fresh_ms}])
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://test.invalid",
+    )
+    adapter = OkxPublicAdapter(
+        base_url="https://test.invalid",
+        http_client=client,
+    )
+    first_chain = await adapter.get_option_chain(("BTC",))
+    premium, index_price, fresh_time = next(polls)
+    second_chain = await adapter.get_option_chain(("BTC",))
+    await client.aclose()
+
+    assert first_chain[0].exchange_timestamp == summary_time
+    assert second_chain[0].exchange_timestamp == summary_time
+    first, second, repeated = (
+        canonical_option_quote_event(
+            quote,
+            source="OKX.PUBLIC.OPTION.REST",
+            receive_timestamp=NOW,
+        )
+        for quote in (first_chain[0], second_chain[0], second_chain[0])
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        assert await append_event(session, first) is True
+        assert await append_event(session, second) is True
+        assert await append_event(session, repeated) is False
+        replay = await load_forensic_events(
+            session,
+            kinds=(EventKind.OPTION_QUOTE_SNAPSHOT,),
+        )
+
+    await engine.dispose()
+    assert [event.payload.underlying_price for event in replay] == [
+        Decimal("50000"),
+        Decimal("50010"),
+    ]
 
 
 def test_bounded_option_chain_keeps_complete_nearest_pairs_and_deduplicates() -> None:

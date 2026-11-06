@@ -782,6 +782,23 @@ def test_option_events_trigger_only_after_fresh_call_put_pair_without_directiona
     assert second.execution_blocks[0].signal_id == option_intent.signal_id
     assert second.execution_blocks[0].reason == "execution_snapshot_provider_unavailable"
 
+    # OKX stamps a quote with its oldest REST response, so the next poll can carry
+    # the same timestamp and a moved book. The re-quote reaches the strategies and
+    # cannot open a second signal.
+    requoted = market_quote(
+        OptionRight.PUT, timestamp + timedelta(seconds=1)
+    ).model_copy(update={"bid_price": Decimal("3.005")})
+    third = engine.process(
+        _envelope(EventKind.OPTION_QUOTE_SNAPSHOT, requoted, 10003)
+    )
+
+    assert third is not None
+    assert third.execution_plans == ()
+    assert [decision.signal_id for decision in third.orchestration.decisions] == [
+        option_intent.signal_id
+    ]
+    assert third.orchestration.decisions[0].status is SignalDecisionStatus.DUPLICATE
+
 
 @pytest.mark.asyncio
 async def test_advanced_paper_runtime_persists_and_restores_without_reexecution() -> None:

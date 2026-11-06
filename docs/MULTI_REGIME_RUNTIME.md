@@ -75,6 +75,10 @@ bounded nearest-expiry/nearest-ATM universe and publishes every accepted quote t
 canonical journal before exposing it to the runtime. Missing, stale, future, crossed,
 duplicate-conflicting, or incomplete option data produces no context; no option quote
 is fabricated from perpetual data.
+A quote's journal identity includes its content, not only its timestamp: OKX stamps a
+quote with the oldest of its REST responses, `opt-summary`, which can stand still for
+over 10 s while the book and the index move. Two polls inside one update are separate
+events, and an identical repeat stays idempotent.
 USD-quoted options may use a USD, USDC, or USDT underlying hedge only with an
 explicit parity conversion rate retained in the signal evidence. Non-parity and any
 other cross-quote pair are rejected; advanced live option execution remains disabled.
