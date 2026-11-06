@@ -46,13 +46,13 @@ that multiplies volume changes the odds of inclusion alike at any floor.
 `sample_all.py` (`sample_all.txt`) takes every market of 14 sample days with no floor, 43,967 with a price 3 days before the end.
 Favourites priced 0.70–0.80, win rate less price:
 
-| Final volume | Markets | Gap | Standard error |
-|---|---:|---:|---:|
-| all | 3,928 | +6.2 pp | see the file |
-| under $1,000 | 2,432 | +10.5 pp | |
-| $1,000–10,000 | 780 | +2.8 pp | |
-| $10,000–50,000 | 439 | −2.5 pp | |
-| $50,000 and over | 277 | −7.3 pp | |
+| Final volume | Markets | Gap |
+|---|---:|---:|
+| all | 3,928 | +6.2 pp |
+| under $1,000 | 2,432 | +10.5 pp |
+| $1,000–10,000 | 780 | +2.8 pp |
+| $10,000–50,000 | 439 | −2.5 pp |
+| $50,000 and over | 277 | −7.3 pp |
 
 The gap falls steadily with final volume and changes sign. The markets over the floor are there partly because the favourite lost.
 
