@@ -335,7 +335,12 @@ class RuntimeStrategyExecutionSnapshotProvider:
                 None,
             )
             fee_schedule = self.runtime.settings.fee_schedules.get(instrument.venue.lower())
-            if metadata is None or fee_schedule is None:
+            if (
+                metadata is None
+                or fee_schedule is None
+                or metadata.step_size <= ZERO
+                or metadata.tick_size <= ZERO
+            ):
                 return None
             if instrument == primary_book.instrument:
                 canonical_book = primary_book
@@ -378,7 +383,11 @@ class RuntimeStrategyExecutionSnapshotProvider:
                     data_quality=DataQuality.VALID,
                     quantity_step=metadata.step_size,
                     price_tick=metadata.tick_size,
-                    minimum_quantity=metadata.min_order_size,
+                    # Gate publishes order_size_min=0 for ETH_USDT and a dozen other
+                    # contracts, and the Hyperliquid adapter has no minimum at all,
+                    # yet no venue fills less than one lot. A 0 here failed quote
+                    # validation and took the V1 paper stack down on 2026-11-05.
+                    minimum_quantity=max(metadata.min_order_size, metadata.step_size),
                     maker_fee_bps=maker_fee * BPS,
                     taker_fee_bps=taker_fee * BPS,
                 )

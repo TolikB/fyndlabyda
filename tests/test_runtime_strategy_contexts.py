@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from funding_arbitrage.config import Settings
-from funding_arbitrage.domain.decisions import MarketRegime
+from funding_arbitrage.domain.decisions import MarketRegime, SignalIntent
 from funding_arbitrage.domain.events import (
     BookLevel,
     BookSnapshot,
@@ -49,6 +49,7 @@ from funding_arbitrage.strategies import (
     DatedFuturesBasisStrategy,
     FundingBasisHarvestStrategy,
     OptionsVolatilityStrategy,
+    PassiveMarketMakingStrategy,
 )
 
 NOW = datetime(2026, 8, 31, 12, tzinfo=UTC)
@@ -589,6 +590,89 @@ def test_funding_context_uses_exact_intervals_cap_and_as_of_history() -> None:
     )
 
     assert builder.build(snapshot).funding_basis == ()
+
+
+def _passive_market_making_intent(
+    runtime: RuntimeState,
+    metadata: NormalizedInstrument,
+) -> tuple[MultiRegimeStrategySnapshot, SignalIntent]:
+    runtime.last_completed_snapshot = MarketSnapshot(
+        instruments=[metadata],
+        tickers=[],
+        funding=[],
+        orderbooks={},
+        captured_at=NOW,
+        stale_after_seconds=5,
+    )
+    snapshot = _strategy_snapshot(metadata, atr=Decimal("0.01"))
+    contexts = RuntimeSupplementalStrategyContextProvider(runtime)(snapshot)
+    evaluation = PassiveMarketMakingStrategy().evaluate(contexts.passive_market_making[0])
+    assert evaluation.intent is not None
+    return snapshot, evaluation.intent
+
+
+def _gate_contract(*, step_size: Decimal = Decimal("1")) -> NormalizedInstrument:
+    """Gate's public contract row for ETH_USDT, with its order_size_min of 0."""
+
+    return NormalizedInstrument(
+        exchange="gate",
+        exchange_symbol="ETH_USDT",
+        base_asset="ETH",
+        quote_asset="USDT",
+        instrument_type=LegacyInstrumentType.PERPETUAL,
+        settlement_asset="USDT",
+        contract_size=Decimal("0.01"),
+        tick_size=Decimal("0.01"),
+        step_size=step_size,
+        min_order_size=ZERO,
+    )
+
+
+def test_venue_without_an_order_minimum_quotes_one_lot() -> None:
+    gate = _gate_contract()
+    runtime = RuntimeState(_settings("gate"), {}, emit_metrics=False)
+    snapshot, intent = _passive_market_making_intent(runtime, gate)
+
+    execution = RuntimeStrategyExecutionSnapshotProvider(runtime)(
+        intent,
+        snapshot.source_event_id,
+        NOW,
+        snapshot.book,
+    )
+
+    assert execution is not None
+    assert [quote.minimum_quantity for quote in execution.quotes] == [Decimal("1")]
+
+
+def test_published_minimum_above_one_lot_is_kept() -> None:
+    gate = _gate_contract().model_copy(update={"min_order_size": Decimal("3")})
+    runtime = RuntimeState(_settings("gate"), {}, emit_metrics=False)
+    snapshot, intent = _passive_market_making_intent(runtime, gate)
+
+    execution = RuntimeStrategyExecutionSnapshotProvider(runtime)(
+        intent,
+        snapshot.source_event_id,
+        NOW,
+        snapshot.book,
+    )
+
+    assert execution is not None
+    assert [quote.minimum_quantity for quote in execution.quotes] == [Decimal("3")]
+
+
+def test_unusable_contract_rules_block_the_signal_and_not_the_runtime() -> None:
+    gate = _gate_contract(step_size=ZERO)
+    runtime = RuntimeState(_settings("gate"), {}, emit_metrics=False)
+    snapshot, intent = _passive_market_making_intent(runtime, gate)
+
+    execution = RuntimeStrategyExecutionSnapshotProvider(runtime)(
+        intent,
+        snapshot.source_event_id,
+        NOW,
+        snapshot.book,
+    )
+
+    assert execution is None
 
 
 def test_dated_basis_uses_exact_expiry_and_perpetual_settlements() -> None:
