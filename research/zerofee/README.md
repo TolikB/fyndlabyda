@@ -32,3 +32,21 @@ even at a fraction of a basis point a side. The best trial, fading 3σ 15-minute
 
 **Limit of the test.** Binance bars stand in for the Lighter and MEXC price, and an order is assumed to fill at the
 next bar's open, which flatters the 1-minute trials. They fail anyway.
+
+## Round 32, hourly books at MEXC's costs: all 8 fail development (`bt_hourly_mexc.py`)
+
+Rules committed before any series ran (6235d47). 36 contracts at 0/0 with a spread of at most 3 bp, a mean half spread of 0.71
+bp, Binance bars and funding as stand-ins, vol target 40%, development 2021-01..2026-03. The holdout stays closed.
+
+| Trial | Month at 1x | At 2x | With a 2 bp taker | Sharpe pre-cost, 1x, 2x | Max DD |
+|---|---:|---:|---:|---:|---:|
+| same hours, every 8 h | +4.81% | +3.48% | +0.81% | 1.74, 1.38, 1.02 | 38.5% |
+| CCI20 trend, every 8 h | +1.83% | +0.54% | −2.09% | 0.89, 0.50, 0.12 | 60.1% |
+| Bollinger trend, every 8 h | +1.45% | +0.17% | −2.44% | 0.79, 0.40, 0.02 | 60.0% |
+
+- **The best trial misses both limits:** 4.81% against 5%, and a drawdown of 38.5% against 35%. Vol targeting cannot fix both.
+- **It fades.** By year at 1x: 2021 +86%, 2022 +79%, 2023 +126%, 2024 +62%, 2025 +15%, first quarter of 2026 −6%. Variations on the
+  same development data would only fit that, so the family stops here.
+- **It rests on the 0/0 list.** With a 2 bp taker it has lost money every year since 2024.
+- **Round 8's Sharpe of 1.8 does not carry over.** On these 36 coins the channel signals show 0.3 to 0.9 before costs.
+
