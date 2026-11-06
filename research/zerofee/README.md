@@ -50,3 +50,20 @@ bp, Binance bars and funding as stand-ins, vol target 40%, development 2021-01..
 - **It rests on the 0/0 list.** With a 2 bp taker it has lost money every year since 2024.
 - **Round 8's Sharpe of 1.8 does not carry over.** On these 36 coins the channel signals show 0.3 to 0.9 before costs.
 
+## Round 33, reversal against the market over minutes: all 6 fail development (`bt_xs_minute.py`)
+
+Rules committed before the bars were downloaded (6235d47). 36 contracts, development 2024-01..2025-06, fills at the VWAP of the
+next minute. The minute-level holdout stays unspent.
+
+| Trial | Gross bp a period | Cost bp | Periods positive | Month, s = 1 | t |
+|---|---:|---:|---:|---:|---:|
+| 15 min, 5 a side | +2.21 | 2.68 | 54% | −6.8% | −2.7 |
+| 15 min, 10 a side | +1.38 | 2.70 | 54% | −17.3% | −11.4 |
+| 5 min, 5 a side | +1.16 | 2.68 | 54% | −65.8% | −23.5 |
+| 60 min, 5 a side | −0.32 | 2.67 | 51% | −10.8% | −5.0 |
+
+- **The reversal exists, and it is smaller than the spread.** At 15 minutes the gross is 2.2 bp against 2.7 bp paid for four
+  fills. This cost counts every leg in and out, though a coin that stays in the book would not pay.
+- **At 60 minutes there is none.** Round 34 (`../mexc_lag/test_quote_xs.py`) asks whether resting quotes can collect the 15-minute
+  move instead of paying to cross.
+
