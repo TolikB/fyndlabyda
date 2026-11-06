@@ -1,0 +1,122 @@
+{
+ "ZEC_USDT": {
+  "binance": "ZECUSDT",
+  "size": 0.01
+ },
+ "SILVER_USDT": {
+  "binance": null,
+  "size": 0.01
+ },
+ "LINK_USDT": {
+  "binance": "LINKUSDT",
+  "size": 0.1
+ },
+ "DOGE_USDT": {
+  "binance": "DOGEUSDT",
+  "size": 100.0
+ },
+ "TAO_USDT": {
+  "binance": "TAOUSDT",
+  "size": 0.01
+ },
+ "ENA_USDT": {
+  "binance": "ENAUSDT",
+  "size": 10.0
+ },
+ "INJ_USDT": {
+  "binance": "INJUSDT",
+  "size": 1.0
+ },
+ "UNI_USDT": {
+  "binance": "UNIUSDT",
+  "size": 0.1
+ },
+ "XLM_USDT": {
+  "binance": "XLMUSDT",
+  "size": 10.0
+ },
+ "AAVE_USDT": {
+  "binance": "AAVEUSDT",
+  "size": 0.01
+ },
+ "ARB_USDT": {
+  "binance": "ARBUSDT",
+  "size": 1.0
+ },
+ "AVAX_USDT": {
+  "binance": "AVAXUSDT",
+  "size": 0.1
+ },
+ "FARTCOIN_USDT": {
+  "binance": "FARTCOINUSDT",
+  "size": 10.0
+ },
+ "DASH_USDT": {
+  "binance": "DASHUSDT",
+  "size": 0.01
+ },
+ "LIT_USDT": {
+  "binance": "LITUSDT",
+  "size": 0.1
+ },
+ "XPL_USDT": {
+  "binance": "XPLUSDT",
+  "size": 1.0
+ },
+ "DOT_USDT": {
+  "binance": "DOTUSDT",
+  "size": 0.1
+ },
+ "HBAR_USDT": {
+  "binance": "HBARUSDT",
+  "size": 1.0
+ },
+ "APT_USDT": {
+  "binance": "APTUSDT",
+  "size": 0.1
+ },
+ "OP_USDT": {
+  "binance": "OPUSDT",
+  "size": 1.0
+ },
+ "BTW_USDT": {
+  "binance": "BTWUSDT",
+  "size": 100.0
+ },
+ "XPT_USDT": {
+  "binance": null,
+  "size": 0.001
+ },
+ "PENGU_USDT": {
+  "binance": "PENGUUSDT",
+  "size": 10.0
+ },
+ "SHIB_USDT": {
+  "binance": "1000SHIBUSDT",
+  "size": 1000.0
+ },
+ "ASTER_USDT": {
+  "binance": "ASTERUSDT",
+  "size": 1.0
+ },
+ "WLFI_USDT": {
+  "binance": "WLFIUSDT",
+  "size": 1.0
+ },
+ "BEAT_USDT": {
+  "binance": "BEATUSDT",
+  "size": 1.0
+ },
+ "SPX_USDT": {
+  "binance": "SPXUSDT",
+  "size": 1.0
+ },
+ "VVV_USDT": {
+  "binance": "VVVUSDT",
+  "size": 0.1
+ },
+ "STRK_USDT": {
+  "binance": "STRKUSDT",
+  "size": 1.0
+ }
+}

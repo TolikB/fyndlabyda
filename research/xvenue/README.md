@@ -74,6 +74,17 @@ Because of the terms above, this pair test was not registered.
 
 ## MEXC, one coin in two currencies (`pilot_mexc.py`)
 
-Twenty-five coins have two contracts at 0/0 (`DOGE_USDT` and `DOGE_USD`, `SILVER_USDT` and `SILVER_USDC`). The collector kept
-only `_USDT` until 2026-11-05 evening, so this pilot needs a day of the wider feed. `_USD` contracts are coin-margined, so
-their profit is not linear with a `_USDT` leg.
+Twenty-five coins have two contracts at 0/0 (`DOGE_USDT` and `DOGE_USD`, `SILVER_USDT` and `SILVER_USDC`). `_USD` contracts
+are coin-margined, so their profit is not linear with a `_USDT` leg.
+
+**Result, 13 hours on 2026-11-06: no.** Nearly every line loses even against the whole sample's median gap, which flatters
+it. The gap of 12–30 bp between `_USDT` and `_USDC` is a steady basis, and the second leg is thin and wide.
+
+## MEXC, 2026-11-06
+
+- **Costs.** `mexc_costs.py` writes `mexc_costs.json`: 117 contracts at ≤ 2 bp taker and ≥ $1M a day, 62 of them at 0/0 with a
+  median spread of 1.81 bp, 41 at ≤ 3 bp. Rounds 30 to 33 read this table and do not recompute it.
+- **Terms.** [The user agreement](https://www.mexc.com/support/articles/360031501631) names Crimea among prohibited places and
+  not Ukraine. It watches trading that "occurs too frequently" (60(d)), may reverse trades it flags (61), bans spoofing and
+  quote stuffing (17(c)), and may claw back profits made in breach (21(c)).
+- **Feed.** `wss://contract.mexc.com/edge`: `sub.depth.full` pushes the top of book about every 280 ms, `sub.deal` every trade.

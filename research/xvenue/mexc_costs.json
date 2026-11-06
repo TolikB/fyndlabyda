@@ -1,0 +1,708 @@
+{
+ "hours": 24.0,
+ "day": "2026-11-06",
+ "contracts": {
+  "BTC_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 4588697146,
+   "spread_bp": 0.013
+  },
+  "ZEC_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2048544703,
+   "spread_bp": 0.079
+  },
+  "SILVER_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 470973818,
+   "spread_bp": 1.919
+  },
+  "LINK_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 181277229,
+   "spread_bp": 0.932
+  },
+  "XAUT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 168723876,
+   "spread_bp": 0.073
+  },
+  "DOGE_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 154956464,
+   "spread_bp": 1.389
+  },
+  "USOIL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 1.0,
+   "qv": 154339739,
+   "spread_bp": 1.101
+  },
+  "UKOIL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 1.0,
+   "qv": 137187609,
+   "spread_bp": 1.015
+  },
+  "HYPE_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 83336133,
+   "spread_bp": 0.128
+  },
+  "SUI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 72473473,
+   "spread_bp": 1.165
+  },
+  "NEAR_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 71849255,
+   "spread_bp": 2.698
+  },
+  "TAO_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 64508255,
+   "spread_bp": 1.366
+  },
+  "ENA_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 53179757,
+   "spread_bp": 0.611
+  },
+  "INJ_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 51508785,
+   "spread_bp": 1.225
+  },
+  "UNI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 46488724,
+   "spread_bp": 1.447
+  },
+  "ADA_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 42672233,
+   "spread_bp": 5.435
+  },
+  "XLM_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 39184665,
+   "spread_bp": 0.653
+  },
+  "AKE_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 32615849,
+   "spread_bp": 4.515
+  },
+  "TRUMPOFFICIAL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 31834599,
+   "spread_bp": 8.264
+  },
+  "ONDO_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 29103300,
+   "spread_bp": 2.681
+  },
+  "AAVE_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 24987402,
+   "spread_bp": 0.769
+  },
+  "ARB_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 24653747,
+   "spread_bp": 0.63
+  },
+  "AVAX_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 18934700,
+   "spread_bp": 1.206
+  },
+  "FARTCOIN_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 17465116,
+   "spread_bp": 0.857
+  },
+  "DASH_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 15525816,
+   "spread_bp": 2.224
+  },
+  "LIT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 14999312,
+   "spread_bp": 0.292
+  },
+  "XPL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 12227458,
+   "spread_bp": 1.73
+  },
+  "BNB_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 11685747,
+   "spread_bp": 2.869
+  },
+  "DOT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 11362189,
+   "spread_bp": 1.084
+  },
+  "PUMPFUN_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 11104852,
+   "spread_bp": 2.528
+  },
+  "UAI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 10616725,
+   "spread_bp": 10.157
+  },
+  "HBAR_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 9835491,
+   "spread_bp": 1.465
+  },
+  "JCT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 8407533,
+   "spread_bp": 3.348
+  },
+  "LTC_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 8258584,
+   "spread_bp": 3.802
+  },
+  "BCH_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 7656459,
+   "spread_bp": 2.774
+  },
+  "ZRO_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 7448347,
+   "spread_bp": 0.627
+  },
+  "FET_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 7318062,
+   "spread_bp": 6.784
+  },
+  "APT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 7289988,
+   "spread_bp": 1.671
+  },
+  "OP_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 7213186,
+   "spread_bp": 0.967
+  },
+  "ATOM_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 7159669,
+   "spread_bp": 7.067
+  },
+  "BTW_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 6993987,
+   "spread_bp": 1.857
+  },
+  "XPT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 6533942,
+   "spread_bp": 0.794
+  },
+  "ETHFI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 6246503,
+   "spread_bp": 1.86
+  },
+  "SEI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 5881922,
+   "spread_bp": 2.187
+  },
+  "BLESS_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 5763471,
+   "spread_bp": 5.304
+  },
+  "PENGU_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 5691049,
+   "spread_bp": 1.517
+  },
+  "SHIB_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 5204666,
+   "spread_bp": 2.187
+  },
+  "ELSA_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 5184665,
+   "spread_bp": 3.653
+  },
+  "ASTER_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 5113717,
+   "spread_bp": 1.441
+  },
+  "FLUID_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 5061389,
+   "spread_bp": 4.205
+  },
+  "CLANKER_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 5019555,
+   "spread_bp": 6.064
+  },
+  "AIN_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 4676454,
+   "spread_bp": 2.689
+  },
+  "ARIA_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 4655570,
+   "spread_bp": 3.125
+  },
+  "XMR_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 4541117,
+   "spread_bp": 0.163
+  },
+  "ICP_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 4487671,
+   "spread_bp": 4.097
+  },
+  "WLFI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 4301530,
+   "spread_bp": 2.178
+  },
+  "KAS_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 4293346,
+   "spread_bp": 3.332
+  },
+  "BEAT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 4029994,
+   "spread_bp": 1.991
+  },
+  "JUP_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 4006255,
+   "spread_bp": 4.08
+  },
+  "CRV_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 3940857,
+   "spread_bp": 3.906
+  },
+  "CYBER_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 3804492,
+   "spread_bp": 6.542
+  },
+  "ETC_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 3747272,
+   "spread_bp": 1.436
+  },
+  "SPX_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 3615737,
+   "spread_bp": 2.915
+  },
+  "VVV_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 3497305,
+   "spread_bp": 0.958
+  },
+  "1000BONK_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 3446617,
+   "spread_bp": 3.484
+  },
+  "FILECOIN_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 3316658,
+   "spread_bp": 1.245
+  },
+  "RENDER_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 3298026,
+   "spread_bp": 6.532
+  },
+  "ORDI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 3077516,
+   "spread_bp": 3.107
+  },
+  "FLOKI_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2999654,
+   "spread_bp": 4.658
+  },
+  "USELESS_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 2985083,
+   "spread_bp": 1.543
+  },
+  "XTZ_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 2978301,
+   "spread_bp": 4.01
+  },
+  "ALGO_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 2949228,
+   "spread_bp": 1.075
+  },
+  "LDO_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2914479,
+   "spread_bp": 3.041
+  },
+  "STRK_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2830723,
+   "spread_bp": 2.487
+  },
+  "RIVER_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2758956,
+   "spread_bp": 12.61
+  },
+  "WIF_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 2679833,
+   "spread_bp": 6.075
+  },
+  "EVAA_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2625546,
+   "spread_bp": 3.525
+  },
+  "POL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2339168,
+   "spread_bp": 1.077
+  },
+  "VIRTUAL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2313254,
+   "spread_bp": 1.76
+  },
+  "PONS_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2242089,
+   "spread_bp": 5.28
+  },
+  "ALUMINUM_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 2202820,
+   "spread_bp": 0.033
+  },
+  "TRX_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 2192868,
+   "spread_bp": 0.314
+  },
+  "PENDLE_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1983722,
+   "spread_bp": 1.212
+  },
+  "PYTH_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1977152,
+   "spread_bp": 1.584
+  },
+  "SAND_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1830703,
+   "spread_bp": 2.316
+  },
+  "GALA_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1778438,
+   "spread_bp": 6.365
+  },
+  "CC_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1757948,
+   "spread_bp": 1.031
+  },
+  "HUMA_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1737201,
+   "spread_bp": 7.53
+  },
+  "GRAM_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1689055,
+   "spread_bp": 9.017
+  },
+  "RUNE_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1636572,
+   "spread_bp": 1.662
+  },
+  "RAY_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1631097,
+   "spread_bp": 5.269
+  },
+  "PGSTOCK_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1618839,
+   "spread_bp": 38.075
+  },
+  "LAB_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1595403,
+   "spread_bp": 16.451
+  },
+  "NICKEL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1589169,
+   "spread_bp": 0.006
+  },
+  "PAXG_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1583495,
+   "spread_bp": 1.881
+  },
+  "GRASS_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1567510,
+   "spread_bp": 2.057
+  },
+  "LYN_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1561969,
+   "spread_bp": 4.878
+  },
+  "JTO_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1548351,
+   "spread_bp": 3.003
+  },
+  "AIO_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1547456,
+   "spread_bp": 5.635
+  },
+  "NGAS_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1546383,
+   "spread_bp": 10.132
+  },
+  "ZINC_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1490564,
+   "spread_bp": 0.027
+  },
+  "JASMY_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1458983,
+   "spread_bp": 2.769
+  },
+  "LSK_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1452927,
+   "spread_bp": 1.604
+  },
+  "AGT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1432977,
+   "spread_bp": 3.428
+  },
+  "NIGHT_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1403979,
+   "spread_bp": 2.565
+  },
+  "STX_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1401039,
+   "spread_bp": 2.925
+  },
+  "NIL_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1384294,
+   "spread_bp": 3.188
+  },
+  "EIGEN_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1381470,
+   "spread_bp": 5.845
+  },
+  "LEAD_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1350679,
+   "spread_bp": 0.053
+  },
+  "ZKSYNC_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1253463,
+   "spread_bp": 2.125
+  },
+  "XPD_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1239003,
+   "spread_bp": 1.175
+  },
+  "BR_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1198724,
+   "spread_bp": 4.271
+  },
+  "VET_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1161211,
+   "spread_bp": 1.871
+  },
+  "B_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1103407,
+   "spread_bp": 8.741
+  },
+  "IRYS_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 0.0,
+   "qv": 1050417,
+   "spread_bp": 5.238
+  },
+  "BATON_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1027966,
+   "spread_bp": 39.513
+  },
+  "AR_USDT": {
+   "maker_bp": 0.0,
+   "taker_bp": 2.0,
+   "qv": 1011317,
+   "spread_bp": 3.245
+  }
+ }
+}
