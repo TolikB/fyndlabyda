@@ -26,11 +26,15 @@ async def multi_regime_status(request: Request) -> dict[str, object]:
             "paper_execution_enabled": False,
             "paper_positions": 0,
             "instruments": 0,
+            "storage_recovering": False,
+            "storage_retries": 0,
         }
     return {
         "enabled": True,
         "healthy": runtime.healthy,
         "failure_reason": runtime.failure_reason,
+        "storage_recovering": runtime.storage_recovering,
+        "storage_retries": runtime.storage_retries,
         "restored_events": runtime.restored_events,
         "persisted_batches": runtime.persisted_batches,
         "paper_replayed_events": runtime.paper_replayed_events,

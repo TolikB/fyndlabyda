@@ -119,8 +119,17 @@ Catch-up and warm-up use bounded keyset pages rather than loading the full journ
 into memory. Crash-gap decisions are joined to replay rows by exact source event ID,
 not by exchange timestamp. A late exchange event remains journaled and checkpointed
 but cannot rewind feature, mark, order, or PnL state.
-A database failure, identity collision, cursor regression, invalid ordering, or
-consumer failure marks the runtime unhealthy and blocks new entries. The exception
+A database outage during catch-up (a connect timeout, a dropped connection, the
+classes the journal writer retries) is retried step by step: the journal-tip read,
+the page read, each decision-batch insert, and the paper page write. The window
+opens at the first failure and lasts `CANONICAL_EVENT_RETRY_WINDOW_SECONDS`, with the
+writer's backoff. Only the failed step repeats, so no event is decided or filled
+twice; batch inserts are idempotent by batch ID, and a page write first checks
+whether its checkpoint already landed. `/multi-regime/status` reports
+`storage_recovering` and `storage_retries`. An outage longer than the window, a
+database error that is not an outage, an identity collision, cursor regression,
+invalid ordering, or consumer failure marks the runtime unhealthy and blocks new
+entries. The exception
 text, traceback, and failing journal row are then written, with credentials
 redacted, to `paper_runtime_incidents.detail` under category `multi_regime_runtime`,
 so the cause outlives log rotation. A failure to write that row is logged and

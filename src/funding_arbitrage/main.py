@@ -556,6 +556,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             paper_execution_start_utc=(active_settings.paper_autotrade_start_utc),
             canonical_journal_profile=journal_profile_spec,
+            # The same outage budget as the journal writer: the runtime reads
+            # the journal that writer fills, through the same database.
+            storage_retry_window_seconds=(
+                active_settings.canonical_event_retry_window_seconds
+            ),
+            storage_retry_initial_seconds=(
+                active_settings.canonical_event_retry_initial_seconds
+            ),
+            storage_retry_max_seconds=active_settings.canonical_event_retry_max_seconds,
         )
         event_router.subscribe(multi_regime_runtime.publish)
         if public_events is not None:

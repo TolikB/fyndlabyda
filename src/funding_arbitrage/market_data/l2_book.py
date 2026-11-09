@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import heapq
 from collections import OrderedDict
 from collections.abc import Callable
@@ -63,10 +62,14 @@ class LocalOrderBook:
         self.exchange_timestamp: datetime | None = None
         # Built on demand and dropped on every commit; see snapshot().
         self._snapshot: BookSnapshot | None = None
+        # The levels of the last snapshot built per side; see _book_levels().
+        self._bid_levels: dict[Decimal, BookLevel] = {}
+        self._ask_levels: dict[Decimal, BookLevel] = {}
+        self._instrument_json = instrument.model_dump_json()
         self.quality = DataQuality.RECOVERING
         self.recovery_reason: str | None = "snapshot_required"
         self._delta_fingerprints: OrderedDict[
-            tuple[int, int, int | None, datetime], str
+            tuple[int, int, int | None, datetime], int
         ] = OrderedDict()
         self._delta_history_limit = max(128, max_depth * 4)
 
@@ -192,8 +195,15 @@ class LocalOrderBook:
             return self._reject("delta_timestamp_regressed", DataQuality.INVALID)
         if not self._is_contiguous(delta):
             return self._gap("sequence_gap")
-        bids = dict(self._bids)
-        asks = dict(self._asks)
+        if delta.checksum is None:
+            # Nothing past this point can reject a delta without a checksum, so
+            # the sides change in place: copying both 1000-level Binance sides
+            # on every delta was most of this method's own time.
+            bids = self._bids
+            asks = self._asks
+        else:
+            bids = dict(self._bids)
+            asks = dict(self._asks)
         for update in delta.updates:
             levels = bids if update.side is BookSide.BID else asks
             if update.action is BookDeltaAction.DELETE:
@@ -249,10 +259,14 @@ class LocalOrderBook:
             raise RuntimeError("book has no authoritative snapshot")
         if depth is not None:
             # Only the best levels: rebuilding a 1000-level Binance book on every
-            # delta for a 20-level consumer took a fifth of a core.
+            # delta for a 20-level consumer took a fifth of a core. Prices are
+            # unique, so ranking prices alone picks the same levels as ranking
+            # (price, size) pairs, without a tuple per level.
+            bids = self._bids
+            asks = self._asks
             return self._candidate_snapshot(
-                bids=dict(heapq.nlargest(depth, self._bids.items())),
-                asks=dict(heapq.nsmallest(depth, self._asks.items())),
+                bids={price: bids[price] for price in heapq.nlargest(depth, bids)},
+                asks={price: asks[price] for price in heapq.nsmallest(depth, asks)},
                 sequence=self.sequence,
                 exchange_timestamp=self.exchange_timestamp,
                 checksum=None,
@@ -285,20 +299,44 @@ class LocalOrderBook:
         CPU on Binance diff-depth streams.
         """
 
+        bid_levels, self._bid_levels = self._book_levels(
+            sorted(bids.items(), reverse=True), self._bid_levels
+        )
+        ask_levels, self._ask_levels = self._book_levels(
+            sorted(asks.items()), self._ask_levels
+        )
         return BookSnapshot.model_construct(
             instrument=self.instrument,
-            bids=tuple(
-                BookLevel.model_construct(price=price, quantity=quantity)
-                for price, quantity in sorted(bids.items(), reverse=True)
-            ),
-            asks=tuple(
-                BookLevel.model_construct(price=price, quantity=quantity)
-                for price, quantity in sorted(asks.items())
-            ),
+            bids=bid_levels,
+            asks=ask_levels,
             sequence=sequence,
             checksum=checksum,
             exchange_timestamp=exchange_timestamp,
         )
+
+    @staticmethod
+    def _book_levels(
+        items: list[tuple[Decimal, Decimal]],
+        previous: dict[Decimal, BookLevel],
+    ) -> tuple[tuple[BookLevel, ...], dict[Decimal, BookLevel]]:
+        """Build one side's levels, reusing those the last snapshot already built.
+
+        A streamed book becomes a snapshot after every delta, and a delta moves
+        a few of its levels. ``model_construct`` for each level of each snapshot
+        was a third of an OKX delta's cost. A level is reused only while its
+        price and size are the very objects it holds, so a reused level is the
+        one a fresh build would make; BookLevel is frozen, so sharing it is safe.
+        """
+
+        built: dict[Decimal, BookLevel] = {}
+        levels: list[BookLevel] = []
+        for price, quantity in items:
+            level = previous.get(price)
+            if level is None or level.price is not price or level.quantity is not quantity:
+                level = BookLevel.model_construct(price=price, quantity=quantity)
+            built[price] = level
+            levels.append(level)
+        return tuple(levels), built
 
     def _commit(self, snapshot: BookSnapshot) -> None:
         self._commit_levels(
@@ -332,14 +370,41 @@ class LocalOrderBook:
             delta.exchange_timestamp,
         )
 
-    @staticmethod
-    def _delta_fingerprint(delta: BookDelta) -> str:
-        return hashlib.sha256(delta.model_dump_json().encode("utf-8")).hexdigest()
+    def _delta_fingerprint(self, delta: BookDelta) -> int:
+        """Content digest of a delta: equal exactly when its JSON form is equal.
+
+        It is compared only with deltas this book applied under the same
+        identity, in this process. ``sha256(model_dump_json())`` cost a third of
+        a millisecond for a 100-level Binance diff and showed up in every py-spy
+        dump of the 2026-11-08 event-loop saturation. The JSON form writes a
+        Decimal as ``str()`` and an enum as its value, and an equal timestamp
+        differs in JSON only by its offset, which ``isoformat()`` keeps, so this
+        tuple is equal exactly when the JSON is. Python's 64-bit hash of it can
+        collide by chance with probability about 2**-64 per comparison.
+        """
+
+        instrument = delta.instrument
+        return hash(
+            (
+                self._instrument_json
+                if instrument is self.instrument
+                else instrument.model_dump_json(),
+                delta.exchange_timestamp.isoformat(),
+                delta.first_sequence,
+                delta.last_sequence,
+                delta.previous_sequence,
+                delta.checksum,
+                tuple(
+                    (update.side, update.action, str(update.price), str(update.quantity))
+                    for update in delta.updates
+                ),
+            )
+        )
 
     def _remember_delta(
         self,
         identity: tuple[int, int, int | None, datetime],
-        fingerprint: str,
+        fingerprint: int,
     ) -> None:
         self._delta_fingerprints[identity] = fingerprint
         self._delta_fingerprints.move_to_end(identity)
@@ -358,11 +423,8 @@ class LocalOrderBook:
         if not self._bids or not self._asks:
             self.quality = DataQuality.INVALID
             self.recovery_reason = "empty_book_side"
-        elif (
-            self.best_bid is not None
-            and self.best_ask is not None
-            and self.best_bid >= self.best_ask
-        ):
+        # One pass per side: each best_bid/best_ask read scans the whole side.
+        elif max(self._bids) >= min(self._asks):
             self.quality = DataQuality.CROSSED
             self.recovery_reason = "crossed_book"
         else:
@@ -377,6 +439,22 @@ class LocalOrderBook:
         return self.checksum_validator(snapshot, checksum)
 
     def _trim(self, levels: dict[Decimal, Decimal], *, reverse: bool) -> dict[Decimal, Decimal]:
+        """Keep the best ``max_depth`` prices of a dict the caller owns.
+
+        Nothing reads these dicts in insertion order (best prices come from
+        max/min, snapshots sort), so a book within its depth is kept as it is
+        and a few excess levels are dropped without sorting the side: a full
+        sort of the 1000-level Binance book ran on every delta.
+        """
+
+        excess = len(levels) - self.max_depth
+        if excess <= 0:
+            return levels
+        if excess < self.max_depth:
+            worst = heapq.nsmallest if reverse else heapq.nlargest
+            for price in worst(excess, levels):
+                del levels[price]
+            return levels
         prices = sorted(levels, reverse=reverse)[: self.max_depth]
         return {price: levels[price] for price in prices}
 

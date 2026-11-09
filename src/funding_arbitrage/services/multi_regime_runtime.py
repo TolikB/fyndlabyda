@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import traceback
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from functools import partial
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -76,6 +78,7 @@ from funding_arbitrage.domain.events import EventEnvelope
 from funding_arbitrage.execution.advanced_paper import AdvancedStrategyPaperBroker
 from funding_arbitrage.execution.directional_paper import DirectionalPaperBroker
 from funding_arbitrage.logging import redact_sensitive_text
+from funding_arbitrage.services.event_writer import is_retryable_storage_error
 from funding_arbitrage.services.multi_regime import (
     MultiRegimeDecisionBatch,
     MultiRegimeEngine,
@@ -98,6 +101,7 @@ from funding_arbitrage.strategies import (
 
 logger = logging.getLogger(__name__)
 
+_T = TypeVar("_T")
 _RESTORE_BATCH_PAGE = 500
 _FAILURE_INCIDENT_CATEGORY = "multi_regime_runtime"
 _FAILURE_INCIDENT_TIMEOUT_SECONDS = 5.0
@@ -931,11 +935,25 @@ class DurableMultiRegimeRuntime:
         paper_execution_start_utc: datetime | None = None,
         canonical_journal_profile: CanonicalJournalProfileSpec | None = None,
         protective_stops: RuntimeProtectiveStopCoordinator | None = None,
+        storage_retry_window_seconds: float = 20.0,
+        storage_retry_initial_seconds: float = 0.25,
+        storage_retry_max_seconds: float = 2.0,
     ) -> None:
         if (
             paper_broker is not None or advanced_paper_broker is not None
         ) and engine.config.mode is not TradingMode.PAPER:
             raise ValueError("paper brokers require PAPER engine mode")
+        retry_values = (
+            storage_retry_window_seconds,
+            storage_retry_initial_seconds,
+            storage_retry_max_seconds,
+        )
+        if not all(math.isfinite(value) and value > 0 for value in retry_values):
+            raise ValueError("multi-regime storage retry values must be finite and positive")
+        if storage_retry_initial_seconds > storage_retry_max_seconds:
+            raise ValueError("multi-regime storage initial retry exceeds maximum")
+        if storage_retry_max_seconds > storage_retry_window_seconds:
+            raise ValueError("multi-regime storage maximum retry exceeds retry window")
         if (
             paper_broker is not None
             and advanced_paper_broker is not None
@@ -962,6 +980,11 @@ class DurableMultiRegimeRuntime:
         self.restored_events = 0
         self.paper_replayed_events = 0
         self.failure_reason: str | None = None
+        self.storage_retry_window_seconds = storage_retry_window_seconds
+        self.storage_retry_initial_seconds = storage_retry_initial_seconds
+        self.storage_retry_max_seconds = storage_retry_max_seconds
+        self.storage_retries = 0
+        self.storage_recovering = False
         self._processed_event_row_id = 0
         self._catch_up_position: tuple[int, EventEnvelope[Any]] | None = None
         simulation_version = (
@@ -1262,15 +1285,16 @@ class DurableMultiRegimeRuntime:
         self.paper_replayed_events += len(events)
 
     async def _catch_up(self) -> None:
-        async with self.session_factory() as session:
-            journal_tip = await latest_event_row_id(session)
+        journal_tip = await self._storage_step("journal_tip", self._load_journal_tip)
         while self._processed_event_row_id < journal_tip:
-            async with self.session_factory() as session:
-                pending = await load_ingestion_events(
-                    session,
+            pending = await self._storage_step(
+                "load_events",
+                partial(
+                    self._load_pending_events,
                     after_row_id=self._processed_event_row_id,
                     up_to_row_id=journal_tip,
-                )
+                ),
+            )
             if not pending:
                 return
             projections: list[DirectionalPaperEventProjection] = []
@@ -1278,8 +1302,10 @@ class DurableMultiRegimeRuntime:
                 self._catch_up_position = (row_id, event)
                 batch = self.engine.process(event)
                 if batch is not None:
-                    async with self.session_factory() as session:
-                        inserted = await save_multi_regime_batch(session, batch)
+                    inserted = await self._storage_step(
+                        "save_batch",
+                        partial(self._save_batch, batch),
+                    )
                     self.latest_by_instrument[batch.instrument.canonical_id] = batch
                     self.persisted_batches += int(inserted)
                 if self._paper_execution_enabled:
@@ -1317,22 +1343,156 @@ class DurableMultiRegimeRuntime:
                         )
                     )
             if projections:
-                async with self.session_factory() as session:
-                    boundary_id, config_sha256 = (
-                        await self._checkpoint_journal_identity_for_row(
-                            session,
-                            event_row_id=projections[-1].event_row_id,
-                        )
-                    )
-                    await save_directional_paper_page(
-                        session,
-                        projections,
-                        consumer_name=self._paper_consumer_name,
-                        journal_profile_boundary_id=boundary_id,
-                        journal_profile_config_sha256=config_sha256,
-                    )
+                await self._storage_step(
+                    "save_paper_page",
+                    partial(self._save_paper_page, projections),
+                    retry=partial(self._save_paper_page_unless_landed, projections),
+                )
             self._processed_event_row_id = pending[-1][0]
             self._catch_up_position = None
+
+    async def _load_journal_tip(self) -> int:
+        async with self.session_factory() as session:
+            return await latest_event_row_id(session)
+
+    async def _load_pending_events(
+        self,
+        *,
+        after_row_id: int,
+        up_to_row_id: int,
+    ) -> list[tuple[int, EventEnvelope[Any]]]:
+        async with self.session_factory() as session:
+            return await load_ingestion_events(
+                session,
+                after_row_id=after_row_id,
+                up_to_row_id=up_to_row_id,
+            )
+
+    async def _save_batch(self, batch: MultiRegimeDecisionBatch) -> bool:
+        async with self.session_factory() as session:
+            return await save_multi_regime_batch(session, batch)
+
+    async def _save_paper_page(
+        self,
+        projections: list[DirectionalPaperEventProjection],
+    ) -> None:
+        async with self.session_factory() as session:
+            boundary_id, config_sha256 = await self._checkpoint_journal_identity_for_row(
+                session,
+                event_row_id=projections[-1].event_row_id,
+            )
+            await save_directional_paper_page(
+                session,
+                projections,
+                consumer_name=self._paper_consumer_name,
+                journal_profile_boundary_id=boundary_id,
+                journal_profile_config_sha256=config_sha256,
+            )
+
+    async def _save_paper_page_unless_landed(
+        self,
+        projections: list[DirectionalPaperEventProjection],
+    ) -> None:
+        """Repeat a page write only if the failed attempt did not commit it.
+
+        A connection can drop after the commit and before its acknowledgement.
+        The page and its checkpoint commit together, so the checkpoint names the
+        page's last event exactly when the page is stored. Writing it again would
+        add its portfolio snapshots a second time.
+        """
+
+        final = projections[-1]
+        async with self.session_factory() as session:
+            checkpoint = await load_directional_paper_checkpoint(
+                session,
+                consumer_name=self._paper_consumer_name,
+            )
+        if (
+            checkpoint is not None
+            and checkpoint.event_row_id == final.event_row_id
+            and checkpoint.event_id == final.event.metadata.event_id
+        ):
+            return
+        await self._save_paper_page(projections)
+
+    async def _storage_step(
+        self,
+        step: str,
+        attempt: Callable[[], Awaitable[_T]],
+        *,
+        retry: Callable[[], Awaitable[_T]] | None = None,
+    ) -> _T:
+        """Run one catch-up database step, retrying an outage for a bounded window.
+
+        On 2026-11-08 at 22:07 an asyncpg connect timed out inside the catch-up
+        while book deltas held the application loop, and the runtime failed for
+        good: the stack restarted and spent 3 h 27 min restoring. Only the step
+        repeats. The events it stores were decided before it ran, so the engine
+        and the paper brokers never see an event twice, and a batch insert is
+        idempotent by batch ID; ``retry``, when given, replaces ``attempt`` after
+        a failure. The window opens at the first failure, as the outage does, and
+        each later attempt must finish inside it; an error that is not an outage
+        fails the runtime at once, as before.
+        """
+
+        loop = asyncio.get_running_loop()
+        deadline: float | None = None
+        delay = self.storage_retry_initial_seconds
+        retries = 0
+        last_error: BaseException | None = None
+        while True:
+            try:
+                if deadline is None:
+                    result = await attempt()
+                else:
+                    async with asyncio.timeout_at(deadline):
+                        result = await (retry or attempt)()
+            except Exception as error:
+                if not is_retryable_storage_error(error):
+                    raise
+                now = loop.time()
+                if deadline is None:
+                    deadline = now + self.storage_retry_window_seconds
+                remaining = deadline - now
+                if remaining <= 0:
+                    cause = (
+                        last_error
+                        if isinstance(error, TimeoutError) and last_error is not None
+                        else error
+                    )
+                    raise TimeoutError(
+                        "multi-regime runtime storage retry window expired"
+                    ) from cause
+                last_error = error
+                retries += 1
+                self.storage_retries += 1
+                self.storage_recovering = True
+                sleep_seconds = min(delay, remaining)
+                # JsonFormatter keeps only its own fields, so the numbers go there.
+                logger.warning(
+                    "multi_regime_runtime_storage_retrying",
+                    extra={
+                        "event": "multi_regime_runtime_storage_retry",
+                        "error": type(error).__name__,
+                        "reason": (
+                            f"step={step} retry={retries} delay={sleep_seconds:.3f}s "
+                            f"remaining={remaining:.3f}s"
+                        ),
+                    },
+                )
+                await asyncio.sleep(sleep_seconds)
+                delay = min(delay * 2, self.storage_retry_max_seconds)
+                continue
+            if retries:
+                logger.warning(
+                    "multi_regime_runtime_storage_recovered",
+                    extra={
+                        "event": "multi_regime_runtime_storage_recovered",
+                        "reason": f"step={step} retries={retries}",
+                    },
+                )
+            self.storage_recovering = False
+            return result
 
     async def _persist_failure(self, error: Exception, *, stage: str) -> None:
         """Keep the cause of a failure where log rotation cannot reach it.

@@ -106,6 +106,9 @@ class EventKind(StrEnum):
     UNIVERSE_SELECTION_SNAPSHOT = "UNIVERSE_SELECTION_SNAPSHOT"
 
 
+_object_setattr = object.__setattr__
+
+
 def _utc(value: datetime) -> datetime:
     return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
 
@@ -255,6 +258,43 @@ class BookDeltaLevel(BaseModel):
         if self.action is BookDeltaAction.UPSERT and self.quantity <= 0:
             raise ValueError("UPSERT book delta quantity must be positive")
         return self
+
+    @classmethod
+    def from_venue(cls, side: BookSide, price: Decimal, quantity: Decimal) -> BookDeltaLevel:
+        """A venue's changed level: size zero deletes the price, a positive size sets it.
+
+        Normalizers build one per changed level of every streamed delta, and
+        validating them was the largest part of a delta's cost on the event loop
+        (py-spy, 2026-11-08). When the field rules visibly hold, the level is
+        assembled the way ``model_construct`` assembles one, without its
+        per-field loop: the same values, the same fields set, nothing extra or
+        private. Any other input goes through validation and fails as before.
+        """
+
+        action = BookDeltaAction.DELETE if quantity == 0 else BookDeltaAction.UPSERT
+        if (
+            cls is BookDeltaLevel
+            and type(side) is BookSide
+            and type(price) is Decimal
+            and type(quantity) is Decimal
+            and price.is_finite()
+            and quantity.is_finite()
+            and price > 0
+            and quantity >= 0
+        ):
+            level = cls.__new__(cls)
+            _object_setattr(
+                level,
+                "__dict__",
+                {"side": side, "action": action, "price": price, "quantity": quantity},
+            )
+            _object_setattr(
+                level, "__pydantic_fields_set__", {"side", "action", "price", "quantity"}
+            )
+            _object_setattr(level, "__pydantic_extra__", None)
+            _object_setattr(level, "__pydantic_private__", None)
+            return level
+        return cls(side=side, action=action, price=price, quantity=quantity)
 
 
 class BookDelta(ExchangeTimedModel):

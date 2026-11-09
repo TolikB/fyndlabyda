@@ -41,6 +41,8 @@ def test_multi_regime_read_api_is_explicit_when_runtime_is_disabled() -> None:
         "paper_execution_enabled": False,
         "paper_positions": 0,
         "instruments": 0,
+        "storage_recovering": False,
+        "storage_retries": 0,
     }
     assert regimes.json() == []
     assert strategies.json() == []

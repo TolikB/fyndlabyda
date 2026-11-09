@@ -9,7 +9,6 @@ from time import monotonic_ns
 
 from funding_arbitrage.domain.events import (
     BookDelta,
-    BookDeltaAction,
     BookDeltaLevel,
     BookEvent,
     BookLevel,
@@ -26,13 +25,17 @@ from funding_arbitrage.domain.events import (
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
-from funding_arbitrage.exchanges.base.models import OrderBook, OrderBookLevel
+from funding_arbitrage.exchanges.base.models import OrderBook
 from funding_arbitrage.market_data.l2_book import (
     BookApplyResult,
     BookApplyStatus,
     LocalOrderBook,
 )
-from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
+from funding_arbitrage.market_data.normalizer import (
+    LegacyBookLevels,
+    decimal,
+    validate_orderbook,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,8 @@ class MexcOrderBookNormalizer:
         self.reconstruction_depth = reconstruction_depth
         self.contract_size = contract_size
         self.local_book = LocalOrderBook(instrument, max_depth=reconstruction_depth)
+        self._legacy_bids = LegacyBookLevels()
+        self._legacy_asks = LegacyBookLevels()
 
     def bootstrap(
         self,
@@ -215,14 +220,8 @@ class MexcOrderBookNormalizer:
                 exchange="mexc",
                 symbol=self.instrument.exchange_symbol,
                 instrument_type=instrument_type,
-                bids=tuple(
-                    OrderBookLevel(price=level.price, quantity=level.quantity)
-                    for level in book.bids[: self.output_depth]
-                ),
-                asks=tuple(
-                    OrderBookLevel(price=level.price, quantity=level.quantity)
-                    for level in book.asks[: self.output_depth]
-                ),
+                bids=self._legacy_bids(book.bids[: self.output_depth]),
+                asks=self._legacy_asks(book.asks[: self.output_depth]),
                 timestamp=book.exchange_timestamp,
                 sequence=book.sequence,
             )
@@ -296,18 +295,7 @@ def _delta_levels(
                 raise InvalidResponseError(f"invalid MEXC futures {key} level")
             price = decimal(row[0], f"{key}_price")
             quantity = decimal(row[1], f"{key}_contracts") * contract_size
-            updates.append(
-                BookDeltaLevel(
-                    side=side,
-                    action=(
-                        BookDeltaAction.DELETE
-                        if quantity == 0
-                        else BookDeltaAction.UPSERT
-                    ),
-                    price=price,
-                    quantity=quantity,
-                )
-            )
+            updates.append(BookDeltaLevel.from_venue(side, price, quantity))
     if not updates:
         raise InvalidResponseError("MEXC futures depth event has no updates")
     return tuple(updates)

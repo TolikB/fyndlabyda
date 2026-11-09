@@ -9,7 +9,6 @@ from time import monotonic_ns
 
 from funding_arbitrage.domain.events import (
     BookDelta,
-    BookDeltaAction,
     BookDeltaLevel,
     BookEvent,
     BookLevel,
@@ -27,13 +26,17 @@ from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import (
     InstrumentType as LegacyInstrumentType,
 )
-from funding_arbitrage.exchanges.base.models import OrderBook, OrderBookLevel
+from funding_arbitrage.exchanges.base.models import OrderBook
 from funding_arbitrage.market_data.l2_book import (
     BookApplyResult,
     BookApplyStatus,
     LocalOrderBook,
 )
-from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
+from funding_arbitrage.market_data.normalizer import (
+    LegacyBookLevels,
+    decimal,
+    validate_orderbook,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +57,8 @@ class OkxOrderBookNormalizer:
         self.instrument = instrument
         self.depth = depth
         self.local_book = LocalOrderBook(instrument, max_depth=depth)
+        self._legacy_bids = LegacyBookLevels()
+        self._legacy_asks = LegacyBookLevels()
 
     def apply(
         self,
@@ -163,14 +168,8 @@ class OkxOrderBookNormalizer:
                 exchange="okx",
                 symbol=self.instrument.exchange_symbol,
                 instrument_type=instrument_type,
-                bids=tuple(
-                    OrderBookLevel(price=level.price, quantity=level.quantity)
-                    for level in book.bids
-                ),
-                asks=tuple(
-                    OrderBookLevel(price=level.price, quantity=level.quantity)
-                    for level in book.asks
-                ),
+                bids=self._legacy_bids(book.bids),
+                asks=self._legacy_asks(book.asks),
                 timestamp=book.exchange_timestamp,
                 sequence=book.sequence,
             )
@@ -199,14 +198,7 @@ def _delta_levels(payload: dict[str, object]) -> tuple[BookDeltaLevel, ...]:
             raise InvalidResponseError(f"invalid OKX {key} delta levels")
         for row in rows:
             price, quantity = _level(row, key)
-            updates.append(
-                BookDeltaLevel(
-                    side=side,
-                    action=(BookDeltaAction.DELETE if quantity == 0 else BookDeltaAction.UPSERT),
-                    price=price,
-                    quantity=quantity,
-                )
-            )
+            updates.append(BookDeltaLevel.from_venue(side, price, quantity))
     return tuple(updates)
 
 

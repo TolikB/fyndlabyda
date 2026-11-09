@@ -21,9 +21,13 @@ from funding_arbitrage.domain.events import (
 )
 from funding_arbitrage.exchanges.base.exceptions import InvalidResponseError
 from funding_arbitrage.exchanges.base.models import InstrumentType as LegacyInstrumentType
-from funding_arbitrage.exchanges.base.models import OrderBook, OrderBookLevel
+from funding_arbitrage.exchanges.base.models import OrderBook
 from funding_arbitrage.market_data.l2_book import BookApplyResult, LocalOrderBook
-from funding_arbitrage.market_data.normalizer import decimal, validate_orderbook
+from funding_arbitrage.market_data.normalizer import (
+    LegacyBookLevels,
+    decimal,
+    validate_orderbook,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +44,8 @@ class GateOrderBookNormalizer:
         self.instrument = instrument
         self.depth = depth
         self.local_book = LocalOrderBook(instrument, max_depth=depth)
+        self._legacy_bids = LegacyBookLevels()
+        self._legacy_asks = LegacyBookLevels()
 
     def apply(
         self,
@@ -117,14 +123,8 @@ class GateOrderBookNormalizer:
                 exchange="gate",
                 symbol=self.instrument.exchange_symbol,
                 instrument_type=instrument_type,
-                bids=tuple(
-                    OrderBookLevel(price=level.price, quantity=level.quantity)
-                    for level in book.bids
-                ),
-                asks=tuple(
-                    OrderBookLevel(price=level.price, quantity=level.quantity)
-                    for level in book.asks
-                ),
+                bids=self._legacy_bids(book.bids),
+                asks=self._legacy_asks(book.asks),
                 timestamp=book.exchange_timestamp,
                 sequence=book.sequence,
             )

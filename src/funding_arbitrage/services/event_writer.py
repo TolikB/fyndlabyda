@@ -440,7 +440,7 @@ class CanonicalEventWriter:
                     async with self.session_factory() as session:
                         inserted = await self.append_batch(session, events)
             except BaseException as error:
-                if not _is_retryable_storage_error(error):
+                if not is_retryable_storage_error(error):
                     raise
                 remaining = deadline - loop.time()
                 if remaining <= 0:
@@ -516,7 +516,14 @@ class CanonicalEventWriter:
             ) from self._failure
 
 
-def _is_retryable_storage_error(error: BaseException) -> bool:
+def is_retryable_storage_error(error: BaseException) -> bool:
+    """Whether a database error is an outage worth retrying, not a bad request.
+
+    Connection loss, timeouts (asyncpg raises a bare ``TimeoutError`` from
+    connect), invalidated connections and the PostgreSQL connection, admin
+    shutdown and serialization classes qualify, anywhere in the cause chain.
+    """
+
     pending: list[BaseException] = [error]
     seen: set[int] = set()
     while pending:
