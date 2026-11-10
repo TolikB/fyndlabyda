@@ -1,0 +1,9 @@
+36 symbols, hours 2020-01-17 08:00:00..2026-09-30 23:00:00, live at the start 9, at the end 36, mean half spread 0.71 bp
+donch20|trend|h4         month  -0.62/ -2.54/ -6.39 sh  0.29> -0.3/-0.89 dd  85.8 q+ 43.0 worst  -57.9 turn 9.29 
+bb20|trend|h4            month  -0.55/ -2.57/ -6.59 sh   0.3>-0.32/-0.93 dd  89.0 q+ 33.0 worst  -71.7 turn 9.68 
+cci20|trend|h4           month   0.62/ -1.44/ -5.52 sh  0.64> 0.02/ -0.6 dd  84.8 q+ 48.0 worst  -70.1 turn 9.75 
+samehour|trend|h4        month   1.35/ -1.18/ -6.14 sh  1.13> 0.39/-0.35 dd  63.0 q+ 57.0 worst  -29.2 turn 12.03 
+donch20|trend|h8         month   0.27/ -0.92/ -3.36 sh   0.4> 0.05/ -0.3 dd  63.1 q+ 29.0 worst  -30.9 turn 5.65 
+bb20|trend|h8            month   1.45/  0.17/ -2.44 sh  0.79>  0.4/ 0.02 dd  60.0 q+ 43.0 worst  -30.3 turn 5.95 
+cci20|trend|h8           month   1.83/  0.54/ -2.09 sh  0.89>  0.5/ 0.12 dd  60.1 q+ 52.0 worst  -37.7 turn 6.02 
+samehour|trend|h8        month   4.81/  3.48/  0.81 sh  1.74> 1.38/ 1.02 dd  38.5 q+ 76.0 worst   -6.1 turn 5.98 

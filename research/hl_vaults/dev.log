@@ -1,0 +1,9 @@
+selftest OK
+3224 vaults with history, 1858 closed, 91 dates
+dates with enough vaults 71 median eligible 65
+vault|r30|k5 {"dates": 71, "mean_pct": -9.21, "median_pct": -8.81, "ci_pct": [-22.54, 0.03], "max_dd_pct": 98.66, "median_vault_pct": -1.07, "share_pos": 0.324, "passes": false}
+vault|r30|k10 {"dates": 71, "mean_pct": -7.57, "median_pct": -8.81, "ci_pct": [-16.57, -1.42], "max_dd_pct": 95.36, "median_vault_pct": -1.07, "share_pos": 0.324, "passes": false}
+vault|r90|k5 {"dates": 71, "mean_pct": -7.45, "median_pct": -6.2, "ci_pct": [-17.75, -1.48], "max_dd_pct": 96.8, "median_vault_pct": -1.07, "share_pos": 0.38, "passes": false}
+vault|r90|k10 {"dates": 71, "mean_pct": -5.53, "median_pct": -4.07, "ci_pct": [-12.94, -1.78], "max_dd_pct": 89.51, "median_vault_pct": -1.07, "share_pos": 0.38, "passes": false}
+vault|sh90|k5 {"dates": 71, "mean_pct": -0.79, "median_pct": -0.23, "ci_pct": [-5.82, 1.75], "max_dd_pct": 58.19, "median_vault_pct": -1.07, "share_pos": 0.493, "passes": false}
+vault|sh90|k10 {"dates": 71, "mean_pct": -0.75, "median_pct": 0.71, "ci_pct": [-7.15, 2.72], "max_dd_pct": 58.19, "median_vault_pct": -1.07, "share_pos": 0.563, "passes": false}
