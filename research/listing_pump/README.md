@@ -229,6 +229,26 @@ yet"). CARDS has no perp on Binance or Hyperliquid, so the sniper took no trade 
 compare against. Upbit answered 429 to a request for the notice body, which was not repeated, so
 the trading open time is unknown.
 
+**Second event, HYPE (2026-11-10): 50 minutes late.**
+- The notice for KRW, BTC and USDT markets was posted at 04:50:00 UTC.
+- The markets first appeared at 05:40:07.7 UTC, 3,007.7 s after it, and flickered off and on six times over 26 s.
+- The sniper paper-filled the Binance perp at that moment: −0.17% at 1x costs, −0.42% at 2x.
+
+`diag_hype.py` reads the perp's trades around the notice itself. It is descriptive and no trial:
+
+| Seconds after the notice | Move from the last price before it |
+|---:|---:|
+| 1.2, first trade | 0.00% |
+| 1.5 | +0.82% |
+| 2 | +1.01% |
+| 10 | +1.23% |
+| 60 | +0.73% |
+| 300 | +0.94% |
+
+So a large coin already listed everywhere jumped about 1%, done within 1.5 s. Round 16b's S2 rule (in at T + 2 s, out at
+T + 62 s) would have made −0.33% before costs. Two events out of the three that `analyze_watch.py` needs now show the
+official list 43–50 minutes late, so this route stays dead for timing.
+
 ## Round 19: short the perp seconds after bad exchange news (`bt_badnews.py`, 5c3aad4)
 
 **Events.** These are Upbit notices of an investment warning, a caution or a delisting, and Binance
