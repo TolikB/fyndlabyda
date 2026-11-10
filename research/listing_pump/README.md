@@ -350,6 +350,27 @@ events.
 
 Closed. Clustering events in time before quoting a t-stat is what caught this.
 
+## Bithumb: a notice API behind a four-hour cache (`watch_bithumb.py`, container `bithumb-watch`, since 2026-11-10)
+
+Bithumb's Open API has what Upbit lacks, a notice endpoint a program may read. `GET https://api.bithumb.com/v1/notices`
+redirects to `feed-api.bithumb.com/v1/notices` and returns the five latest notices with `published_at` to the second
+(Seoul time). Facts read on 2026-11-10, no prices:
+
+- **No history.** `page` and `count` are ignored, so there is nothing to backtest on.
+- **Rate limit:** one request a second, by the response's own headers.
+- **Cached.** The answer came from Cloudflare with `cache-control: public, max-age=14400` and `age: 3306`. The logger's
+  first hour showed the copy replaced at age 3598, so the edge keeps it for an hour. If nothing replaces it sooner when
+  a notice is published, a notice shows up half an hour late on average and this route is dead as well.
+
+The logger polls the endpoint and `GET /v1/market/all` every 2 s. For every notice it writes the time it first saw it
+and the lag after `published_at`, and it writes a line whenever the cached copy was replaced. Output:
+`listing_pump/watch_bithumb/{notices,markets,heartbeat}.jsonl` on the VM.
+
+What decides it, after a week of notices:
+- **Lags of a few seconds:** a legitimate fast feed for Bithumb's KRW listings and for the caution notices the Korean
+  exchanges publish together. Then a forward paper test, since no history exists.
+- **Lags of minutes or hours:** closed, like Upbit's market list.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
@@ -366,5 +387,5 @@ Closed. Clustering events in time before quoting a t-stat is what caught this.
   `results_latency_holdout.json`, `latency_holdout.log`, `badnews_*.log`, `results_badnews_*.json`.
 - **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
   `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`, `diag_bybit.py`, `diag_bybit.txt`.
-- **Forward:** `watch_upbit.py`, `analyze_watch.py`, `fwd_sniper.py`, `selftest_sniper.py`.
-- **Data on the VM:** `/w/data/listing/`, `listing_pump/watch/`.
+- **Forward:** `watch_upbit.py`, `analyze_watch.py`, `fwd_sniper.py`, `selftest_sniper.py`, `watch_bithumb.py`.
+- **Data on the VM:** `/w/data/listing/`, `listing_pump/watch/`, `listing_pump/watch_bithumb/`.

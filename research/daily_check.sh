@@ -3,7 +3,7 @@
 R=/opt/funding_arbitrage_research
 W=$R/listing_pump/watch
 date -u
-docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hl-smart-fwd|hl-liqmap|upbit-watch|fwd-sniper|hl-leadlag|v1paper-app|paper_v2-app|paper-app|mexc-lag|xvenue'
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hl-smart-fwd|hl-liqmap|upbit-watch|bithumb-watch|fwd-sniper|hl-leadlag|v1paper-app|paper_v2-app|paper-app|mexc-lag|xvenue'
 echo "== rank"; ls -la $R/hl_smart/fwd/rank/ | tail -n 5
 docker logs --since 12h hl-smart-fwd 2>&1 | grep -v 'poll:' | tail -n 15 | cut -c1-250
 docker logs --tail 3 hl-smart-fwd 2>&1 | cut -c1-200
@@ -16,6 +16,27 @@ r=json.load(open("$R/hl_smart/fwd/report.json"))
 print(r["generated"],{k:(v["fills"],v["return_pct"],v["max_dd_pct"]) for k,v in r["ledgers"].items()}, "persistence", r.get("persistence"))
 PY
 docker logs --since 24h hl-smart-fwd 2>&1 | grep -ciE 'error|traceback|429'
+echo "== bithumb"; tail -n 1 $R/listing_pump/watch_bithumb/heartbeat.jsonl 2>/dev/null
+python3 - <<PY
+import json
+new, refresh, blocked = [], [], 0
+for line in open("$R/listing_pump/watch_bithumb/notices.jsonl"):
+    d = json.loads(line)
+    blocked += "blocked" in d
+    if d.get("refresh"):
+        refresh.append((d["t"], d.get("prev_age")))
+    elif not d.get("baseline"):
+        new += [(n["published_at"], n["lag_s"], d.get("age"), n["modified"], (n["title"] or "")[:40]) for n in d.get("new", [])]
+print("notices seen", len(new), "| cache refreshes", len(refresh), "| age before refresh, last 5:", [a for _, a in refresh[-5:]], "| blocked", blocked)
+for row in new[-6:]:
+    print("  ", row)
+adds = []
+for line in open("$R/listing_pump/watch_bithumb/markets.jsonl"):
+    d = json.loads(line)
+    if not d.get("baseline") and (d.get("added") or d.get("removed") or d.get("flags")):
+        adds.append((d["t"], d.get("added"), d.get("removed"), d.get("flags")))
+print("market changes", len(adds), adds[-3:])
+PY
 echo "== upbit"; tail -n 2 $W/heartbeat.jsonl
 python3 - <<PY
 import json
