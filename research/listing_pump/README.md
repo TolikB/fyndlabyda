@@ -399,7 +399,7 @@ time counts too.
 
 New Coinbase products are logged for description only: Coinbase listings were never backtested.
 
-## Public news feeds: they arrive after the first trade (measured 2026-11-11, descriptive, no trial)
+## Public news feeds: they arrive when the move is done (measured 2026-11-11, descriptive, no trial)
 
 Step C3 of `../PLAN.md` asked whether a news feed could put the order inside the first second. Three services publish
 exchange notices on documented public endpoints. Their own timestamps were compared with the official post times.
@@ -425,10 +425,11 @@ Upbit's T has one-second resolution. Binance's T is the publish stamp both servi
 - **PhoenixNews.** A public endpoint of the latest items with a `receivedAt` stamp.
 
 **What it means for round 16b's edge:**
-- After HYPE's notice the Binance perp first traded 1.2 s after T. So the fastest traders act about 1.2 s after T, and
-  the entries at T + 0.5 s and T + 1 s in `diag_budget.txt` are out of anyone's reach.
-- A paid feed delivers at about T + 1.5 s. With this host's 0.12 s to the feed and 0.12 s to Binance, the order lands
-  near T + 1.8 s. A free feed lands at T + 2.3 s or later.
+- After HYPE's notice the Binance perp was unchanged at T + 1.2 s and 0.82% higher at T + 1.5 s (table above). So
+  the fastest traders acted between 1.2 and 1.5 s after T, and the entries at T + 0.5 s and T + 1 s in
+  `diag_budget.txt` are out of anyone's reach.
+- A paid feed delivers at about T + 1.5 s, when that jump was already made. With this host's 0.12 s to the feed and
+  0.12 s to Binance, the order lands near T + 1.8 s. A free feed lands at T + 2.3 s or later.
 - The 2026 median trade is +0.9% at 2 s and negative from 2.5 s. Six events a month at about +1% on a fifth of
   2,500 USDT is about 30 USDT a month, before any feed fee.
 
