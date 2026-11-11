@@ -371,6 +371,34 @@ What decides it, after a week of notices:
   exchanges publish together. Then a forward paper test, since no history exists.
 - **Lags of minutes or hours:** closed, like Upbit's market list.
 
+## Do new symbols show in a public market list before the post? (`watch_symbols.py`, container `symbols-watch`, since 2026-11-11)
+
+Step C4 of [the stage 4 plan](../PLAN.md). The logger polls three documented, public endpoints that need no key, and it
+writes when each symbol first appears and every status change:
+
+| Source | Endpoint | Every | Binance weight |
+|---|---|---|---|
+| `spot_break` | `api.binance.com/api/v3/exchangeInfo?symbolStatus=BREAK` | 10 s | 20, so 120 a minute of 6,000 |
+| `spot_all` | `api.binance.com/api/v3/exchangeInfo` | 300 s | 20 |
+| `futures` | `fapi.binance.com/fapi/v1/exchangeInfo` | 5 s | 1, so 12 a minute of 2,400 |
+| `coinbase` | `api.exchange.coinbase.com/products` | 10 s | Coinbase's public limit is 10 a second |
+
+- **Answer sizes, measured 2026-11-11:** 91, 53 and 24 KB compressed (4.3 MB, 1.2 MB and 0.36 MB as JSON).
+- **Refusals:** a 403, 418 or 429, or a Cloudflare page, pauses that endpoint for an hour or for its Retry-After, and is
+  logged. The heartbeat logs the largest `x-mbx-used-weight-1m` seen each hour.
+- **Output:** `listing_pump/watch_symbols/{symbols,heartbeat,blocked}.jsonl` on the VM.
+
+Decided before the first event (2026-11-11). For each "Binance Will List" post from 11-12 to 12-27, I take the post time
+T from `download_binance.py` and the first time the spot symbol showed in either spot list. A Binance perp new at the same
+time counts too.
+
+- **Seen before T, or within 1 s after it, on at least 2 of the first 3 posts:** a legitimate route that may beat the
+  post. It then gets a pre-registered forward paper test. That test fills from the live trade stream at the time the
+  symbol was seen plus the measured delay.
+- **Otherwise:** this route is closed, with Upbit's market list and Bithumb's notice feed.
+
+New Coinbase products are logged for description only: Coinbase listings were never backtested.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
@@ -387,5 +415,7 @@ What decides it, after a week of notices:
   `results_latency_holdout.json`, `latency_holdout.log`, `badnews_*.log`, `results_badnews_*.json`.
 - **Diagnostics:** `diag_spotlist.py`, `diag_spotlist.txt`, `diag_latency.py`, `diag_latency.txt`,
   `diag_holdout.py`, `diag_holdout.txt`, `diag_budget.py`, `diag_budget.txt`, `diag_bybit.py`, `diag_bybit.txt`.
-- **Forward:** `watch_upbit.py`, `analyze_watch.py`, `fwd_sniper.py`, `selftest_sniper.py`, `watch_bithumb.py`.
-- **Data on the VM:** `/w/data/listing/`, `listing_pump/watch/`, `listing_pump/watch_bithumb/`.
+- **Forward:** `watch_upbit.py`, `analyze_watch.py`, `fwd_sniper.py`, `selftest_sniper.py`, `watch_bithumb.py`,
+  `watch_symbols.py`, `selftest_watch_symbols.py`.
+- **Data on the VM:** `/w/data/listing/`, `listing_pump/watch/`, `listing_pump/watch_bithumb/`,
+  `listing_pump/watch_symbols/`.
