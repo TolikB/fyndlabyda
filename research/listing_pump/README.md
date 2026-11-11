@@ -399,6 +399,43 @@ time counts too.
 
 New Coinbase products are logged for description only: Coinbase listings were never backtested.
 
+## Public news feeds: they arrive after the first trade (measured 2026-11-11, descriptive, no trial)
+
+Step C3 of `../PLAN.md` asked whether a news feed could put the order inside the first second. Three services publish
+exchange notices on documented public endpoints. Their own timestamps were compared with the official post times.
+
+| Notice | Official time T (UTC) | Feed | Feed's time | After T |
+|---|---|---|---|---|
+| Upbit lists CARDS, 11-05 | 06:03:03 | BWEnews public RSS | 06:03:05 | about 2 s |
+| Upbit lists HYPE, 11-10 | 04:50:00 | BWEnews public RSS | 04:50:02 | about 2 s |
+| Upbit lists HYPE, 11-10 | 04:50:00 | Tree of Alpha | 04:50:01.536 | 1.5 s |
+| Upbit caution on WAVES, 11-10 | 11:00:02 | Tree of Alpha | 11:00:05.405 | 3.4 s |
+| Upbit ends support for DNT, 11-06 | 06:00:00 | Tree of Alpha | 06:00:03.451 | 3.5 s |
+| Binance futures launch HYPEUSDC, 11-11 | 05:00:31.295 | Tree of Alpha | 05:00:32.443 | 1.15 s |
+| Binance futures launch TradFi perps, 11-11 | 09:45:18.328 | Tree of Alpha | 09:45:19.817 | 1.5 s |
+| Binance Convert notice, 11-11 | 10:00:10.831 | PhoenixNews | 10:00:11.967 | 1.1 s |
+
+Upbit's T has one-second resolution. Binance's T is the publish stamp both services carry for the post.
+
+**What the services are:**
+- **Tree of Alpha.** Its history endpoint (`news.treeofalpha.com/api/news?limit=3000`, about six days) is documented as
+  delayed and not for polling. The `time` in it is when subscribers got the item. The free WebSocket adds a delay the
+  documentation does not state; removing it needs a paid tier.
+- **BWEnews.** A public RSS with one-second stamps. Its public WebSocket does not relay exchange notices.
+- **PhoenixNews.** A public endpoint of the latest items with a `receivedAt` stamp.
+
+**What it means for round 16b's edge:**
+- After HYPE's notice the Binance perp first traded 1.2 s after T. So the fastest traders act about 1.2 s after T, and
+  the entries at T + 0.5 s and T + 1 s in `diag_budget.txt` are out of anyone's reach.
+- A paid feed delivers at about T + 1.5 s. With this host's 0.12 s to the feed and 0.12 s to Binance, the order lands
+  near T + 1.8 s. A free feed lands at T + 2.3 s or later.
+- The 2026 median trade is +0.9% at 2 s and negative from 2.5 s. Six events a month at about +1% on a fifth of
+  2,500 USDT is about 30 USDT a month, before any feed fee.
+
+**Decision:** no news feed is bought or built. The sub-second line of step C cannot be met by a feed. What can still
+reach the first seconds is the price jump itself, which round 38 (`../jump_follow`) tests on 11-16. The one request to
+Upbit's notice list and the six feed requests of this check were not repeated.
+
 ## Registry
 
 - `/w/pnl_round16.parquet` adds 3 trials.
