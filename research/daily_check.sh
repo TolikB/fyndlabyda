@@ -3,7 +3,7 @@
 R=/opt/funding_arbitrage_research
 W=$R/listing_pump/watch
 date -u
-docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hl-smart-fwd|hl-liqmap|upbit-watch|bithumb-watch|fwd-sniper|hl-leadlag|v1paper-app|paper_v2-app|paper-app|mexc-lag|xvenue'
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hl-smart-fwd|hl-liqmap|upbit-watch|bithumb-watch|fwd-sniper|hl-leadlag|v1paper-app|paper_v2-app|paper-app|mexc-lag|xvenue|tradfi-lag'
 echo "== rank"; ls -la $R/hl_smart/fwd/rank/ | tail -n 5
 docker logs --since 12h hl-smart-fwd 2>&1 | grep -v 'poll:' | tail -n 15 | cut -c1-250
 docker logs --tail 3 hl-smart-fwd 2>&1 | cut -c1-200
@@ -54,6 +54,7 @@ echo "== liqmap"; python3 -c 'import json; s=json.load(open("'$R'/hl_liqmap/data
 echo "== leadlag"; cat $R/hl_leadlag/data/status.json; echo
 echo "== mexc_lag"; cat $R/mexc_lag/data/status.json; echo
 echo "== xvenue"; cat $R/xvenue/data/status.json; echo
+echo "== tradfi_lag"; cat $R/tradfi_lag/data/status.json; echo; ls $R/tradfi_lag/data/pairs | tail -n 1
 echo "== combo"; tail -n 3 $R/fwd/daily.log
 echo "== 429 live"; docker logs --since 60m funding_arbitrage_paper-app-1 2>&1 | grep -i hyperliquid | grep -ci 429
 echo "== v1"; docker inspect --format '{{.State.Health.Status}} restarts={{.RestartCount}} started={{.State.StartedAt}} image={{.Config.Image}}' funding_arbitrage_v1paper-app-1
