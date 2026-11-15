@@ -12,7 +12,12 @@ Sources and pace
           metaAndAssetCtxs, one dex a tick       each dex every 300 s, weight 20
           spotMetaAndAssetCtxs                   every 300 s, weight 20
           perpDexs                               every 3,600 s, weight 20
-        About 70-180 of Hyperliquid's 1,200 weight a minute per IP.
+          twapHistory of one account             weight 20: 15 s after a large order is first seen and every 300 s
+                                                 while it runs, never more often than one call in 6 s
+        About 100-380 of Hyperliquid's 1,200 weight a minute per IP.
+The explorer alone is not enough: on 2026-11-12 it still listed as active one in seven large orders that Hyperliquid
+had ended hours before, and orders that were only waiting for a trigger. So every perp order of at least MIN_NTL USD
+whose rate is at least VERIFY_SHARE of its market's average volume is checked against Hyperliquid's own record.
 A 403, 418 or 429 pauses that host (an hour for the explorer, ten minutes for Hyperliquid) and is logged. Nothing is
 ever changed to get around a refusal.
 
@@ -22,16 +27,25 @@ Asset ids (Hyperliquid's own): a main perp is its index in the universe, a build
 Output in $OUT (default ./data), append-only, one file a UTC day for the first three
   twaps-YYYYMMDD.jsonl  {"t": ms seen, "ev": "base"|"start", "key", "time": ms the order was sent, "user", "a", "b"
                          (true = buy), "s" (size in coins), "r" (reduce only), "m" (minutes), "rnd" (randomised),
-                         "block", "error", "ended", "px", "ntl", "back": seen before} on the first list and on
-                         every new order;
+                         "block", "error", "ended", "px", "ntl", "share": its rate over the market's average
+                         volume a minute (null when unknown), "back": seen before} on the first list and on every
+                         new order;
                         {"t", "ev": "change", "key", "ended", "error"} when its status changes;
                         {"t", "ev": "gone", "key"} when it leaves the list (finished or cancelled).
+  status-YYYYMMDD.jsonl {"t": ms, "user", "orders": [{"key", "status" (Hyperliquid's: activated, finished,
+                        terminated, error, waitingForTrigger; "unknown" when its history has no such order), "st":
+                        ms of that status, "exec": executed size, "sz"}]} for each check of an account
+  polls-YYYYMMDD.jsonl  {"t": ms, "n": orders listed} for every answer of the explorer that was accepted, so a test
+                        can tell when the list was fresh (a refused, failed, malformed or disbelieved answer
+                        leaves no row)
   mids-YYYYMMDD.jsonl   {"t": ms, "dex", "rtt": ms, "m": {coin: mid}} for coins that had a TWAP of at least
                         MIN_NTL USD in the last KEEP_S seconds. Smaller orders get no prices.
   ctx-YYYYMMDD.jsonl    {"t": ms, "dex", "rows": [[coin, mark, mid, impact bid, impact ask, day volume USD, open
                         interest, funding, oracle], ...]}; for spot {"t", "dex": "@spot", "rows": [[coin, mark, mid,
                         day volume USD], ...]}
   assets.jsonl          {"t": ms, "dex", "map": {asset id: coin}} on the first read and on every change
+  fees.jsonl            {"t": ms, "dex", "fees": {coin: [growth mode on, deployer fee scale]}} for each builder dex, on
+                        the first read and on every change (a builder market's taker fee follows from these two)
   heartbeat.jsonl       hourly counts, errors, round-trip times and how late new orders were seen
   blocked.jsonl         {"t": ms, "host", "status", "pause_s"}
 
@@ -65,6 +79,14 @@ EVER_S = 7 * 24 * 3600.0      # how long a seen order is remembered
 SPOT = "@spot"                # internal name of the spot book; no perp dex can be called this
 SHORT_RUN = 3
 BLOCKED = (403, 418, 429)
+VERIFY_SHARE = 0.05           # an order this large against its market's volume is checked with Hyperliquid
+VERIFY_FIRST = 15.0           # seconds from first sight to the first check
+VERIFY_EVERY = 300.0          # seconds between later checks of a running order
+VERIFY_GAP = 6.0              # seconds between any two checks
+VERIFY_RETRY = 60.0           # seconds to the next try after a failed check
+VERIFY_MATCH_MS = 2000        # an order and its history rows carry the same send time within this
+TERMINAL = ("finished", "terminated", "error")
+IDLE = 3600.0
 
 
 def day(t_ms):
@@ -93,6 +115,12 @@ def perp_assets(dex_index, meta):
     return {base + j: u["name"] for j, u in enumerate(meta["universe"])}
 
 
+def fee_facts(meta):
+    """A builder dex's meta -> {coin: [growth mode on, deployer fee scale]} for its live markets."""
+    return {u["name"]: [u.get("growthMode") == "enabled", float(u.get("deployerFeeScale", 1.0))]
+            for u in meta["universe"] if not u.get("isDelisted")}
+
+
 def spot_assets(meta):
     return {10000 + u["index"]: u["name"] for u in meta["universe"]}
 
@@ -112,12 +140,28 @@ def num(x):
         return None
 
 
+def order_status(hist, time_ms, coin):
+    """An account's twapHistory rows -> the latest status of its order sent at time_ms on coin. Rows are status
+    changes stamped in whole seconds, so an end outranks the start it shares a second with."""
+    best, rank = None, None
+    for h in hist:
+        s = h.get("state") or {}
+        if s.get("coin") != coin or abs(int(s.get("timestamp", 0)) - time_ms) > VERIFY_MATCH_MS:
+            continue
+        status = h.get("status")
+        status = status.get("status") if isinstance(status, dict) else str(status)
+        r = (int(h.get("time", 0)), 2 if status in TERMINAL else 1 if status == "activated" else 0)
+        if rank is None or r > rank:
+            best, rank = {"status": status, "st": r[0] * 1000, "exec": s.get("executedSz"), "sz": s.get("sz")}, r
+    return best or {"status": "unknown", "st": None, "exec": None, "sz": None}
+
+
 class Collector:
     """All state and decisions; `fetch(host, payload)` does the network and `clock()` gives the time in seconds."""
 
     def __init__(self, out, fetch, clock=time.time):
         self.out, self.fetch, self.clock = out, fetch, clock
-        self.due = {"twap": 0.0, "mids": 0.0, "ctx": 0.0, "dexs": 0.0}
+        self.due = {"twap": 0.0, "mids": 0.0, "ctx": 0.0, "dexs": 0.0, "verify": clock() + IDLE}
         self.pause = {"scan": 0.0, "hl": 0.0}
         self.rows = None          # {key: record} of the last accepted list; None until the first one
         self.ever = {}            # key -> ms last seen, to flag an order that comes back
@@ -125,8 +169,12 @@ class Collector:
         self.queue = []           # dexes (and "spot") still to refresh in this ctx round
         self.assets = {}          # asset id -> (dex name, coin)
         self.maps = {}            # dex name -> {asset id: coin}, as last written
+        self.fees = {}            # builder dex name -> {coin: [growth, scale]}, as last written
         self.px = {}              # coin -> last known price
         self.interest = {}        # asset id -> time until which its mids are stored
+        self.vol = {}             # coin -> day volume in USD from the last price round (perps only)
+        self.track = {}           # key -> large running order to check: user, time, coin, end, due, final
+        self.verify_next = 0.0
         self.short = 0
         self.rtt = 0.0
         self.round_start = 0.0
@@ -229,6 +277,11 @@ class Collector:
                 if obj is not None:
                     meta, ctxs = obj
                     self.set_assets(dex, perp_assets(self.dexs.index(dex), meta))
+                    if dex:
+                        fees = fee_facts(meta)
+                        if self.fees.get(dex) != fees:
+                            self.fees[dex] = fees
+                            self.append("fees", {"t": t, "dex": dex, "fees": fees}, daily=False)
                     rows = []
                     for u, c in zip(meta["universe"], ctxs):
                         imp = c.get("impactPxs") or [None, None]
@@ -237,6 +290,9 @@ class Collector:
                         p = num(c.get("midPx")) or num(c.get("markPx"))
                         if p:
                             self.px[u["name"]] = p
+                        v = num(c.get("dayNtlVlm"))
+                        if v:
+                            self.vol[u["name"]] = v
                     self.append("ctx", {"t": t, "dex": dex, "rows": rows})
         except (KeyError, TypeError, ValueError, IndexError):
             self.stats["errors"]["ctx:shape"] = self.stats["errors"].get("ctx:shape", 0) + 1
@@ -249,6 +305,44 @@ class Collector:
     def price(self, rec):
         hit = self.assets.get(rec["a"])
         return self.px.get(hit[1]) if hit else None
+
+    def share(self, rec, ntl):
+        """The order's rate over its market's average volume a minute, or None when either is unknown."""
+        hit = self.assets.get(rec["a"])
+        v = self.vol.get(hit[1]) if hit else None
+        if not v or not ntl or rec["m"] <= 0:
+            return None
+        return (ntl / rec["m"]) / (v / 1440.0)
+
+    def follow(self, rec, ntl, sh, now):
+        """Start checking a large running order with Hyperliquid. Spot orders never qualify: the volume table holds
+        perps only, so they have no share."""
+        if rec["ended"] is not None or rec["error"] is not None:
+            return
+        if ntl is None or ntl < MIN_NTL or sh is None or sh < VERIFY_SHARE:
+            return
+        self.track[rec["key"]] = {"user": rec["user"], "time": rec["time"], "coin": self.assets[rec["a"]][1],
+                                  "end": rec["time"] / 1000 + rec["m"] * 60, "due": now + VERIFY_FIRST, "final": False}
+
+    def do_verify(self, now):
+        """One twapHistory call for the account whose check is most overdue; it answers for all its followed orders."""
+        self.verify_next = now + VERIFY_GAP
+        user = min(self.track.values(), key=lambda v: v["due"])["user"]
+        mine = {k: v for k, v in self.track.items() if v["user"] == user}
+        obj = self.call("hl", "verify", {"type": "twapHistory", "user": user})
+        if not isinstance(obj, list):
+            for v in mine.values():
+                v["due"] = now + VERIFY_RETRY
+            return
+        out = []
+        for k, v in sorted(mine.items()):
+            st = order_status(obj, v["time"], v["coin"])
+            out.append({"key": k, **st})
+            if st["status"] in TERMINAL or v["final"] or now >= v["end"] + VERIFY_RETRY:
+                del self.track[k]
+            else:
+                v["due"] = now + VERIFY_EVERY
+        self.append("status", {"t": int(self.clock() * 1000), "user": user, "orders": out})
 
     def do_twap(self, now):
         self.due["twap"] = now + TWAP_EVERY
@@ -270,6 +364,7 @@ class Collector:
             if self.short < SHORT_RUN:
                 return                      # a truncated answer would log half the orders as gone
         self.short = 0
+        self.append("polls", {"t": t, "n": len(new)})
         if self.rows is None:
             started, changed, gone, ev = list(new.values()), [], [], "base"
         else:
@@ -278,7 +373,10 @@ class Collector:
         for rec in started:
             p = self.price(rec)
             ntl = None if p is None or num(rec["s"]) is None else round(num(rec["s"]) * p, 2)
-            self.append("twaps", {"t": t, "ev": ev, **rec, "px": p, "ntl": ntl, "back": rec["key"] in self.ever})
+            sh = self.share(rec, ntl)
+            self.append("twaps", {"t": t, "ev": ev, **rec, "px": p, "ntl": ntl,
+                                  "share": None if sh is None else round(sh, 4), "back": rec["key"] in self.ever})
+            self.follow(rec, ntl, sh, now)
             if ev == "start":
                 self.stats["started"] += 1
                 self.stats["lag"].append((t - rec["time"]) / 1000)
@@ -287,6 +385,9 @@ class Collector:
                                   "error": rec["error"]})
         for k in gone:
             self.append("twaps", {"t": t, "ev": "gone", "key": k})
+        for k in [rec["key"] for rec in changed] + gone:
+            if k in self.track:                 # one last check tells how and when it really ended
+                self.track[k].update(due=now, final=True)
         for rec in new.values():
             if rec["ended"] is None and rec["error"] is None:
                 p = self.price(rec)
@@ -332,7 +433,7 @@ class Collector:
                                   "listed": 0 if self.rows is None else len(self.rows), "active": active,
                                   "started": st["started"], "lag_s_p50": q(st["lag"], 0.5),
                                   "lag_s_p95": q(st["lag"], 0.95), "stored_assets": len(self.interest),
-                                  "short": st["short"]}, daily=False)
+                                  "followed": len(self.track), "short": st["short"]}, daily=False)
         self.stats, self.beat = self.fresh(), now
         old = now * 1000 - EVER_S * 1000
         self.ever = {k: v for k, v in self.ever.items() if v >= old}
@@ -360,6 +461,15 @@ class Collector:
                 self.do_mids(now)
             else:
                 self.due["mids"] = self.pause["hl"]
+        if self.track:
+            when = max(min(v["due"] for v in self.track.values()), self.verify_next, self.pause["hl"])
+            if now >= when:
+                self.do_verify(now)
+                when = max(min((v["due"] for v in self.track.values()), default=now + IDLE), self.verify_next,
+                           self.pause["hl"])
+            self.due["verify"] = when
+        else:
+            self.due["verify"] = now + IDLE
         if now - self.beat >= 3600:
             self.heartbeat(now)
         return max(0.05, min(self.due.values()) - self.clock())

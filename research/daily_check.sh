@@ -3,7 +3,7 @@
 R=/opt/funding_arbitrage_research
 W=$R/listing_pump/watch
 date -u
-docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hl-smart-fwd|hl-liqmap|upbit-watch|bithumb-watch|fwd-sniper|hl-leadlag|v1paper-app|paper_v2-app|paper-app|mexc-lag|xvenue|tradfi-lag|symbols-watch|twap-watch|builder-books'
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hl-smart-fwd|hl-liqmap|upbit-watch|bithumb-watch|fwd-sniper|hl-leadlag|v1paper-app|paper_v2-app|paper-app|mexc-lag|xvenue|tradfi-lag|symbols-watch|twap-watch|builder-books|news-archive'
 echo "== rank"; ls -la $R/hl_smart/fwd/rank/ | tail -n 5
 docker logs --since 12h hl-smart-fwd 2>&1 | grep -v 'poll:' | tail -n 15 | cut -c1-250
 docker logs --tail 3 hl-smart-fwd 2>&1 | cut -c1-200
@@ -60,7 +60,8 @@ for d in rows[-10:]:
     print(d["t"], d["src"], "added", [(a["symbol"], a.get("status")) for a in d["added"]][:8], "removed", d["removed"][:8],
           "changed", [(c[0], c[1].get("status"), c[2].get("status")) for c in d["changed"]][:8])
 PY
-echo "== twap"; tail -n 1 $R/hl_twap/data/heartbeat.jsonl 2>/dev/null | cut -c1-600; tail -n 3 $R/hl_twap/data/blocked.jsonl 2>/dev/null; ls -la $R/hl_twap/data | tail -n 4; du -sh $R/hl_twap/data
+echo "== twap"; tail -n 1 $R/hl_twap/data/heartbeat.jsonl 2>/dev/null | cut -c1-700; ls $R/hl_twap/data/status-*.jsonl 2>/dev/null | tail -n 1 | xargs -r wc -l; tail -n 3 $R/hl_twap/data/blocked.jsonl 2>/dev/null; ls -la $R/hl_twap/data | tail -n 4; du -sh $R/hl_twap/data
+echo "== news"; tail -n 1 $R/news_archive/data/heartbeat.jsonl 2>/dev/null | cut -c1-300; tail -n 2 $R/news_archive/data/blocked.jsonl 2>/dev/null; wc -l $R/news_archive/data/tree-*.jsonl $R/news_archive/data/bwe-*.jsonl 2>/dev/null | tail -n 3
 echo "== builder_books"; cat $R/builder_books/data/status.json 2>/dev/null; echo; ls $R/builder_books/data/pairs 2>/dev/null | tail -n 1; du -sh $R/builder_books/data 2>/dev/null
 echo "== liqmap"; python3 -c 'import json; s=json.load(open("'$R'/hl_liqmap/data/status.json")); print({k:s[k] for k in ("utc","polls_5m","errors_5m","http429_total","ws_up","addresses")})'
 echo "== leadlag"; cat $R/hl_leadlag/data/status.json; echo
