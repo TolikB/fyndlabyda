@@ -1,0 +1,98 @@
+{
+ "H30": {
+  "1x": {
+   "trades": 1976,
+   "mean_pct": -0.2683,
+   "median_pct": -0.2168,
+   "t_hours": -8.41,
+   "win_pct": 29.2,
+   "coins": 133,
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": -227.2,
+     "max_dd_pct": 67.6
+    },
+    "2": {
+     "monthly_figure_pct": -454.41,
+     "max_dd_pct": 92.2
+    },
+    "3": {
+     "monthly_figure_pct": -681.61,
+     "max_dd_pct": 99.4
+    }
+   }
+  },
+  "2x": {
+   "trades": 1976,
+   "mean_pct": -0.3583,
+   "median_pct": -0.3068,
+   "t_hours": -10.2,
+   "win_pct": 23.1,
+   "coins": 133,
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": -303.42,
+     "max_dd_pct": 78.5
+    },
+    "2": {
+     "monthly_figure_pct": -606.84,
+     "max_dd_pct": 97.5
+    },
+    "3": {
+     "monthly_figure_pct": -910.26,
+     "max_dd_pct": 100.4
+    }
+   }
+  },
+  "passes": false,
+  "size": null
+ },
+ "H5": {
+  "1x": {
+   "trades": 2035,
+   "mean_pct": -0.2501,
+   "median_pct": -0.1651,
+   "t_hours": -9.22,
+   "win_pct": 23.4,
+   "coins": 134,
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": -218.14,
+     "max_dd_pct": 65.7
+    },
+    "2": {
+     "monthly_figure_pct": -436.29,
+     "max_dd_pct": 90.7
+    },
+    "3": {
+     "monthly_figure_pct": -654.43,
+     "max_dd_pct": 98.7
+    }
+   }
+  },
+  "2x": {
+   "trades": 2035,
+   "mean_pct": -0.3401,
+   "median_pct": -0.2551,
+   "t_hours": -11.01,
+   "win_pct": 14.9,
+   "coins": 134,
+   "sizes": {
+    "1": {
+     "monthly_figure_pct": -296.64,
+     "max_dd_pct": 77.5
+    },
+    "2": {
+     "monthly_figure_pct": -593.27,
+     "max_dd_pct": 97.0
+    },
+    "3": {
+     "monthly_figure_pct": -889.91,
+     "max_dd_pct": 100.2
+    }
+   }
+  },
+  "passes": false,
+  "size": null
+ }
+}
