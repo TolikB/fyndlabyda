@@ -88,6 +88,34 @@ survivors were a looser freshness limit (2 s → 3 s) and drift measured from th
 tightened so the stale-price case sits on the limit and the slow-order case checks the drift. It catches both of them,
 and freshness limits of 1.9 s and 2.1 s too: 45 of 45.
 
+## Result: development, 2026-11-16 — all 9 trials fail, the holdout stays closed
+
+Run on 2026-11-16 11:42–12:00 UTC after the hashes of both files matched commit 026c780 and the selftest printed
+`selftest OK`. One-way delay 127-150 ms. Mean per trade, in basis points of notional:
+
+| THETA | Signals | Trial | Trades | Drift (no costs) | Gross (with slip) | Net 1x | Net 2x | t | Days negative |
+|---|---|---|---|---|---|---|---|---|---|
+| 0.3% | 8,212 | H5 | 7,449 | −1.8 | −3.7 | −13.7 | −23.7 | −16.8 | 14 of 14 |
+| | | H15 | 7,224 | −1.6 | −3.3 | −13.3 | −23.3 | −17.4 | 14 of 14 |
+| | | H60 | 6,879 | −1.8 | −3.8 | −13.8 | −23.8 | −12.8 | 14 of 14 |
+| 0.6% | 2,082 | H5 | 1,973 | −3.1 | −7.6 | −17.6 | −27.6 | −11.7 | 14 of 14 |
+| | | H15 | 1,948 | −4.1 | −8.2 | −18.2 | −28.2 | −10.1 | 14 of 14 |
+| | | H60 | 1,886 | −4.2 | −8.5 | −18.5 | −28.5 | −7.2 | 12 of 14 |
+| 1.2% | 374 | H5 | 370 | −1.3 | −11.3 | −21.3 | −31.3 | −3.7 | 12 of 14 |
+| | | H15 | 364 | −4.5 | −15.2 | −25.2 | −35.2 | −3.4 | 12 of 14 |
+| | | H60 | 359 | −5.3 | −15.7 | −25.7 | −35.7 | −2.6 | 10 of 14 |
+
+- **A burst on Binance's tape does not keep going from where this host can act.** The drift from the signal's price
+  to the exit is negative in every trial: the move has stopped and slightly gives back by the time an order arrives.
+  The fill slip in a fast bucket costs another 2-10 bp, and the two taker fees 10 bp.
+- **The losses are spread, not one bad day:** 10-14 of 14 days are negative in every trial, and only 5-8% of trades
+  fall in a second with signals on five or more symbols (none at 1.2%).
+- **The reverse trade is not a candidate either.** Fading would earn the 1-5 bp drift before costs against 10 bp of
+  fees and its own slip, so no round is opened for it.
+- At s = 1 the book loses 34-436% "a month" (the figure is mean daily return x 30); the maximum drawdown is 15-89%.
+- `results_jump_follow_dev.json` is in this folder; trades are on the VM (`trades_jump_follow_dev.parquet`); the
+  registry's daily book is `/w/pnl_round38.parquet` (registry 699 = 675 recorded + 24).
+
 ## Run
 
 Run once, at least 10 minutes after the period's last midnight, one heavy job at a time and not at 00:15–00:40 UTC:
