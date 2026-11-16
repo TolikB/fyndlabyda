@@ -130,3 +130,22 @@ Pre-registered on 2026-11-04 in the docstring of `test_skew.py`, with known-answ
 - Development: run `python test_skew.py dev` after 2026-11-16 00:00 UTC.
 - Holdout: run `python test_skew.py holdout` after 2026-11-30 00:00 UTC, only if a trial passed.
 - Copy `pnl_round23.parquet` to `/opt/funding_arbitrage_research/` so the registry counts the 4 trials.
+
+### Result: development, 2026-11-16 — all 4 trials fail, the holdout stays closed
+
+Run on 2026-11-16 12:01–12:14 UTC after the hashes of both files matched commit f8af0b2 and the selftest printed
+`selftest OK`. Thirteen days (snapshots 11-02..11-14), book at s = 1:
+
+| Trial | Monthly figure, 1x | t over days | Max drawdown | Monthly figure, 2x |
+|---|---|---|---|---|
+| follow, H4 | +20.5% | 0.64 | 6.3% | +14.2% |
+| follow, H24 | +14.2% | 0.64 | 5.0% | +11.7% |
+| fade, H4 | −33.1% | −1.03 | 20.9% | −39.4% |
+| fade, H24 | −19.2% | −0.87 | 13.3% | −21.8% |
+
+- **None comes near t ≥ 2.5.** The follow book's monthly figure is noise: it is up on 7 of 13 days, a single day
+  (11-10, +8.1%) is 31% of the gains, and without that day the figure falls from +20% to +2%. The daily standard deviation of a
+  "neutral" book is about 3.8% at s = 1.
+- Fade is the mirror of follow less costs, so it says nothing new.
+- `results_skew_dev.json` is in this folder; `pnl_round23.parquet` is in `/opt/funding_arbitrage_research/`
+  (registry 703 = 679 recorded + 24). Round 14, on the same collector, still runs once after 2026-11-28.
